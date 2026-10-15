@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<meta name="robots" content="noindex, nofollow">
+<title>KPOT To Go — Owner Console</title>
+<link rel="manifest" href="staff-admin.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KPOT Admin">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='48' fill='%23D7263D'/><text x='50' y='70' font-size='62' font-family='Arial' font-weight='bold' fill='white' text-anchor='middle'>K</text></svg>">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --red:#D7263D; --red-dark:#A81B2E; --black:#111014; --panel:#1A181D;
+    --panel2:#242229; --line:#322F38; --cream:#F7F1E6; --dim:#B9B2A6;
+    --muted:#8A848E; --gold:#E8B44A; --green:#34C77B;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Inter',-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;
+    background:#0A090C;color:var(--cream);line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 80px}
+  header.hd{display:flex;align-items:center;gap:14px;padding-bottom:22px;border-bottom:1px solid var(--line);margin-bottom:28px;flex-wrap:wrap}
+  .logo{width:46px;height:46px;border-radius:50%;background:var(--red);display:grid;place-items:center;font-weight:900;font-size:24px;color:#fff;box-shadow:0 8px 24px rgba(215,38,61,.35)}
+  header.hd h1{font-size:22px;font-weight:900;letter-spacing:-.3px}
+  header.hd p{font-size:13px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:22px}
+  .card h2{font-size:15px;font-weight:800;letter-spacing:.3px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .card .sub{font-size:12.5px;color:var(--muted);margin-bottom:16px}
+  /* Member rows: the phone number is the identity, so it leads. */
+  .memrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .memrow:last-child{border-bottom:0}
+  .memrow .hint{margin-top:0;flex:1;min-width:0}
+  .memrow > b{flex:0 0 auto}
+  .memrow button{flex:0 0 auto}
+  label{display:block;font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+  input,select,textarea{width:100%;padding:11px 13px;border-radius:11px;background:var(--panel2);
+    border:1.5px solid var(--line);color:var(--cream);font-size:14px;font-family:inherit}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--red)}
+  textarea{resize:vertical;min-height:70px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;
+    border-radius:11px;font-size:14px;font-weight:800;border:0;cursor:pointer;transition:.15s;font-family:inherit}
+  .btn:active{transform:scale(.98)}
+  .btn-primary{background:var(--red);color:#fff;box-shadow:0 6px 20px rgba(215,38,61,.3)}
+  .btn-primary:hover{background:var(--red-dark)}
+  .btn-ghost{background:var(--panel2);color:var(--cream);border:1.5px solid var(--line)}
+  .btn-ghost:hover{background:var(--line)}
+  .btn-gold{background:var(--gold);color:#1A1206}
+  .btn-sm{padding:8px 13px;font-size:12.5px;border-radius:9px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .qrbox{background:#fff;padding:18px;border-radius:16px;display:inline-grid;place-items:center;min-width:236px;min-height:236px}
+  .qrbox canvas,.qrbox img{display:block}
+  .qrwrap{display:grid;place-items:center;padding:22px 0 6px}
+  .urlpill{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;word-break:break-all;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--dim);margin-top:14px}
+  .hint{font-size:12px;color:var(--muted);margin-top:10px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;padding:4px 10px;border-radius:20px;
+    background:var(--panel2);border:1px solid var(--line);color:var(--dim);letter-spacing:.4px}
+  .badge.ok{border-color:rgba(52,199,123,.45);color:var(--green)}
+  .badge.no{border-color:rgba(215,38,61,.45);color:#F2717F}
+  .tbl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:16px}
+  .tbl-card{background:#fff;border-radius:12px;padding:14px;text-align:center;color:#111}
+  .tbl-card .ttl{font-weight:900;font-size:13px;color:#D7263D;letter-spacing:.5px}
+  .tbl-card .no{font-size:32px;font-weight:900;line-height:1;margin:6px 0 8px;color:#111}
+  .tbl-card canvas{margin:0 auto}
+  .tbl-card .sm{font-size:9.5px;color:#666;margin-top:7px;font-weight:600}
+  .checklist{list-style:none}
+  .checklist li{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid var(--line);font-size:13.5px;align-items:flex-start}
+  .checklist li:last-child{border-bottom:0}
+  .checklist .n{width:22px;height:22px;flex:none;border-radius:50%;background:var(--panel2);border:1px solid var(--line);
+    display:grid;place-items:center;font-size:11px;font-weight:900;color:var(--muted)}
+  .checklist b{font-weight:700}
+  .checklist small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:1.5}
+  .disc-row{display:flex;gap:10px;align-items:center;justify-content:space-between;
+    padding:10px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .disc-row:last-child{border-bottom:0}
+  .disc-row select,.disc-row input{flex:none}
+  code{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:2px 6px;font-size:12px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;color:var(--gold)}
+  .status{font-size:13px;margin-top:12px;padding:11px 13px;border-radius:10px;display:none}
+  .status.on{display:block}
+  .status.ok{background:rgba(52,199,123,.12);border:1px solid rgba(52,199,123,.35);color:#8CE8B8}
+  .status.err{background:rgba(215,38,61,.12);border:1px solid rgba(215,38,61,.35);color:#F2717F}
+  @media print{
+    body{background:#fff}
+    .no-print{display:none!important}
+    .tbl-grid{grid-template-columns:repeat(3,1fr)}
+    .tbl-card{border:1px dashed #ccc;break-inside:avoid}
+  }
+  /* Staff install bar — shares the look of the kitchen board so owners learn
+     one button, not three. The button is always shown; the helper only hides it
+     after appinstalled fires or when running already in standalone mode. */
+  .staff-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:12px 14px;margin-bottom:20px}
+  .staff-bar .install-btn{background:var(--panel2);color:var(--cream);
+    border:1.5px solid var(--line);border-radius:10px;padding:10px 14px;
+    font:inherit;font-weight:800;cursor:pointer}
+  .staff-bar .install-btn:hover{border-color:var(--red)}
+  .staff-bar .install-btn[hidden]{display:none}
+  .install-note{flex-basis:100%;font-size:12.5px;color:var(--muted);line-height:1.55;margin-top:4px}
+  .install-note[hidden]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hd">
+    <div class="logo">K</div>
+    <div style="flex:1">
+      <h1>Owner Console</h1>
+      <p>Generate the QR code your guests scan to order &amp; pay.</p>
+    </div>
+    <a class="btn btn-ghost btn-sm" href="index.html">← View customer menu</a>
+    <a class="btn btn-ghost btn-sm" href="admin-menu.html">🍔 Edit Menu</a>
+    <a class="btn btn-ghost btn-sm" href="admin-orders.html">📋 Live Orders</a>
+  </header>
+
+  <div class="staff-bar">
+    <span id="installHost"></span>
+    <span class="hint" style="flex:1;font-size:12px;margin:0">Install the admin tools on your phone or laptop so you can pull them up offline, just like a real app.</span>
+  </div>
+
+  <div class="grid">
+
+    <!-- ============ LEFT: QR GENERATOR ============ -->
+    <div>
+      <div class="card">
+        <h2>📱 Menu QR Code</h2>
+        <div class="sub">Guests scan this to open the ordering page on their phone.</div>
+
+        <label for="url">Ordering page URL</label>
+        <input id="url" type="url" placeholder="https://your-site.com/  (or leave blank to use this page's address)">
+        <div class="hint">Tip: paste your published link here for a scannable production QR. Leave blank to test locally.</div>
+
+        <div class="row" style="margin-top:16px">
+          <button class="btn btn-primary" id="gen">Generate QR</button>
+          <button class="btn btn-ghost" id="png">⬇ PNG</button>
+          <button class="btn btn-ghost" id="svg">⬇ SVG</button>
+        </div>
+
+        <div class="qrwrap"><div class="qrbox" id="qr"></div></div>
+        <div class="urlpill" id="urlout">—</div>
+        <div class="row" style="margin-top:14px">
+          <span class="badge" id="badgeSize">—</span>
+          <span class="badge" id="badgeType">—</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>🪑 Table QR Codes</h2>
+        <div class="sub">Each QR carries its own table number, so the order arrives tagged with the right table.</div>
+        <div class="row">
+          <div style="flex:1;min-width:110px">
+            <label for="tfrom" style="margin-top:0">From table</label>
+            <input id="tfrom" type="number" value="1" min="1">
+          </div>
+          <div style="flex:1;min-width:110px">
+            <label for="tto" style="margin-top:0">To table</label>
+            <input id="tto" type="number" value="12" min="1">
+          </div>
+          <div style="align-self:flex-end">
+            <button class="btn btn-primary" id="genTables">Build</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-ghost btn-sm" id="printTables">🖨️ Print table cards</button>
+          <button class="btn btn-ghost btn-sm" id="pngTables">⬇ Download all PNG</button>
+        </div>
+        <div class="tbl-grid" id="tblGrid"></div>
+      </div>
+    </div>
+
+    <!-- ============ RIGHT: SETUP ============ -->
+    <div>
+      <div class="card">
+        <h2>⚙️ Live status</h2>
+        <div class="sub">What's already working, and what needs your input.</div>
+        <ul class="checklist" id="statusList"></ul>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>🏷️ Discount Codes</h2>
+        <div class="sub">
+          Guests type a code at checkout and see the new total straight away.
+          Staff can also discount any single order from the Live Orders board.
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input id="discKey" placeholder="Admin key (same one as the board)" autocomplete="off" style="flex:1">
+          <button class="btn btn-ghost btn-sm" id="discKeySave">Unlock</button>
+        </div>
+
+        <div id="discList" style="margin-top:12px"></div>
+
+        <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+          <label for="dCode">New code</label>
+          <input id="dCode" placeholder="e.g. WELCOME10" autocomplete="off" spellcheck="false">
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <select id="dType">
+              <option value="percent">% off subtotal</option>
+              <option value="amount">$ off subtotal</option>
+              <option value="freeship">Free delivery</option>
+            </select>
+            <input id="dValue" type="number" min="0" step="0.01" placeholder="10" style="flex:1">
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="dMin" type="number" min="0" step="0.01" placeholder="Min spend (optional)" style="flex:1">
+            <input id="dMax" type="number" min="1" step="1" placeholder="Max uses (optional)" style="flex:1">
+          </div>
+
+          <label for="dExp" style="margin-top:8px;display:block">Expires (optional)</label>
+          <input id="dExp" type="date">
+
+          <button class="btn btn-primary btn-sm" id="dAdd" style="margin-top:10px">Add code</button>
+        </div>
+
+        <div class="status" id="discStatus" style="margin-top:10px"></div>
+        <div class="hint" style="margin-top:8px">
+          Tax is charged on the discounted amount. A code is only spent when the
+          order is actually placed — an abandoned payment page does not use one up.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>⭐ Members &amp; Rewards</h2>
+        <div class="sub">
+          Rewards hang off the guest's mobile number — there is no account to sign
+          up for. Points are credited when a PAYMENT is confirmed, never when the
+          order is placed, so a guest who abandons the payment page earns nothing.
+        </div>
+
+        <div class="hint" id="loyRules" style="margin-top:8px">Unlock below to see the current rules.</div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input id="memQ" placeholder="Search mobile or name (blank = everyone)" autocomplete="off" style="flex:1">
+          <button class="btn btn-ghost btn-sm" id="memLoad">Load</button>
+          <button class="btn btn-ghost btn-sm" id="memExport">⬇ CSV</button>
+        </div>
+
+        <div id="memList" style="margin-top:12px"></div>
+
+        <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
+          <label for="memPhone">Adjust a guest</label>
+          <input id="memPhone" placeholder="Mobile number, e.g. 6783355388" autocomplete="off" style="margin-top:6px">
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="memDelta" type="number" step="1" placeholder="Points change, e.g. 50 or -50" style="flex:1">
+            <input id="memReward" type="number" min="0" step="0.01" placeholder="$ reward (optional)" style="flex:1">
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="memDays" type="number" min="0" step="1" placeholder="Reward expires in days (blank = never)" style="flex:1">
+            <input id="memNote" placeholder="Reason" style="flex:1">
+          </div>
+
+          <button class="btn btn-primary btn-sm" id="memApply" style="margin-top:10px">Apply</button>
+        </div>
+
+        <div class="status" id="memStatus" style="margin-top:10px"></div>
+        <div class="hint" style="margin-top:8px">
+          Every change is written into that guest's own log, so a balance that
+          looks wrong can be traced back to whoever changed it.
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>💳 Turn on card payments</h2>
+        <div class="sub">No Stripe product is ever needed. Two routes — pick one.</div>
+
+        <label>Option A — Bundled server <span class="badge ok">recommended</span>
+          <span class="badge" id="beBadge">checking…</span></label>
+        <div class="hint" style="margin-top:0">
+          The project ships with <code>server.js</code>. It creates the Stripe session itself, so the
+          guest's total is filled in automatically and <b>nothing needs to be pasted into config.js</b>.
+        </div>
+        <ol style="font-size:13px;color:var(--dim);padding-left:20px;line-height:1.9">
+          <li>Create a free account at <b>stripe.com</b></li>
+          <li>Dashboard → <b>Developers → API keys</b> → copy the <b>Secret key</b>
+              (<code>sk_live_…</code>) or a <b>restricted key</b> (<code>rk_live_…</code>).
+              A restricted key must allow <b>Checkout Sessions: Write</b> and <b>Read</b>
+              — nothing else is needed.</li>
+          <li>In the project folder: <code>cp secrets.local.json.example secrets.local.json</code></li>
+          <li>Paste the key into <code>secrets.local.json</code></li>
+          <li>Start with <code>npm start</code> instead of a static file server</li>
+        </ol>
+        <div class="status" id="beStatus"></div>
+
+        <label style="margin-top:22px">Apple Pay &amp; Google Pay
+          <span class="badge" id="walletBadge">check</span></label>
+        <div class="hint" style="margin-top:0">
+          These are <b>not</b> separate choices on your ordering page. Stripe adds them
+          <b>inside its own card form</b>, and only when the guest's device supports them
+          (Apple Pay needs Safari/iPhone; Google Pay needs Chrome + a saved card).
+          So a phone that doesn't have a wallet set up will never show the button —
+          that is normal, not a bug.
+        </div>
+        <div class="hint" style="margin-top:8px">To actually switch them on:</div>
+        <ol style="font-size:13px;color:var(--dim);padding-left:20px;line-height:1.9">
+          <li>Stripe Dashboard → <b>Settings → Payment methods</b></li>
+          <li>Under <b>Wallets</b>, turn <b>Apple Pay</b> and <b>Google Pay</b> ON
+              for the mode you are using (Test <i>and</i> Live are separate!)</li>
+          <li><b>Apple Pay only:</b> Settings → <b>Payment method domains</b> →
+              add &amp; verify your site's domain. Apple requires a domain
+              association file, or the button stays hidden on the web even when
+              the toggle is on.</li>
+          <li>Reload the ordering page and open the payment step.</li>
+        </ol>
+        <button class="btn btn-ghost btn-sm" style="margin-top:12px" id="testWallet">Check live session</button>
+        <div class="status" id="walletStatus"></div>
+        <div class="hint">The check asks your own server to create a $1 test session
+          and reports the payment methods Stripe actually offered. Nothing is charged.</div>
+
+        <label style="margin-top:22px">Option B — Static Payment Link
+          <span class="badge ok">no product needed</span></label>
+        <ol style="font-size:13px;color:var(--dim);padding-left:20px;line-height:1.9">
+          <li>Dashboard → <b>Payment Links</b> → <b>+ New</b></li>
+          <li>At <b>"Select a product or service"</b>, pick
+              <b>"Customers choose what to pay"</b> — do <u>not</u> add a product</li>
+          <li>Title it <code>KPOT To Go</code>, currency <b>USD</b>, set a min and max</li>
+          <li><b>Create link</b> → copy it and paste it below</li>
+          <li>Paste into <code>CONFIG.payment.stripe.paymentLink</code> in <code>assets/config.js</code></li>
+        </ol>
+        <input id="plink" type="url" placeholder="https://buy.stripe.com/xxxxxxxx">
+        <button class="btn btn-ghost btn-sm" style="margin-top:12px" id="testPay">Validate link</button>
+        <div class="status" id="payStatus"></div>
+        <div class="hint">On this route the guest types the amount, so the checkout screen shows the
+          total in large type with a one-tap Copy button.</div>
+
+        <label style="margin-top:22px">Option C — Your own checkout endpoint</label>
+        <div class="hint" style="margin-top:0">If the checkout service lives elsewhere, set
+          <code>CONFIG.payment.stripe.createSessionUrl</code> to its full URL. The app POSTs the order JSON
+          and expects <code>{ url }</code> back.</div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>🔔 Send orders to the kitchen</h2>
+        <div class="sub">By default the guest shows the on-screen ticket at the counter. To push orders automatically, paste a webhook URL.</div>
+        <label for="hook">Webhook URL</label>
+        <input id="hook" type="url" placeholder="https://hooks.zapier.com/hooks/catch/.../">
+        <div class="hint">Works with Zapier, Make, n8n, a Google Apps Script, or your own API. The app POSTs the full order as JSON.</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:12px" id="testHook">Send test order</button>
+        <div class="status" id="hookStatus"></div>
+      </div>
+
+      <div class="card" style="margin-top:20px">
+        <h2>🧾 Sample order JSON</h2>
+        <div class="sub">This is exactly what gets POSTed to your webhook.</div>
+        <textarea id="sample" readonly style="min-height:280px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px"></textarea>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="assets/qrcode.min.js"></script>
+<script src="assets/config.js"></script>
+<script src="assets/menu.js"></script>
+<script src="assets/staff-pwa.js"></script>
+<script>
+(function(){
+  var $ = function(s){ return document.querySelector(s); };
+  var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
+  var baseUrl = '';
+
+  function resolvedUrl(){
+    var typed = $('#url').value.trim();
+    if (typed) return typed.replace(/\/+$/,'') + '/';
+    if (typeof PUBLIC_URL !== 'undefined' && PUBLIC_URL) return PUBLIC_URL.replace(/\/+$/,'') + '/';
+    return location.href.replace(/admin\.html.*$/,'');
+  }
+
+  function drawQR(container, text, size){
+    container.innerHTML = '';
+    new QRCode(container, {
+      text: text, width: size||236, height: size||236,
+      colorDark:'#111014', colorLight:'#FFFFFF',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  }
+
+  function refreshBadges(text){
+    $('#urlout').textContent = text;
+    $('#badgeSize').textContent = text.length + ' chars';
+    var local = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)/.test(text) || /^file:/.test(text);
+    $('#badgeType').textContent = local ? '⚠ local — not scannable off-device' : '✓ public URL';
+    $('#badgeType').className = 'badge ' + (local ? 'no' : 'ok');
+  }
+
+  function generate(){
+    baseUrl = resolvedUrl();
+    drawQR($('#qr'), baseUrl, 236);
+    refreshBadges(baseUrl);
+  }
+
+  $('#gen').onclick = generate;
+  $('#url').addEventListener('keydown', function(e){ if(e.key==='Enter') generate(); });
+
+  function downloadCanvas(canvas, filename){
+    var a = document.createElement('a');
+    a.download = filename;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  }
+
+  $('#png').onclick = function(){
+    var c = $('#qr').querySelector('canvas');
+    if(!c) return generate();
+    // upscale for print quality
+    var big = document.createElement('canvas');
+    var scale = 6;
+    big.width = c.width * scale; big.height = c.height * scale;
+    var ctx = big.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#fff'; ctx.fillRect(0,0,big.width,big.height);
+    ctx.drawImage(c, 0, 0, big.width, big.height);
+    downloadCanvas(big, 'kpot-order-qr.png');
+  };
+
+  $('#svg').onclick = function(){
+    var c = $('#qr').querySelector('canvas');
+    if(!c) { generate(); c = $('#qr').querySelector('canvas'); }
+    if(!c) return;
+    var ctx = c.getContext('2d');
+    var d = ctx.getImageData(0,0,c.width,c.height).data;
+    var n = c.width, path = '';
+    for(var y=0;y<n;y++){
+      var x=0;
+      while(x<n){
+        var i=(y*n+x)*4;
+        if(d[i]<128){
+          var run=0;
+          while(x+run<n){ var j=(y*n+x+run)*4; if(d[j]>=128) break; run++; }
+          path += 'M'+x+' '+y+'h'+run+'v1h-'+run+'z';
+          x+=run;
+        } else x++;
+      }
+    }
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+n+' '+n+'" width="1024" height="1024" shape-rendering="crispEdges">'+
+      '<rect width="'+n+'" height="'+n+'" fill="#fff"/><path d="'+path+'" fill="#111014"/></svg>';
+    var blob = new Blob([svg], {type:'image/svg+xml'});
+    var a = document.createElement('a');
+    a.download = 'kpot-order-qr.svg';
+    a.href = URL.createObjectURL(blob);
+    a.click();
+  };
+
+  /* ---------- Table cards ---------- */
+  var tableCanvases = [];
+  $('#genTables').onclick = function(){
+    var from = Math.max(1, parseInt($('#tfrom').value||'1',10));
+    var to = Math.max(from, parseInt($('#tto').value||'12',10));
+    if(to - from > 59){ to = from + 59; $('#tto').value = to; }
+    var root = resolvedUrl().replace(/\?.*$/,'');
+    var grid = $('#tblGrid');
+    grid.innerHTML = '';
+    tableCanvases = [];
+    for(var i=from;i<=to;i++){
+      var url = root + '?table=' + i;
+      var card = document.createElement('div');
+      card.className = 'tbl-card';
+      card.innerHTML = '<div class="ttl">KPOT TO GO</div><div class="no">'+i+'</div>'+
+        '<div class="qrmini"></div><div class="sm">Scan to order &amp; pay</div>';
+      grid.appendChild(card);
+      var holder = card.querySelector('.qrmini');
+      new QRCode(holder, { text:url, width:118, height:118, colorDark:'#111014', colorLight:'#FFFFFF', correctLevel:QRCode.CorrectLevel.M });
+      tableCanvases.push({ n:i, canvas: holder.querySelector('canvas') });
+    }
+  };
+
+  $('#printTables').onclick = function(){ window.print(); };
+
+  $('#pngTables').onclick = function(){
+    if(!tableCanvases.length) $('#genTables').click();
+    tableCanvases.forEach(function(t, idx){
+      setTimeout(function(){
+        var c = t.canvas; if(!c) return;
+        var big = document.createElement('canvas');
+        var scale = 6;
+        big.width = c.width*scale; big.height = c.height*scale;
+        var ctx = big.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,big.width,big.height);
+        ctx.drawImage(c,0,0,big.width,big.height);
+        downloadCanvas(big, 'kpot-table-'+String(t.n).padStart(2,'0')+'-qr.png');
+      }, idx*220);
+    });
+  };
+
+  /* ---------- Live backend probe ---------- */
+  /* The bundled server answers /api/health. On a plain static host this 404s,
+     which is not an error — it just means Option B is the route in use. */
+  var beState = null;      // null = still checking, false = no server, true = server + key
+  var beKeyMode = 'none';  // 'live' | 'test' | 'none'
+
+  function renderBackendBadge(){
+    var badge = $('#beBadge'), note = $('#beStatus');
+    if(!badge) return;
+    if(beState === null){
+      badge.className = 'badge'; badge.textContent = 'checking…';
+      if(note){ note.className = 'status'; note.textContent = ''; }
+      return;
+    }
+    if(beState){
+      badge.className = 'badge ok';
+      badge.textContent = beKeyMode === 'live' ? 'live · ready' : 'test key';
+      if(note) showStatus('#beStatus', true,
+        'Server detected and the Stripe key is set (' + beKeyMode + ' mode). ' +
+        'Guests get the total filled in automatically — nothing to type.');
+    } else {
+      badge.className = 'badge';
+      badge.textContent = 'not running';
+      if(note) showStatus('#beStatus', false,
+        'No server answered at /api/health, so Option A is not active. ' +
+        'Either start the app with "npm start" and add secrets.local.json, or use Option B below.');
+    }
+  }
+
+  function probeBackend(){
+    fetch('/api/health', { method:'GET' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){ beState = !!(j && j.checkout); beKeyMode = (j && j.keyMode) || 'none'; })
+      .catch(function(){ beState = false; beKeyMode = 'none'; })
+      .then(function(){
+        renderBackendBadge(); renderStatus();
+        /* Discount codes live on the server. On a static host there is no
+           server to ask, so leave the card untouched rather than showing an
+           error the owner cannot act on. */
+        if(beState) loadDiscounts();
+      });
+  }
+
+  /* ---------- Status list ---------- */
+  function renderStatus(){
+    var s = CONFIG.store, p = CONFIG.payment, d = CONFIG.dispatch;
+    var placeholderStore = /000-0000/.test(s.phone) || /Main Street/i.test(s.address);
+    var payOK = p.stripe.enabled && (beState === true || p.stripe.paymentLink || p.stripe.createSessionUrl);
+    var payDesc;
+    if(beState === true) payDesc = 'Bundled server · Stripe key set (' + beKeyMode + ') · amount auto-filled';
+    else if(p.stripe.paymentLink) payDesc = 'Stripe Payment Link configured (guest types the amount)';
+    else if(p.stripe.createSessionUrl) payDesc = 'External checkout endpoint configured';
+    else if(beState === null) payDesc = 'Checking for the bundled server…';
+    else payDesc = 'Off — add secrets.local.json and run npm start, or paste a Stripe link';
+    var items = [
+      { ok: !placeholderStore, t:'Store phone &amp; address', d: placeholderStore ? 'Still the placeholder — edit <code>CONFIG.store</code> in config.js' : s.phone + ' · ' + s.address },
+      { ok: true, t:'Menu &amp; prices loaded', d: Object.keys(MENU).length + ' categories from your two PDF menus' },
+      { ok: true, t:'Pay at counter', d:'Always available — guest pays when picking up' },
+      { ok: payOK, t:'Online card payment', d: payDesc },
+      { ok: !!d.webhookUrl, t:'Auto-send orders to kitchen', d: d.webhookUrl ? 'Webhook configured' : 'Off — orders show as an on-screen ticket only' },
+      { ok: CONFIG.taxRate > 0, t:'Sales tax', d: (CONFIG.taxRate*100).toFixed(2).replace(/\.00$/,'') + '% applied to every order' }
+    ];
+    /* Only meaningful on the bundled server — omitted rather than shown as a
+       warning, because on a static host there is simply no server to check. */
+    if(beState === true){
+      items.splice(4, 0, { ok: true, t:'Server-side price check',
+        d:'Every total is recomputed on the server — a tampered browser price is ignored' });
+    }
+    $('#statusList').innerHTML = items.map(function(i){
+      return '<li><span class="n">'+(i.ok?'✓':'!')+'</span><div><b>'+i.t+'</b><small>'+i.d+'</small></div></li>';
+    }).join('');
+  }
+
+  function showStatus(el, ok, msg){
+    var e = $(el);
+    e.className = 'status on ' + (ok?'ok':'err');
+    e.textContent = msg;
+  }
+
+  $('#testPay').onclick = function(){
+    var v = $('#plink').value.trim();
+    if(!v) return showStatus('#payStatus', false, 'Paste a Stripe Payment Link first (starts with https://buy.stripe.com/).');
+    if(!/^https:\/\/buy\.stripe\.com\//.test(v)) return showStatus('#payStatus', false, 'That does not look like a Stripe Payment Link. It should start with https://buy.stripe.com/');
+    showStatus('#payStatus', true, 'Looks valid ✓  Now paste it into CONFIG.payment.stripe.paymentLink in assets/config.js and set enabled: true.');
+  };
+
+  /* Ask our own server to create a throwaway $1 session and report which
+     payment methods Stripe offered. This is the only honest way to answer
+     "where are Apple Pay / Google Pay?" — our source code cannot know, because
+     Stripe injects the wallet buttons based on Dashboard config + the guest's
+     device. */
+  $('#testWallet').onclick = function(){
+    var key = (function(){ try { return sessionStorage.getItem('kpotAdminKey') || ''; } catch(e){ return ''; } })();
+    showStatus('#walletStatus', true, 'Checking with Stripe…');
+    fetch('/api/payment-methods', { headers: key ? { 'X-Admin-Key': key } : {} })
+      .then(function(r){ return r.json().then(function(j){ return { status:r.status, j:j }; }); })
+      .then(function(o){
+        var j = o.j || {};
+        if(o.status === 401){
+          return showStatus('#walletStatus', false,
+            'Set the admin key in the Live Orders page first (or on this page), then try again.');
+        }
+        if(!j.ok){
+          var why = j.reason === 'no_key'
+            ? 'No Stripe key is configured on the server — see Option A above.'
+            : (j.message || 'Stripe rejected the probe.');
+          return showStatus('#walletStatus', false, 'Could not check: ' + why);
+        }
+        var b = $('#walletBadge');
+        b.className = 'badge ' + (j.hasCard ? 'ok' : 'no');
+        b.textContent = j.keyMode + ' · ' + (j.paymentMethodTypes || []).length + ' methods';
+        var extra = (j.otherMethods && j.otherMethods.length)
+          ? ' Also offered: ' + j.otherMethods.join(', ') + '.'
+          : '';
+        showStatus('#walletStatus', j.hasCard,
+          'Stripe is offering: ' + (j.paymentMethodTypes || []).join(', ') + '.' + extra +
+          (j.hasCard
+            ? ' Card is on, so the Apple Pay / Google Pay buttons will appear INSIDE Stripe\'s card form when the guest\'s device supports them — turn each wallet on under Settings → Payment methods → Wallets (and verify this domain for Apple Pay).'
+            : ' Card payments are OFF for this account — turn them on in the Stripe Dashboard.'));
+      })
+      .catch(function(e){ showStatus('#walletStatus', false, 'Could not reach the server: ' + e.message); });
+  };
+
+  function sampleOrder(){
+    return {
+      no:'KP-'+new Date().getFullYear().toString().slice(2)+'1002-001',
+      at:new Date().toISOString(),
+      orderType:'pickup', table:'',
+      customer:{ name:'Alex Chen', phone:'(555) 123-4567', when:'ASAP', notes:'Extra napkins' },
+      items:[
+        { name:'Build Your Own Bowl', qty:1, unit:15.99,
+          mods:['Broth: Szechuan Spicy','Noodle: Udon','Protein: Ribeye','Topping: Beef Meatballs','Vegetables: Napa Cabbage, Corn, Enoki Mushrooms','Sauce: KPOT Sauce'],
+          addons:['Make It a Combo (+$3.99)'], note:'' },
+        { name:'Thai Milk Tea', qty:2, unit:4.99, mods:['Bubble Tea'], addons:[], note:'' },
+        { name:'Korean Fried Chicken Wings (6)', qty:1, unit:8.99, mods:[], addons:[], note:'' }
+      ],
+      subtotal:34.96, deliveryFee:0, tax:2.45, tip:6.99, surcharge:0, total:44.40,
+      payMethod:'counter', store:CONFIG.store.name
+    };
+  }
+  $('#sample').value = JSON.stringify(sampleOrder(), null, 2);
+
+  $('#testHook').onclick = function(){
+    var v = $('#hook').value.trim();
+    if(!v) return showStatus('#hookStatus', false, 'Paste a webhook URL first.');
+    showStatus('#hookStatus', true, 'Sending…');
+    fetch(v, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(sampleOrder()) })
+      .then(function(r){ showStatus('#hookStatus', r.ok, r.ok ? 'Delivered ✓ — HTTP '+r.status+'. Check your automation for the test order.' : 'Reached the endpoint but got HTTP '+r.status+'.'); })
+      .catch(function(e){ showStatus('#hookStatus', false, 'Could not reach it: '+e.message+' (this is normal if the URL blocks browser requests).'); });
+  };
+
+  /* ---------- Discount codes ---------- */
+  /* Same key the kitchen board uses, so the owner only has to type it once per
+     browser session. */
+  var DISC_KEY = sessionStorage.getItem('kpotAdminKey') || '';
+  var discCodes = [];
+
+  function escD(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
+    });
+  }
+  function discHeaders(){
+    return Object.assign({ 'Content-Type':'application/json' }, DISC_KEY ? { 'X-Admin-Key': DISC_KEY } : {});
+  }
+  function discShow(ok, msg){ showStatus('#discStatus', !!ok, msg); }
+
+  function loadDiscounts(){
+    fetch('/api/discounts', { headers: discHeaders() })
+      .then(function(r){
+        if(r.ok) return r.json();
+        throw new Error(r.status === 401 ? 'That admin key was not accepted.' : 'Could not load codes (HTTP ' + r.status + ').');
+      })
+      .then(function(j){
+        discCodes = (j && j.codes) || [];
+        renderDiscounts();
+        discShow(true, discCodes.length + ' code' + (discCodes.length === 1 ? '' : 's') + ' saved.');
+      })
+      .catch(function(e){ discShow(false, e.message || 'Could not load codes.'); });
+  }
+
+  function saveDiscounts(){
+    fetch('/api/discounts', { method:'PUT', headers: discHeaders(), body: JSON.stringify({ codes: discCodes }) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { r:r, j:j }; }); })
+      .then(function(o){
+        if(!o.r.ok) throw new Error((o.j && o.j.message) || 'Could not save.');
+        discCodes = (o.j && o.j.codes) || discCodes;
+        renderDiscounts();
+        discShow(true, 'Saved.');
+      })
+      .catch(function(e){ discShow(false, e.message || 'Could not save.'); });
+  }
+
+  function renderDiscounts(){
+    var box = $('#discList');
+    if(!box) return;
+    if(!discCodes.length){ box.innerHTML = '<div class="hint">No codes yet. Add one below.</div>'; return; }
+
+    box.innerHTML = discCodes.map(function(c, i){
+      var what = c.type === 'percent' ? c.value + '% off'
+        : c.type === 'amount' ? '$' + Number(c.value).toFixed(2) + ' off'
+        : 'Free delivery';
+      var meta = [];
+      if(c.minSubtotal) meta.push('min $' + Number(c.minSubtotal).toFixed(2));
+      meta.push((c.used || 0) + (c.maxUses != null ? '/' + c.maxUses : '') + ' used');
+      if(c.expiresAt) meta.push('expires ' + String(c.expiresAt).slice(0, 10));
+
+      return '<div class="disc-row">' +
+          '<div style="min-width:0">' +
+            '<b>' + escD(c.code) + '</b> ' +
+            '<span class="badge' + (c.active === false ? '' : ' ok') + '">' + (c.active === false ? 'off' : 'on') + '</span>' +
+            '<div class="hint" style="margin:0">' + escD(what) + (meta.length ? ' · ' + escD(meta.join(' · ')) : '') + '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;flex:none">' +
+            '<button class="btn btn-ghost btn-sm" data-act="toggle" data-i="' + i + '">' + (c.active === false ? 'Enable' : 'Disable') + '</button>' +
+            '<button class="btn btn-ghost btn-sm" data-act="del" data-i="' + i + '">Delete</button>' +
+          '</div>' +
+        '</div>';
+    }).join('');
+
+    box.querySelectorAll('[data-act]').forEach(function(b){
+      b.onclick = function(){
+        var c = discCodes[Number(b.dataset.i)];
+        if(!c) return;
+        if(b.dataset.act === 'toggle') c.active = (c.active === false);
+        else discCodes.splice(Number(b.dataset.i), 1);
+        saveDiscounts();
+      };
+    });
+  }
+
+  $('#discKeySave').onclick = function(){
+    DISC_KEY = String($('#discKey').value || '').trim();
+    sessionStorage.setItem('kpotAdminKey', DISC_KEY);
+    loadDiscounts();
+    /* Same key, same unlock — loading the members here too means one button
+       opens the whole console rather than one button per card. */
+    loadMembers();
+  };
+
+  $('#dAdd').onclick = function(){
+    var code = String($('#dCode').value || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+    if(!code) return discShow(false, 'Enter a code — letters and numbers only.');
+    if(discCodes.some(function(c){ return c.code === code; })) return discShow(false, 'That code already exists.');
+
+    var type = $('#dType').value;
+    var val = Number($('#dValue').value);
+    if(type !== 'freeship'){
+      if(!isFinite(val) || val <= 0) return discShow(false, 'Enter an amount greater than 0.');
+      if(type === 'percent' && val > 100) return discShow(false, 'Percent cannot be more than 100.');
+    }
+
+    var d = { code: code, type: type, value: type === 'freeship' ? 0 : val, active: true };
+    var min = Number($('#dMin').value); if(isFinite(min) && min > 0) d.minSubtotal = min;
+    var max = Number($('#dMax').value); if(isFinite(max) && max >= 1) d.maxUses = Math.floor(max);
+    var exp = String($('#dExp').value || ''); if(exp) d.expiresAt = exp;
+
+    discCodes.push(d);
+    ['#dCode','#dValue','#dMin','#dMax','#dExp'].forEach(function(s){ $(s).value = ''; });
+    saveDiscounts();
+  };
+
+  /* ---------- members & rewards ----------
+     The same admin key as the discount codes, because it is the same owner and
+     the same console. Two keys on one page would only be a way to get one of
+     them wrong. */
+
+  function memShow(ok, msg){ showStatus('#memStatus', !!ok, msg); }
+
+  /* The numbers come from the SERVER's rule set, not from a second copy here:
+     a console that quotes different thresholds than the checkout enforces is
+     worse than one that quotes none. */
+  function renderLoyRules(r){
+    var b = $('#loyRules');
+    if(!b || !r) return;
+    b.textContent = '$1 spent earns ' + r.pointsPerDollar + ' point' + (r.pointsPerDollar === 1 ? '' : 's') +
+      ' · ' + r.redeemStep + ' points = $' + r.redeemValue + ' off' +
+      ' · every ' + r.stampEvery + ' orders earns a $' + r.stampValue + ' reward' +
+      ' · every settled order drops a $' + r.returnValue + ' coupon valid for ' + r.returnDays + ' days.';
+  }
+
+  function renderMembers(list){
+    var box = $('#memList');
+    if(!box) return;
+    if(!list || !list.length){
+      box.innerHTML = '<div class="hint">No members yet. The first one appears once an order is paid.</div>';
+      return;
+    }
+    box.innerHTML = list.map(function(c){
+      return '<div class="memrow">' +
+        '<b>' + escD(c.phone) + '</b>' + (c.name ? ' · ' + escD(c.name) : '') +
+        '<div class="hint" style="margin-top:2px">' +
+          c.points + ' pts (' + c.lifetimePoints + ' lifetime) · ' +
+          c.settledOrders + ' order' + (c.settledOrders === 1 ? '' : 's') + ' · ' +
+          c.unusedCoupons + ' reward' + (c.unusedCoupons === 1 ? '' : 's') +
+          (c.lastSeenAt ? ' · last seen ' + new Date(c.lastSeenAt).toLocaleDateString() : '') +
+        '</div>' +
+        '<button class="btn btn-ghost btn-sm" data-mempick="' + escD(c.phone) + '">Edit</button>' +
+      '</div>';
+    }).join('');
+    $$('#memList [data-mempick]').forEach(function(b){
+      b.onclick = function(){
+        $('#memPhone').value = b.dataset.mempick;
+        $('#memDelta').focus();
+      };
+    });
+  }
+
+  function loadMembers(){
+    var q = ($('#memQ') && $('#memQ').value.trim()) || '';
+    fetch('/api/customers' + (q ? '?q=' + encodeURIComponent(q) : ''), { headers: discHeaders() })
+      .then(function(r){
+        if(r.ok) return r.json();
+        throw new Error(r.status === 401 ? 'That admin key was not accepted.'
+          : 'Could not load members (HTTP ' + r.status + ').');
+      })
+      .then(function(j){
+        renderLoyRules(j.rules);
+        renderMembers(j.customers || []);
+        memShow(true, (j.count || 0) + ' member' + (j.count === 1 ? '' : 's') + '.');
+      })
+      .catch(function(e){ memShow(false, e.message || 'Could not load members.'); });
+  }
+
+  function adjustMember(){
+    var phone = String($('#memPhone').value || '').trim();
+    if(!phone) return memShow(false, "Enter the guest's mobile number.");
+
+    var body = { phone: phone };
+    var d = String($('#memDelta').value || '').trim();
+    var rw = String($('#memReward').value || '').trim();
+    var note = String($('#memNote').value || '').trim();
+
+    if(d !== '') body.delta = Number(d);
+    if(rw !== ''){
+      body.coupon = { value: Number(rw) };
+      var days = String($('#memDays').value || '').trim();
+      if(days !== '') body.coupon.days = Number(days);
+    }
+    if(note) body.note = note;
+    if(!d && !rw) return memShow(false, 'Enter a points change, a reward, or both.');
+
+    fetch('/api/customers/adjust', { method:'POST', headers: discHeaders(), body: JSON.stringify(body) })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { r:r, j:j }; }); })
+      .then(function(o){
+        if(!o.r.ok) throw new Error((o.j && o.j.message) || 'Could not apply that.');
+        memShow(true, 'Saved — ' + o.j.customer.points + ' points now.');
+        ['#memDelta','#memReward','#memDays','#memNote'].forEach(function(s){ $(s).value = ''; });
+        loadMembers();
+      })
+      .catch(function(e){ memShow(false, e.message || 'Could not apply that.'); });
+  }
+
+  $('#memLoad').onclick = loadMembers;
+  $('#memApply').onclick = adjustMember;
+  $('#memQ').onkeydown = function(e){ if(e.key === 'Enter'){ e.preventDefault(); loadMembers(); } };
+
+  /* A plain <a download> cannot carry the admin key, so the bytes are fetched
+     and handed to the browser ourselves. Same trick as the order export. */
+  $('#memExport').onclick = function(){
+    fetch('/api/customers/export.csv', { headers: discHeaders() })
+      .then(function(r){
+        if(!r.ok) throw new Error(r.status === 401 ? 'That admin key was not accepted.' : 'Export failed.');
+        return r.blob();
+      })
+      .then(function(b){
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(b);
+        a.download = 'kpot-members-' + new Date().toISOString().slice(0, 10) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+        memShow(true, 'Exported.');
+      })
+      .catch(function(e){ memShow(false, e.message || 'Export failed.'); });
+  };
+
+  /* ---------- boot ---------- */
+  $('#url').value = (typeof PUBLIC_URL !== 'undefined' && PUBLIC_URL) ? PUBLIC_URL : '';
+  $('#discKey').value = DISC_KEY;
+  generate();
+  $('#genTables').click();
+  renderStatus();
+  probeBackend();
+  /* Wire A2HS for the owner console. Notification alerts only live on the
+     kitchen board — this page doesn't poll, so a push subscription would be the
+     way to get them here, but that's out of scope right now. */
+  if (window.StaffPWA) {
+    StaffPWA.init({ installHost: document.getElementById('installHost') });
+  }
+})();
+</script>
+</body>
+</html>

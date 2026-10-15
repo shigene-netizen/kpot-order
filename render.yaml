@@ -1,0 +1,61 @@
+# KPOT To Go — Render blueprint
+#
+# Render reads this file when you point it at the repo, so the service, the
+# persistent disk and the data paths are all created from here — no clicking
+# through forms.
+#
+# The one thing it does NOT contain is secrets. Those live in the Render
+# dashboard (see DEPLOY-RENDER.md) and are marked sync: false below, which
+# tells Render to leave the dashboard value alone instead of overwriting it.
+
+services:
+  - type: web
+    name: kpot-to-go
+    runtime: node
+    # A persistent disk requires a paid plan — the free tier has no disk, and
+    # without one every restart would wipe the orders.
+    plan: starter
+    branch: main
+    # There are no dependencies (package.json is intentionally empty), so this
+    # is a no-op; it is listed because Render expects a build step for Node.
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+
+    # The shop's data lives here and survives restarts and redeploys.
+    disk:
+      name: kpot-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      # --- where the server keeps its data -----------------------------------
+      # By default the server writes next to server.js, which on a host is
+      # replaced on every deploy. Point every file at the mounted disk instead:
+      # orders, loyalty customers, the print queue, the owner's channel
+      # switches, the edited menu and the discount codes.
+      - key: KPOT_ORDERS_FILE
+        value: /var/data/orders.local.json
+      - key: KPOT_CUSTOMERS_FILE
+        value: /var/data/customers.local.json
+      - key: KPOT_PRINT_FILE
+        value: /var/data/print.local.json
+      - key: KPOT_STORE_FILE
+        value: /var/data/store.local.json
+      - key: KPOT_MENU_FILE
+        value: /var/data/menu.local.json
+      - key: KPOT_DISCOUNTS_FILE
+        value: /var/data/discounts.local.json
+      - key: KPOT_SECRETS_FILE
+        value: /var/data/secrets.local.json
+
+      # --- secrets — set in the Render dashboard, never in this file ----------
+      # sync: false keeps Render from overwriting whatever you type there.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: ADMIN_KEY
+        sync: false
+      # A DIFFERENT value from ADMIN_KEY. The kitchen print agent uses only
+      # this one; if it is missing while ADMIN_KEY is set, printing is locked.
+      - key: PRINT_KEY
+        sync: false

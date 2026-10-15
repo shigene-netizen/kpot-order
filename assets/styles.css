@@ -1,0 +1,844 @@
+/* ==========================================================================
+   KPOT To Go — Stylesheet
+   Mobile-first. Brand: red / black / cream, bold menu-board energy.
+   ========================================================================== */
+
+:root {
+  --red: #D7263D;
+  --red-dark: #A81B2E;
+  --red-glow: rgba(215, 38, 61, .45);
+  --black: #111014;
+  --black-2: #1A181D;
+  --black-3: #242229;
+  --line: #322F38;
+  --cream: #F7F1E6;
+  --cream-dim: #B9B2A6;
+  /* Muted text on the dark panels. #8A848E measured 4.32:1 on --black-3
+     (#242229) — just under the WCAG AA 4.5:1 floor for normal text. The lighter
+     grey below clears it with headroom on every dark surface we use. */
+  --muted: #958F9D;
+  --gold: #E8B44A;
+  --green: #34C77B;
+
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-lg: 24px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  --shadow-red: 0 8px 24px rgba(215, 38, 61, .32);
+
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+
+  --header-h: 60px;
+  --tabbar-h: 62px;
+
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--font);
+  background: var(--black);
+  color: var(--cream);
+  line-height: 1.5;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: none; border: 0; cursor: pointer; }
+img { max-width: 100%; display: block; }
+
+/* ---------- App shell ---------- */
+#app { max-width: 560px; margin: 0 auto; min-height: 100vh; position: relative; background: var(--black); }
+
+@media (min-width: 900px) {
+  body { background: #0A090C; }
+  #app { box-shadow: 0 0 0 1px var(--line), 0 0 80px rgba(0,0,0,.7); }
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 60;
+  height: calc(var(--header-h) + var(--safe-t));
+  padding: var(--safe-t) 14px 0;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(17, 16, 20, .92);
+  backdrop-filter: blur(14px) saturate(160%);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .brand { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; }
+.logo-k {
+  width: 34px; height: 34px; flex: none; border-radius: 50%;
+  background: var(--red); display: grid; place-items: center;
+  font-weight: 900; font-size: 19px; color: #fff;
+  box-shadow: var(--shadow-red);
+}
+.brand-txt { min-width: 0; }
+.brand-txt b { display: block; font-size: 15px; font-weight: 800; letter-spacing: .2px; white-space: nowrap; }
+.brand-txt span { display: block; font-size: 10.5px; color: var(--muted); letter-spacing: 1.4px; text-transform: uppercase; }
+
+.icon-btn {
+  width: 40px; height: 40px; flex: none; border-radius: 12px;
+  display: grid; place-items: center; font-size: 17px;
+  background: var(--black-3); border: 1px solid var(--line);
+  transition: .16s;
+}
+.icon-btn:active { transform: scale(.93); background: var(--line); }
+
+.cart-btn { position: relative; }
+.cart-badge {
+  position: absolute; top: -5px; right: -5px; min-width: 19px; height: 19px; padding: 0 5px;
+  background: var(--red); color: #fff; border-radius: 10px;
+  font-size: 11px; font-weight: 800; display: grid; place-items: center;
+  border: 2px solid var(--black); transform: scale(0); transition: transform .2s cubic-bezier(.34,1.56,.64,1);
+}
+.cart-badge.on { transform: scale(1); }
+
+/* ---------- Hero ---------- */
+.hero { padding: 22px 18px 18px; position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; inset: -40% -30% auto auto;
+  width: 320px; height: 320px; border-radius: 50%;
+  background: radial-gradient(circle, var(--red-glow), transparent 68%);
+  pointer-events: none;
+}
+.hero-eyebrow {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--gold); margin-bottom: 10px; position: relative;
+}
+.hero h1 { font-size: 30px; line-height: 1.1; font-weight: 900; letter-spacing: -.6px; position: relative; }
+.hero h1 em { font-style: normal; color: var(--red); }
+.hero p { margin-top: 8px; font-size: 13.5px; color: var(--cream-dim); max-width: 34ch; position: relative; }
+
+.hero-badges { display: flex; gap: 7px; margin-top: 14px; flex-wrap: wrap; position: relative; }
+.badge {
+  font-size: 11px; font-weight: 700; padding: 5px 10px; border-radius: 20px;
+  background: var(--black-3); border: 1px solid var(--line); color: var(--cream-dim);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.badge.live { border-color: rgba(52,199,123,.4); color: var(--green); }
+.badge.live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }
+.badge.closed { border-color: rgba(215,38,61,.42); color: #F2717F; }
+.badge.closed::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #F2717F; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+/* ---------- Order type selector ---------- */
+.ordertype { padding: 0 18px 4px; }
+.section-label {
+  font-size: 11px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--muted); margin: 18px 0 9px;
+}
+.ot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.ot-card {
+  padding: 12px 8px; border-radius: var(--radius-sm); text-align: center;
+  background: var(--black-2); border: 1.5px solid var(--line); transition: .16s;
+}
+.ot-card .ic { font-size: 20px; display: block; margin-bottom: 5px; }
+.ot-card b { font-size: 12.5px; font-weight: 700; display: block; }
+.ot-card small { font-size: 10px; color: var(--muted); display: block; margin-top: 2px; line-height: 1.3; }
+.ot-card.on { border-color: var(--red); background: rgba(215,38,61,.11); box-shadow: 0 0 0 1px var(--red) inset; }
+.ot-card.on b { color: #fff; }
+.ot-card:active { transform: scale(.97); }
+/* A channel the owner switched off. Kept visible (not removed) so the guest
+   can see the option exists and just is not available — silently dropping a
+   card makes people think the site is broken. */
+.ot-card.off { opacity: .4; cursor: not-allowed; }
+.ot-card.off b { text-decoration: line-through; text-decoration-color: var(--muted); }
+.ot-card.off:active { transform: none; }
+
+.table-input {
+  margin-top: 10px; display: none; align-items: center; gap: 10px;
+  background: rgba(215,38,61,.09); border: 1.5px solid rgba(215,38,61,.35);
+  border-radius: var(--radius-sm); padding: 11px 13px;
+}
+.table-input.on { display: flex; }
+.table-input label { font-size: 12.5px; font-weight: 700; flex: 1; }
+.table-input input {
+  width: 78px; padding: 8px 10px; border-radius: 8px; text-align: center;
+  background: var(--black); border: 1.5px solid var(--line); font-weight: 800; font-size: 15px;
+}
+.table-input input:focus { outline: none; border-color: var(--red); }
+
+/* ---------- Category tabs ---------- */
+.tabs-wrap {
+  position: sticky; top: calc(var(--header-h) + var(--safe-t)); z-index: 50;
+  background: linear-gradient(var(--black) 72%, transparent);
+  padding: 12px 0 10px;
+}
+.tabs { display: flex; gap: 8px; overflow-x: auto; padding: 0 18px; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: none; padding: 9px 15px; border-radius: 20px; white-space: nowrap;
+  background: var(--black-2); border: 1.5px solid var(--line);
+  font-size: 13px; font-weight: 700; color: var(--cream-dim); transition: .16s;
+}
+.tab.on { background: var(--red); border-color: var(--red); color: #fff; box-shadow: var(--shadow-red); }
+.tab:active { transform: scale(.96); }
+
+/* ---------- Menu sections ---------- */
+.menu-body { padding: 0 18px 140px; }
+.cat-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin: 22px 0 12px; }
+.cat-head h2 { font-size: 21px; font-weight: 900; letter-spacing: -.3px; }
+.cat-head .sub { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.price-tag {
+  background: var(--red); color: #fff; font-weight: 900; font-size: 15px;
+  padding: 4px 12px; border-radius: 20px; box-shadow: var(--shadow-red); flex: none;
+}
+
+/* Builder promo card */
+.build-card {
+  border-radius: var(--radius-lg); overflow: hidden; position: relative;
+  background: linear-gradient(135deg, var(--black-2), var(--black-3));
+  border: 1.5px solid var(--line); padding: 18px; margin-bottom: 14px;
+}
+.build-card::after {
+  content: ''; position: absolute; right: -30px; top: -30px; width: 150px; height: 150px;
+  border-radius: 50%; background: radial-gradient(circle, var(--red-glow), transparent 70%);
+}
+.build-card h3 { font-size: 19px; font-weight: 900; position: relative; }
+.build-card p { font-size: 12.5px; color: var(--cream-dim); margin-top: 5px; position: relative; }
+.steps-preview { display: flex; gap: 6px; margin: 13px 0 15px; flex-wrap: wrap; position: relative; }
+.step-pill {
+  font-size: 10.5px; font-weight: 700; padding: 4px 9px; border-radius: 14px;
+  background: rgba(255,255,255,.06); border: 1px solid var(--line); color: var(--cream-dim);
+}
+.step-pill i { font-style: normal; color: var(--red); font-weight: 900; margin-right: 4px; }
+
+/* Buttons */
+.btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 14px 18px; border-radius: 13px;
+  font-size: 14.5px; font-weight: 800; letter-spacing: .2px;
+  transition: .16s; position: relative;
+}
+.btn:active { transform: scale(.98); }
+.btn-primary { background: var(--red); color: #fff; box-shadow: var(--shadow-red); }
+.btn-primary:active { background: var(--red-dark); }
+.btn-ghost { background: var(--black-3); border: 1.5px solid var(--line); color: var(--cream); }
+.btn-ghost:active { background: var(--line); }
+.btn-gold { background: var(--gold); color: #1A1206; }
+.btn[disabled] { opacity: .42; pointer-events: none; }
+.btn-sm { padding: 10px 14px; font-size: 13px; border-radius: 11px; width: auto; }
+
+/* ---------- Button feedback (guest-facing) ----------
+   Three things a guest has to SEE rather than read: that the tap landed,
+   that the item really went into the cart, and that the order is on its
+   way. Everything here is transform and colour only — no layout is
+   reflowed, so it costs nothing on a cheap phone. The green "added" state
+   is painted inline by flashAdded() in app.js on purpose: an inline style
+   outranks every :active and .stepper rule, so one code path covers the
+   plain .btn, the builder's buttons and the sides' .add-btn alike without
+   a specificity war. Guests whose system asks for reduced motion keep
+   every message and lose only the movement. */
+@keyframes fxPop { 0% { transform: scale(.9) } 55% { transform: scale(1.06) } 100% { transform: scale(1) } }
+.fx-pop { animation: fxPop .32s ease; }
+@keyframes fxBump { 0% { transform: scale(1) } 40% { transform: scale(1.55) } 100% { transform: scale(1) } }
+#cartBadge.fx-bump { animation: fxBump .42s ease; }
+@keyframes fxAttn { 0%,100% { transform: scale(1) } 25% { transform: scale(1.035) } 55% { transform: scale(1) } 80% { transform: scale(1.018) } }
+#cartBarBtn.fx-attn { animation: fxAttn .9s ease; }
+.fx-spin {
+  width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  border-radius: 50%; animation: spin .7s linear infinite;
+  display: inline-block; vertical-align: -2px; margin-right: 8px;
+}
+/* A disabled button dims to .42 — far too faint for a spinner that is
+   supposed to say "working". The busy state keeps its own weight. */
+.btn.fx-busy { opacity: .85; }
+@media (prefers-reduced-motion: reduce) {
+  .fx-pop, #cartBadge.fx-bump, #cartBarBtn.fx-attn { animation: none; }
+  .fx-spin { animation: none; border-top-color: rgba(255,255,255,.85); }
+}
+
+/* Simple item rows */
+.item-row {
+  display: flex; align-items: center; gap: 13px; padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+}
+.item-row:last-child { border-bottom: 0; }
+.item-thumb {
+  width: 54px; height: 54px; flex: none; border-radius: 12px;
+  background: var(--black-3); border: 1px solid var(--line);
+  display: grid; place-items: center; font-size: 24px;
+}
+.item-main { flex: 1; min-width: 0; }
+.item-main b { font-size: 14px; font-weight: 700; display: block; line-height: 1.35; }
+.item-main span { font-size: 11.5px; color: var(--muted); }
+.item-price { font-size: 14px; font-weight: 800; color: var(--gold); flex: none; }
+
+/* Quantity stepper */
+.stepper { display: flex; align-items: center; gap: 3px; flex: none; }
+.stepper button {
+  width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+  background: var(--black-3); border: 1.5px solid var(--line); font-size: 16px; font-weight: 800;
+  transition: .14s;
+}
+.stepper button:active { background: var(--red); border-color: var(--red); color: #fff; transform: scale(.9); }
+.stepper .qty { min-width: 26px; text-align: center; font-weight: 800; font-size: 14px; }
+.stepper .add-btn { width: auto; padding: 0 13px; height: 32px; font-size: 12.5px; border-radius: 9px; background: var(--red); border-color: var(--red); color: #fff; }
+.stepper .add-btn:active { background: var(--red-dark); }
+
+/* Variant chips inside a simple item */
+.variants { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.vchip {
+  font-size: 11.5px; font-weight: 600; padding: 6px 11px; border-radius: 16px;
+  background: var(--black-2); border: 1px solid var(--line); color: var(--cream-dim);
+}
+.vchip.on { background: rgba(215,38,61,.16); border-color: var(--red); color: #fff; font-weight: 700; }
+
+/* ---------- Bottom sheet (builder / item) ---------- */
+.sheet-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.72); z-index: 90;
+  opacity: 0; pointer-events: none; transition: opacity .26s; backdrop-filter: blur(3px);
+}
+.sheet-backdrop.on { opacity: 1; pointer-events: auto; }
+
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 95;
+  max-width: 560px; margin: 0 auto;
+  max-height: 92vh;
+  max-height: 92dvh;           /* accounts for mobile browser chrome where supported */
+  display: flex; flex-direction: column;
+  background: var(--black-2); border-radius: 22px 22px 0 0;
+  border-top: 1.5px solid var(--line);
+  transform: translateY(102%); transition: transform .32s cubic-bezier(.32,.72,0,1);
+  box-shadow: 0 -20px 60px rgba(0,0,0,.7);
+}
+.sheet.on { transform: translateY(0); }
+.sheet-grip { padding: 10px 0 4px; display: grid; place-items: center; flex: none; }
+.sheet-grip i { width: 38px; height: 4px; border-radius: 3px; background: var(--line); display: block; }
+.sheet-head {
+  padding: 4px 18px 12px; flex: none; display: flex; align-items: flex-start; gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.sheet-head h3 { font-size: 18px; font-weight: 900; flex: 1; line-height: 1.25; }
+.sheet-head .close { width: 32px; height: 32px; border-radius: 50%; background: var(--black-3); display: grid; place-items: center; font-size: 15px; flex: none; }
+.sheet-body { overflow-y: auto; padding: 6px 18px 12px; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch; }
+.sheet-foot {
+  padding: 12px 18px calc(16px + var(--safe-b)); flex: none;
+  border-top: 1px solid var(--line); background: var(--black-2);
+  display: flex; align-items: center; gap: 12px;
+}
+.sheet-foot .total { flex: none; }
+.sheet-foot .total small { display: block; font-size: 10.5px; color: var(--muted); font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+.sheet-foot .total b { font-size: 19px; font-weight: 900; color: var(--gold); }
+
+/* Inline action at the end of the sheet content.
+   Guarantees the primary button is reachable even when a mobile browser's own
+   bottom toolbar (WeChat, in-app browsers, Safari) covers the sticky footer. */
+.inline-action {
+  margin: 22px 0 8px; padding-top: 18px; border-top: 1px solid var(--line);
+}
+.ia-state {
+  font-size: 12.5px; font-weight: 700; margin-bottom: 11px;
+  text-align: center; line-height: 1.5;
+}
+.ia-state.ok { color: var(--green); }
+.ia-state.warn { color: #F2A65A; }
+
+/* Builder step */
+.bstep { padding: 16px 0 6px; border-bottom: 1px solid var(--line); }
+.bstep:last-child { border-bottom: 0; }
+.bstep-head { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+.bstep-num {
+  width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--red);
+  display: grid; place-items: center; font-size: 12px; font-weight: 900; color: #fff;
+}
+.bstep-head b { font-size: 14.5px; font-weight: 800; flex: 1; }
+.bstep-head .req { font-size: 10.5px; font-weight: 800; padding: 3px 8px; border-radius: 10px; letter-spacing: .4px; }
+.req.ok { background: rgba(52,199,123,.15); color: var(--green); }
+.req.no { background: rgba(215,38,61,.15); color: #F2717F; }
+
+.chip-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.chip {
+  display: flex; align-items: center; gap: 9px; padding: 10px 11px; text-align: left;
+  border-radius: var(--radius-sm); background: var(--black-3);
+  border: 1.5px solid var(--line); transition: .15s; position: relative; overflow: hidden;
+}
+.chip .em { font-size: 18px; flex: none; }
+.chip .tx { min-width: 0; }
+.chip .tx b { font-size: 12.5px; font-weight: 700; display: block; line-height: 1.3; }
+.chip .tx small { font-size: 10px; color: var(--muted); display: block; line-height: 1.3; margin-top: 1px; }
+.chip.on { border-color: var(--red); background: rgba(215,38,61,.14); }
+.chip.on::after {
+  content: '✓'; position: absolute; top: 6px; right: 8px; font-size: 11px;
+  font-weight: 900; color: var(--red);
+}
+.chip:active { transform: scale(.97); }
+.chip.veg .tx small { color: #6FCF97; }
+
+/* Duplicate-capable chips (BBQ proteins): a count badge plus a "−" control,
+   so the same protein can be taken more than once. */
+.chip.chip-count { padding-right: 42px; }
+.chip.chip-count.on::after { content: none; }   /* the count badge replaces the ✓ */
+.chip .cnt {
+  position: absolute; top: 5px; right: 6px;
+  min-width: 19px; height: 19px; padding: 0 5px;
+  border-radius: 10px; background: var(--red); color: #fff;
+  font-size: 10.5px; font-weight: 900; line-height: 1;
+  display: grid; place-items: center;
+  box-shadow: 0 2px 8px rgba(215,38,61,.5);
+}
+.chip .minus {
+  position: absolute; right: 5px; bottom: 5px;
+  width: 26px; height: 26px; border-radius: 8px;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,.12); border: 1px solid var(--line);
+  font-size: 16px; font-weight: 900; color: var(--cream); line-height: 1;
+}
+.chip .minus:active { background: var(--red); border-color: var(--red); color: #fff; transform: scale(.92); }
+
+/* Add-ons */
+.addon-row {
+  display: flex; align-items: center; gap: 12px; padding: 12px;
+  border-radius: var(--radius-sm); background: var(--black-3);
+  border: 1.5px solid var(--line); margin-top: 8px; transition: .15s;
+}
+.addon-row.on { border-color: var(--gold); background: rgba(232,180,74,.1); }
+.addon-row .sw {
+  width: 44px; height: 26px; border-radius: 14px; background: var(--line);
+  flex: none; position: relative; transition: .2s;
+}
+.addon-row .sw::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: #fff; transition: .2s;
+}
+.addon-row.on .sw { background: var(--gold); }
+.addon-row.on .sw::after { transform: translateX(18px); }
+.addon-row .info { flex: 1; min-width: 0; }
+.addon-row .info b { font-size: 13px; display: block; }
+.addon-row .info small { font-size: 11px; color: var(--muted); }
+.addon-row .pr { font-size: 13px; font-weight: 800; color: var(--gold); flex: none; }
+
+/* Notes field */
+.field { margin-top: 12px; }
+.field label { font-size: 11.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 6px; }
+.field input, .field textarea, .field select {
+  width: 100%; padding: 12px 13px; border-radius: var(--radius-sm);
+  background: var(--black-3); border: 1.5px solid var(--line);
+  font-size: 14px; transition: .15s;
+}
+.field input:focus, .field textarea:focus, .field select:focus { outline: none; border-color: var(--red); background: var(--black-2); }
+.field textarea { resize: vertical; min-height: 68px; }
+.field .hint { font-size: 11px; color: var(--muted); margin-top: 5px; }
+
+/* Discount code box */
+.coupon { padding: 0 18px; }
+.coupon-row { display: flex; gap: 8px; align-items: stretch; margin-top: 8px; }
+.coupon-row input {
+  flex: 1; min-width: 0; padding: 11px 13px; border-radius: var(--radius-sm);
+  background: var(--black-3); border: 1.5px solid var(--line);
+  font-size: 14px; text-transform: uppercase; letter-spacing: .5px; transition: .15s;
+}
+.coupon-row input:focus { outline: none; border-color: var(--red); background: var(--black-2); }
+.coupon-row .btn { flex: none; align-self: center; }
+.small.ok { color: var(--green); }
+.small.err { color: var(--red); }
+
+/* ---------- Rewards (loyalty) ----------
+   Deliberately the same shape as .pay-opt: a reward and a payment method are
+   both "pick one of these", and a guest should not have to learn two idioms
+   on one screen. Green rather than red, because unlike a payment method this
+   is money coming BACK. */
+.loy { padding: 0 18px; margin-top: 2px; }
+.loy-row {
+  display: flex; align-items: center; gap: 11px; padding: 11px 13px;
+  border-radius: var(--radius-sm); background: var(--black-3);
+  border: 1.5px solid var(--line); margin-bottom: 7px; transition: .15s;
+  width: 100%; text-align: left;
+}
+.loy-row .rd {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line);
+  flex: none; display: grid; place-items: center; transition: .15s;
+}
+.loy-row.on { border-color: var(--green); background: rgba(46,160,67,.12); }
+.loy-row.on .rd { border-color: var(--green); }
+.loy-row.on .rd::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--green); }
+.loy-row .tx { flex: 1; min-width: 0; }
+.loy-row .tx b { font-size: 13px; display: block; }
+.loy-row .tx small { font-size: 11px; color: var(--muted); display: block; }
+.loy-row .amt { flex: none; font-size: 13px; font-weight: 800; color: var(--green); }
+.loy-note { margin: 2px 0 9px; }
+
+/* ---------- Cart drawer ---------- */
+.cart-list { padding: 4px 18px 0; }
+.cart-item { display: flex; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.cart-item .body { flex: 1; min-width: 0; }
+.cart-item .body > b { font-size: 14px; display: block; }
+.cart-item .mods { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.55; }
+.cart-item .mods em { font-style: normal; color: var(--cream-dim); }
+.cart-item .line-total { font-size: 14px; font-weight: 800; color: var(--gold); margin-top: 6px; display: block; }
+
+/* Totals */
+.totals { padding: 16px 18px 8px; }
+.trow { display: flex; justify-content: space-between; font-size: 13.5px; padding: 5px 0; color: var(--cream-dim); }
+.trow b { color: var(--cream); font-weight: 700; }
+.trow.grand { font-size: 18px; padding-top: 12px; margin-top: 8px; border-top: 1.5px dashed var(--line); color: var(--cream); font-weight: 800; }
+.trow.grand b { font-size: 22px; color: var(--gold); font-weight: 900; }
+.trow.disc b { color: var(--green); }
+
+/* Tip selector */
+.tip-row { display: flex; gap: 7px; margin-top: 8px; }
+.tip {
+  flex: 1; padding: 10px 4px; border-radius: 11px; text-align: center;
+  background: var(--black-3); border: 1.5px solid var(--line);
+  font-size: 13px; font-weight: 800; transition: .15s;
+}
+.tip small { display: block; font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 1px; }
+.tip.on { border-color: var(--red); background: rgba(215,38,61,.14); color: #fff; }
+.tip.on small { color: #F2717F; }
+
+/* Custom tip chip wraps a label + an inline dollar input.
+   It is a <div> (not a <button>) so the nested <input> stays a real,
+   focusable field instead of being swallowed by button semantics. */
+.tip-custom { flex: 1.5; cursor: text; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+.tip-custom .tc-label { font-size: 13px; font-weight: 800; }
+.tip-custom .tc-input { display: flex; align-items: center; font-size: 12px; color: var(--muted); font-weight: 700; }
+.tip-custom .tc-input input {
+  width: 50px; background: transparent; border: none; border-bottom: 1.5px solid var(--line);
+  color: #fff; font-size: 13px; font-weight: 800; text-align: center; padding: 1px 2px;
+  -moz-appearance: textfield;
+}
+.tip-custom .tc-input input::-webkit-outer-spin-button,
+.tip-custom .tc-input input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.tip-custom .tc-input input:focus { outline: none; border-bottom-color: var(--red); }
+.tip-custom.on { border-color: var(--red); background: rgba(215,38,61,.14); color: #fff; }
+.tip-custom.on .tc-label { color: #fff; }
+.tip-custom.on .tc-input { color: #F2717F; }
+.tip-custom.on .tc-input input { border-bottom-color: var(--red); color: #fff; }
+
+/* Live order status on the ticket (kitchen -> guest) */
+.tk-status {
+  margin: 12px 18px 0; padding: 12px 14px; border-radius: 14px;
+  background: var(--black-3); border: 1.5px solid var(--line);
+  display: flex; align-items: center; gap: 12px;
+}
+.tk-status .ts-row { display: flex; align-items: center; gap: 12px; width: 100%; }
+.tk-status .ts-emoji { font-size: 26px; line-height: 1; }
+.tk-status .ts-txt b { display: block; font-size: 14.5px; font-weight: 800; color: #fff; }
+.tk-status .ts-txt small { font-size: 11px; color: #9A94A0; text-transform: capitalize; }
+.tk-status.st-preparing { border-color: rgba(232,180,74,.5); }
+.tk-status.st-ready {
+  border-color: var(--green); background: rgba(46,160,67,.14);
+  animation: readyPulse 1.4s ease-in-out infinite;
+}
+.tk-status.st-ready .ts-txt b { color: #6ee787; }
+.tk-status.st-cancelled { border-color: rgba(248,81,73,.5); }
+.tk-status.st-cancelled .ts-txt b { color: #ff7b72; }
+@keyframes readyPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46,160,67,.5); }
+  50% { box-shadow: 0 0 0 8px rgba(46,160,67,0); }
+}
+@media print { .tk-status { display: none; } }
+
+/* "Notify me when ready" control on the ticket */
+.notify-slot { padding: 12px 18px 0; }
+.notify-slot .btn { width: 100%; }
+.notify-row {
+  font-size: 13px; color: var(--cream); background: var(--black-3);
+  border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 13px; line-height: 1.5;
+}
+/* NOTE: the ticket is a light "paper" panel (.ticket uses --cream), so this chip
+   must be OPAQUE. A translucent background lets the cream bleed through while
+   the text stays a light green meant for a dark surface — the two end up at
+   roughly 1.6:1 contrast and the text becomes unreadable. */
+.notify-row.on { border-color: rgba(46,160,67,.55); background: #1B2A20; color: #7EE787; }
+.notify-row.off { border-color: rgba(248,81,73,.45); color: #ff9b93; }
+@media print { .notify-slot { display: none; } }
+
+/* "Add to Home Screen" prompt (enables ready notifications, esp. on iPhone) */
+.install-banner {
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 12px 14px 0; padding: 14px 15px; border-radius: 16px;
+  background: linear-gradient(135deg, rgba(232,180,74,.18), rgba(215,38,61,.12));
+  border: 1.5px solid rgba(232,180,74,.5);
+}
+.install-banner[hidden] { display: none; }
+.install-banner .ib-txt b { display: block; font-size: 14.5px; color: var(--cream, #F7F1E6); margin-bottom: 4px; }
+.install-banner .ib-txt small { font-size: 12.5px; color: var(--muted, #958F9D); line-height: 1.6; }
+.install-banner .ib-txt b b, .install-banner .ib-txt small b { display: inline; color: var(--cream, #F7F1E6); font-weight: 800; }
+.install-banner .ib-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.install-banner .ib-btn {
+  background: #E8B44A; color: #1A1206; border: 0; border-radius: 10px;
+  padding: 10px 16px; font: inherit; font-weight: 800; cursor: pointer;
+}
+.install-banner .ib-close {
+  background: transparent; color: var(--muted, #958F9D); border: 1.5px solid var(--line, #322F38);
+  border-radius: 10px; padding: 10px 13px; font: inherit; font-weight: 700; cursor: pointer;
+}
+
+/* Store closed / stop-sales banner (owner flips this from the admin board) */
+.store-banner {
+  position: sticky; top: 0; z-index: 60;
+  background: var(--red); color: #fff; font-weight: 800; font-size: 13.5px;
+  text-align: center; padding: 9px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.35);
+}
+.store-banner[hidden] { display: none; }
+
+/* Payment options */
+.pay-opt {
+  display: flex; align-items: center; gap: 12px; padding: 13px 14px;
+  border-radius: var(--radius-sm); background: var(--black-3);
+  border: 1.5px solid var(--line); margin-bottom: 8px; transition: .15s; width: 100%; text-align: left;
+}
+.pay-opt .rd {
+  width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line);
+  flex: none; display: grid; place-items: center; transition: .15s;
+}
+.pay-opt.on { border-color: var(--red); background: rgba(215,38,61,.1); }
+.pay-opt.on .rd { border-color: var(--red); }
+.pay-opt.on .rd::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+.pay-opt .ic { font-size: 20px; flex: none; }
+.pay-opt .tx { flex: 1; min-width: 0; }
+.pay-opt .tx b { font-size: 13.5px; display: block; }
+.pay-opt .tx small { font-size: 11px; color: var(--muted); display: block; }
+.pay-opt[disabled] { opacity: .45; }
+
+/* ---------- Sticky cart bar ---------- */
+.cart-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 70;
+  max-width: 560px; margin: 0 auto;
+  padding: 12px 18px calc(12px + var(--safe-b));
+  background: linear-gradient(transparent, var(--black) 34%);
+  transform: translateY(120%); transition: transform .28s cubic-bezier(.32,.72,0,1);
+  pointer-events: none;
+}
+.cart-bar.on { transform: translateY(0); pointer-events: auto; }
+.cart-bar .btn { box-shadow: 0 8px 28px rgba(0,0,0,.6), var(--shadow-red); }
+.cart-bar .btn .cnt {
+  background: rgba(255,255,255,.22); border-radius: 12px; padding: 2px 9px;
+  font-size: 12.5px; font-weight: 800;
+}
+
+/* ---------- Order ticket / confirmation ---------- */
+.ticket {
+  background: var(--cream); color: #17161A; border-radius: var(--radius);
+  padding: 20px; margin: 0 18px 16px; font-variant-numeric: tabular-nums;
+}
+.ticket .tk-head { text-align: center; padding-bottom: 14px; border-bottom: 2px dashed #C9C0AE; }
+.ticket .tk-head .ok {
+  width: 46px; height: 46px; margin: 0 auto 10px; border-radius: 50%;
+  background: var(--green); color: #fff; display: grid; place-items: center; font-size: 24px;
+  animation: pop .4s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes pop { from { transform: scale(0) } to { transform: scale(1) } }
+/* Not-confirmed-yet marker: amber instead of green, and no celebratory pop. */
+.ticket .tk-head .ok.pending { background: var(--gold); color: #4A3608; animation: none; }
+
+/* Plain-language payment state, right under the order number. */
+.pay-flag {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  font-size: 12.5px; font-weight: 700; line-height: 1.5; text-align: left;
+}
+.pay-flag.ok { background: rgba(31,138,76,.12); color: #14663A; border: 1px solid rgba(31,138,76,.3); }
+.pay-flag.warn { background: rgba(232,180,74,.18); color: #6B4A00; border: 1px solid rgba(232,180,74,.5); }
+
+/* "Confirming your payment…" interstitial shown while we ask Stripe. */
+.verifying { text-align: center; padding: 72px 24px; }
+.verifying b { display: block; font-size: 16px; margin-top: 18px; }
+.verifying p { font-size: 13px; color: #6B6255; margin-top: 6px; }
+.verifying .spin {
+  width: 34px; height: 34px; margin: 0 auto; border-radius: 50%;
+  border: 3px solid rgba(215,38,61,.2); border-top-color: var(--red);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg) } }
+@media print { .verifying { display: none } }
+.ticket .tk-head h3 { font-size: 19px; font-weight: 900; }
+.ticket .tk-head p { font-size: 12.5px; color: #6B6255; margin-top: 3px; }
+.ticket .tk-num {
+  font-size: 27px; font-weight: 900; letter-spacing: 1.5px; margin-top: 10px;
+  color: var(--red-dark); font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.ticket .tk-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 14px 0; border-bottom: 2px dashed #C9C0AE; }
+.ticket .tk-meta div small { display: block; font-size: 10px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; color: #6B6255; }
+.ticket .tk-meta div b { font-size: 13.5px; }
+.ticket .tk-items { padding: 14px 0; border-bottom: 2px dashed #C9C0AE; }
+.ticket .tk-line { display: flex; gap: 10px; font-size: 13px; padding: 5px 0; }
+.ticket .tk-line .q { font-weight: 900; color: var(--red-dark); flex: none; min-width: 22px; }
+.ticket .tk-line .d { flex: 1; }
+.ticket .tk-line .d small { display: block; font-size: 11px; color: #6B6255; line-height: 1.5; }
+.ticket .tk-line .p { font-weight: 800; flex: none; }
+.ticket .tk-tot { padding-top: 14px; }
+.ticket .tk-tot div { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; color: #4A443A; }
+.ticket .tk-tot .g { font-size: 18px; font-weight: 900; color: #17161A; padding-top: 9px; margin-top: 7px; border-top: 2px solid #17161A; }
+
+.qr-holder { display: grid; place-items: center; padding: 16px 0 4px; }
+.qr-holder .box { background: #fff; padding: 10px; border-radius: 12px; }
+.qr-holder p { font-size: 11.5px; color: #6B6255; margin-top: 9px; text-align: center; }
+
+/* ---------- Store details ---------- */
+.store-foot {
+  margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line);
+  display: grid; gap: 11px;
+}
+.site-foot {
+  padding: 26px 18px calc(100px + var(--safe-b));
+  border-top: 1px solid var(--line);
+  display: grid; gap: 11px;
+}
+.sf-brand { display: flex; align-items: center; gap: 9px; margin-bottom: 3px; }
+.sf-brand b { font-size: 14.5px; font-weight: 800; letter-spacing: .2px; }
+.sf-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  font-size: 12.5px; line-height: 1.55; color: var(--cream-dim);
+  text-decoration: none;
+}
+a.sf-row:hover, a.sf-row:active { color: var(--cream); }
+.sf-ic { flex: none; font-size: 14px; line-height: 1.35; }
+.sf-note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.65; }
+
+/* ---------- Stripe amount helper ---------- */
+.pay-note {
+  margin-top: 12px; padding: 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(99,91,255,.1);
+  border: 1.5px solid rgba(99,91,255,.4);
+}
+.pn-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .9px; text-transform: uppercase;
+  color: #A9A3FF;
+}
+.pn-amount {
+  display: flex; align-items: center; gap: 10px; margin: 8px 0 9px;
+}
+.pn-amount span {
+  flex: 1; font-size: 27px; font-weight: 900; letter-spacing: -.5px;
+  color: #fff; font-variant-numeric: tabular-nums;
+}
+.pn-copy {
+  flex: none; padding: 9px 15px; border-radius: 9px;
+  background: rgba(99,91,255,.9); color: #fff;
+  font-size: 12.5px; font-weight: 800; border: 0;
+  transition: .15s;
+}
+.pn-copy:active { transform: scale(.95); background: #635BFF; }
+.pn-hint { font-size: 11.5px; color: var(--cream-dim); line-height: 1.6; }
+
+/* ---------- Toast ---------- */
+.toast-wrap {
+  position: fixed; left: 0; right: 0; bottom: calc(96px + var(--safe-b)); z-index: 120;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.toast {
+  background: var(--black-3); border: 1px solid var(--line); color: var(--cream);
+  padding: 11px 18px; border-radius: 24px; font-size: 13px; font-weight: 700;
+  box-shadow: var(--shadow); display: flex; align-items: center; gap: 8px;
+  animation: toastIn .28s cubic-bezier(.34,1.56,.64,1);
+}
+.toast.ok { border-color: rgba(52,199,123,.5); }
+.toast.err { border-color: rgba(215,38,61,.55); }
+@keyframes toastIn { from { transform: translateY(16px) scale(.94); opacity: 0 } to { transform: none; opacity: 1 } }
+
+/* ---------- Empty state ---------- */
+.empty { text-align: center; padding: 52px 24px; }
+.empty .em { font-size: 46px; margin-bottom: 12px; opacity: .8; }
+.empty b { display: block; font-size: 16px; font-weight: 800; }
+.empty p { font-size: 13px; color: var(--muted); margin-top: 5px; }
+
+/* ---------- Recent orders (guest history) ---------- */
+/* .icon-btn sets display:grid, which outranks the UA [hidden] rule — without
+   this the button would still show when we hide it. */
+.hist-btn[hidden] { display: none; }
+.hist-list { display: flex; flex-direction: column; gap: 8px; }
+.hist-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  padding: 12px 13px; border-radius: 14px;
+  background: var(--black-3); border: 1px solid var(--line);
+  transition: .16s;
+}
+.hist-row:active { transform: scale(.985); background: var(--line); }
+.hr-ic {
+  width: 38px; height: 38px; flex: none; border-radius: 11px;
+  display: grid; place-items: center; font-size: 18px;
+  background: rgba(255, 255, 255, .05);
+}
+.hr-ic.live { background: rgba(232, 180, 74, .16); }
+.hr-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hr-mid b { font-size: 14px; font-weight: 800; letter-spacing: .2px; }
+.hr-mid small { font-size: 11.5px; color: var(--muted); }
+.hr-st { font-weight: 700; }
+.hr-st.live { color: var(--gold); }
+.hr-go { flex: none; font-size: 20px; color: var(--muted); }
+.hist-note { font-size: 11.5px; color: var(--muted); padding: 14px 4px 4px; line-height: 1.5; }
+
+/* ---------- Progress dots (builder) ---------- */
+.progress { display: flex; gap: 4px; padding: 0 18px 10px; }
+.progress i { flex: 1; height: 3px; border-radius: 2px; background: var(--line); transition: .25s; }
+.progress i.done { background: var(--red); }
+
+/* ---------- Utility ---------- */
+.hide { display: none !important; }
+.row { display: flex; align-items: center; gap: 10px; }
+.spacer { flex: 1; }
+.center { text-align: center; }
+.dim { color: var(--muted); }
+.small { font-size: 11.5px; }
+.mt8 { margin-top: 8px } .mt12 { margin-top: 12px } .mt16 { margin-top: 16px } .mt24 { margin-top: 24px }
+.spicy { color: #FF6B6B; font-size: 10px; letter-spacing: -1px; }
+
+/* ---------- Rewards strip on the guest's ticket ----------
+   Sits INSIDE .ticket, so it is dark-on-cream like the rest of the receipt
+   rather than the dark theme around it. Dashed rather than solid: it is a
+   voucher, not a line item. */
+.ticket-loy {
+  margin-top: 14px; padding: 12px 13px; border-radius: 12px;
+  background: rgba(46,160,67,.10); border: 1px dashed rgba(46,160,67,.5);
+}
+.ticket-loy .tl-head {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .07em;
+  text-transform: uppercase; color: #2E7D45;
+}
+.ticket-loy .tl-line { font-size: 13px; margin-top: 5px; }
+.ticket-loy .tl-line.dim { font-size: 11.5px; color: #6B6255; }
+.ticket-loy .loy-coupon { font-size: 13px; font-weight: 700; margin-top: 6px; color: #1F6B38; }
+.ticket-loy .loy-coupon small { font-weight: 400; color: #6B6255; }
+
+/* ---------- Delivery date/slot picker (checkout) ---------- */
+.sch-dates { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.sch-date {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 8px 10px; border-radius: 10px; min-width: 58px;
+  background: var(--black-3); border: 1.5px solid var(--line); transition: .15s;
+}
+.sch-date span { font-size: 12px; font-weight: 800; }
+.sch-date small { font-size: 10px; color: var(--muted); }
+.sch-date.on { border-color: var(--red); background: rgba(215,38,61,.12); }
+.sch-date.on span { color: #F2717F; }
+.sch-slots { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.sch-slot {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 13px; border-radius: 10px; text-align: left;
+  background: var(--black-3); border: 1.5px solid var(--line); transition: .15s;
+}
+.sch-slot span { font-size: 13px; font-weight: 700; }
+.sch-slot small { font-size: 11px; color: var(--muted); }
+.sch-slot.on { border-color: var(--red); background: rgba(215,38,61,.12); }
+.sch-slot.on span { color: #F2717F; }
+.sch-slot[disabled] { opacity: .45; }
+
+/* ---------- Member badge (loyalty box) ---------- */
+.loy-member {
+  margin-top: 8px; padding: 7px 11px; border-radius: 9px;
+  background: rgba(232,180,74,.14); border: 1px solid rgba(232,180,74,.4);
+  font-size: 12px; font-weight: 800; color: var(--gold);
+}
+
+/* ---------- Schedule line on the ticket ---------- */
+.tk-sched {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 0; border-bottom: 2px dashed #C9C0AE;
+}
+.tk-sched small { font-size: 10px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase; color: #6B6255; }
+.tk-sched b { font-size: 13px; text-align: right; }
+
+/* ---------- Print (kitchen ticket) ---------- */
+@media print {
+  body { background: #fff; color: #000; }
+  .topbar, .cart-bar, .tabs-wrap, .sheet, .sheet-backdrop, .toast-wrap, .no-print { display: none !important; }
+  .ticket { box-shadow: none; border: 1px solid #000; margin: 0; }
+}

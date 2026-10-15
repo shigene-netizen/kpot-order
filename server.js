@@ -1,0 +1,3261 @@
+/* ==========================================================================
+   KPOT To Go — server
+   --------------------------------------------------------------------------
+   Zero dependencies. Serves the storefront and exposes one API route that
+   creates a Stripe Checkout Session with inline pricing, so no Products ever
+   need to exist in the Stripe dashboard.
+
+   Run:  PORT=3000 node server.js
+   Key:  STRIPE_SECRET_KEY env var, or secrets.local.json (see the .example file)
+
+   Security notes
+   --------------
+   * The Stripe secret key never leaves this process. It is never sent to the
+     browser, never logged, and never served as a file.
+   * Prices are recomputed here from assets/menu.js. The browser only says WHAT
+     was ordered; it has no say in what it costs.
+   * Static file serving is an allowlist: hidden files, secrets, source files
+     and anything outside the project root are refused.
+   ========================================================================== */
+
+'use strict';
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const { loadAssets, priceOrder, toStripeLineItems, round2, applyDiscount } = require('./pricing.js');
+const { renderKitchenTicket } = require('./printer.js');
+const D = require('./discounts.js');
+const L = require('./customers.js');
+const MB = require('./member.js');
+const SC = require('./schedule.js');
+
+const ROOT = __dirname;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+/* Stripe's Checkout Sessions endpoint.
+
+   Overridable ONLY so a test can point it at a local stub: the payment re-check
+   has to be exercised without a live key, and it cannot be exercised at all if
+   the URL is welded shut. In production this must stay at api.stripe.com — the
+   secret key travels in the Authorization header of every request, so pointing
+   it elsewhere would hand the key to whoever set the variable. Anything that can
+   set env vars here could read secrets.local.json anyway, so this is not a new
+   capability; but it is silent, which is why the override logs a warning. */
+const STRIPE_API_BASE = process.env.KPOT_STRIPE_API_BASE || 'https://api.stripe.com/v1/checkout/sessions';
+if (process.env.KPOT_STRIPE_API_BASE) {
+  console.warn('[kpot] WARNING: Stripe API redirected to ' + STRIPE_API_BASE +
+    ' (KPOT_STRIPE_API_BASE) — this is for tests only and must never be set in production.');
+}
+const STRIPE_API = STRIPE_API_BASE;
+const STRIPE_API_SESSION = STRIPE_API_BASE + '/';
+
+/* Discounts are applied as a Stripe coupon, because Checkout refuses a
+   negative line item ("Invalid non-negative integer"). Derived from the same
+   base so the test stub only has to serve one extra path. */
+const STRIPE_COUPON_API = process.env.KPOT_STRIPE_COUPON_API ||
+  STRIPE_API_BASE.replace(/\/checkout\/sessions\/?$/, '/coupons');
+
+/* -------------------------------------------------------------------------- */
+/* Config & key                                                                */
+/* -------------------------------------------------------------------------- */
+
+let ASSETS;
+try {
+  ASSETS = loadAssets(ROOT);
+} catch (e) {
+  console.error('[kpot] FATAL: could not load menu/config —', e.message);
+  process.exit(1);
+}
+
+/* --- Membership and delivery schedule -------------------------------------
+   Read from config.js in exactly ONE place each, and normalised by the same
+   pure modules the tests exercise. A host page or a hand-edited config can
+   hand us anything, and both readers fail closed: a member discount of 0
+   rather than 100%, a delivery fee of 0 rather than NaN.
+
+   These are functions, not constants, so that a test which swaps config.js on
+   disk and reloads assets does not have to know how to invalidate them. */
+function memberCfg() {
+  return MB.memberConfig((ASSETS.CONFIG || {}).member);
+}
+/* Does the static config offer delivery at all? Read once, at module load,
+   because that is the only moment ASSETS exists and storeStatus is being
+   built. Fail OPEN here on purpose: if config cannot be read, the runtime
+   switch (default on) decides, and the owner can always turn it off — whereas
+   a config typo silently killing a channel the shop does offer costs orders. */
+function deliveryChannelConfigured() {
+  try {
+    const d = (ASSETS.CONFIG || {}).delivery || {};
+    return d.enabled !== false;
+  } catch (e) { return true; }
+}
+function scheduleCfg() {
+  const d = (ASSETS.CONFIG || {}).delivery || {};
+  /* The channel switch and the schedule live in the same block but mean
+     different things: `enabled` turns the whole Delivery channel off (the same
+     flag the owner's board flips), while `schedule.enabled` would only turn
+     off the next-day windows. Flatten them here so schedule.js has one gate. */
+  return SC.scheduleConfig(Object.assign({}, d.schedule, {
+    /* The channel switch the OWNER can flip at runtime, not the static config
+       line: the board writes storeStatus.orderTypes.delivery, and an owner who
+       turns Delivery back on must get a working scheduler without a redeploy.
+       Reading d.enabled here left every delivery order refused with
+       schedule_disabled no matter what the board said — the schedule could
+       never be used with the shipped config (delivery.enabled:false). */
+    enabled: !storeTypeOff('delivery'),
+    fee: d.fee
+  }));
+}
+/* What the server tells pricing.js about the Delivery channel: the board's
+   RUNTIME switch (storeStatus.orderTypes.delivery), never the static config
+   seed. The shipped config has delivery.enabled:false, which only seeds the
+   runtime switch off — but an owner who turns Delivery back on from the board
+   must have the fee charged again, not silently dropped to $0. One reader here
+   keeps the guest price, the server charge and the ticket from disagreeing. */
+function deliveryPricingOpts() {
+  return { deliveryEnabled: !storeTypeOff('delivery') };
+}
+function hoursSpec() {
+  return ((ASSETS.CONFIG || {}).store || {}).hoursSpec || {};
+}
+
+/* Where the keys are read from. Overridable so a test can supply its own
+   secrets instead of depending on the shop's real ones — a security test that
+   reads the owner's live key file is both unsafe and not reproducible. */
+const SECRETS_FILE = process.env.KPOT_SECRETS_FILE || path.join(ROOT, 'secrets.local.json');
+
+function loadSecretKey() {
+  if (process.env.STRIPE_SECRET_KEY) return process.env.STRIPE_SECRET_KEY.trim();
+  try {
+    const p = SECRETS_FILE;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (j && j.stripeSecretKey) return String(j.stripeSecretKey).trim();
+  } catch (e) { /* no local key file — fine */ }
+  return '';
+}
+
+let SECRET_KEY = loadSecretKey();
+
+/* Accept rk_ (restricted) keys as well as sk_ (standard secret) keys.
+   A restricted key works fine for what this server does — create a Checkout
+   Session and read it back — but if we only matched 'sk_live_' we'd report
+   keyMode 'unknown' for a perfectly working live key, which sends anyone
+   debugging a payment problem down the wrong path. Match on the mode segment,
+   not the key class. */
+function keyModeOf(k) {
+  if (!k) return 'none';
+  const m = String(k).match(/^(?:sk|rk)_(live|test)_/);
+  return m ? m[1] : 'unknown';
+}
+const KEY_MODE = keyModeOf(SECRET_KEY);
+
+/* -------------------------------------------------------------------------- */
+/* Static files                                                                */
+/* -------------------------------------------------------------------------- */
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8',
+  '.woff2': 'font/woff2'
+};
+
+// Never served, whatever the path says.
+const BLOCKED = /^(secrets.*\.json|orders.*\.json|orders.*\.csv|menu.*\.json|store.*\.json|server\.js|pricing\.js|package(-lock)?\.json|make_qr\.py|README\.md|url\.txt)$/i;
+
+/* Whole directories that must never be reachable over HTTP. order-backups/
+   holds a full copy of every order — served, it would leak customer names and
+   phone numbers to anyone who guessed the path. */
+const BLOCKED_DIRS = new Set(['order-backups']);
+
+function send(res, code, body, type) {
+  res.writeHead(code, { 'Content-Type': type || 'text/plain; charset=utf-8' });
+  res.end(body);
+}
+
+function sendJSON(res, code, obj) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+}
+
+function serveStatic(req, res, pathname) {
+  let rel = pathname === '/' ? '/index.html' : pathname;
+
+  const segments = rel.split('/').filter(Boolean);
+
+  // reject hidden segments, the explicit block list, and private directories
+  for (const s of segments) {
+    if (s.startsWith('.')) return send(res, 404, 'Not found');
+    if (BLOCKED_DIRS.has(s.toLowerCase())) return send(res, 404, 'Not found');
+    if (BLOCKED.test(s)) return send(res, 404, 'Not found');
+  }
+
+  const filePath = path.join(ROOT, ...segments);
+
+  // belt and braces: the resolved path must stay inside the project
+  const relCheck = path.relative(ROOT, filePath);
+  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) return send(res, 403, 'Forbidden');
+
+  const ext = path.extname(filePath).toLowerCase();
+  const mime = MIME[ext];
+  if (!mime) return send(res, 404, 'Not found');
+
+  fs.readFile(filePath, (err, buf) => {
+    if (err) return send(res, 404, 'Not found');
+    res.writeHead(200, { 'Content-Type': mime, 'Cache-Control': 'no-cache' });
+    res.end(buf);
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Stripe                                                                      */
+/* -------------------------------------------------------------------------- */
+
+function requestBaseUrl(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || 'http').split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || ('localhost:' + PORT)).split(',')[0].trim();
+  return proto + '://' + host;
+}
+
+async function createStripeSession(priced, order, base) {
+  const form = new URLSearchParams();
+  form.set('mode', 'payment');
+  form.set('success_url', base + '/?paid=1');
+  form.set('cancel_url', base + '/?canceled=1');
+
+  const ref = String(order.orderNo || '').slice(0, 200);
+  if (ref) form.set('client_reference_id', ref);
+
+  const items = toStripeLineItems(priced, 'usd');
+  items.forEach((l, i) => {
+    form.set('line_items[' + i + '][price_data][currency]', 'usd');
+    form.set('line_items[' + i + '][price_data][product_data][name]', l.name);
+    if (l.desc) form.set('line_items[' + i + '][price_data][product_data][description]', l.desc);
+    form.set('line_items[' + i + '][price_data][unit_amount]', String(l.unit_amount));
+    form.set('line_items[' + i + '][quantity]', String(l.quantity));
+  });
+
+  /* A discount cannot be sent as a negative line item — Stripe rejects it with
+     "Invalid non-negative integer" — so the amount we computed becomes a
+     one-shot coupon. The session then charges
+
+         items + delivery + tax(net) + tip − coupon
+
+     which is exactly priced.total, because tax here was already computed on
+     the discounted base. */
+  if (priced.discountAmount > 0) {
+    const cents = Math.round(priced.discountAmount * 100);
+    /* The guest sees this name on Stripe's page, so it has to say WHICH kind
+       of give-away it was: an owner's code, a staff discount, or points they
+       spent themselves. A loyalty reward carries no code, so without `label`
+       it would be mislabelled "Staff discount". */
+    const d = priced.discount || {};
+    const label = d.label || d.code || (d.source === 'staff' ? 'Staff discount' : 'Discount');
+    const c = await createDiscountCoupon(cents, label);
+    if (c.error) {
+      console.error('[kpot] discount coupon failed:', c.message);
+      return { error: c.error, message: c.message };
+    }
+    form.set('discounts[0][coupon]', c.id);
+  }
+
+  // Show the order number on Stripe's page so the kitchen can match it up
+  form.set('payment_intent_data[description]', 'KPOT To Go order ' + (ref || ''));
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  let resp;
+  try {
+    resp = await fetch(STRIPE_API, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        // Stripe requires this for POSTs made without their SDK
+        'Idempotency-Key': (ref || Date.now().toString(36)) + '-' + Math.random().toString(36).slice(2, 8)
+      },
+      body: form.toString(),
+      signal: ac.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const data = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    const msg = (data && data.error && data.error.message) || ('Stripe returned HTTP ' + resp.status);
+    return { error: 'stripe_error', status: resp.status, message: msg };
+  }
+  if (!data.url) return { error: 'stripe_error', message: 'Stripe did not return a checkout URL' };
+
+  /* payment_intent is null at creation time for hosted checkout — Stripe
+     creates it lazily when the guest starts the flow. We return it anyway
+     so the client can store it; if still null on return, verification falls
+     back to checking the session itself. */
+  return { url: data.url, id: data.id, paymentIntent: data.payment_intent || null };
+}
+
+/* Ask Stripe which payment methods a Checkout Session actually gets, then throw
+   the probe session away. Used by the owner console to answer "where are Apple
+   Pay and Google Pay?" — a question our own source code cannot answer, because
+   the wallet buttons are added by Stripe based on Dashboard configuration and
+   device capability.
+
+   Notes for whoever reads the result:
+     - `payment_method_types` lists the methods enabled for this account. Apple
+       Pay and Google Pay are NOT listed as their own entries: both are delivered
+       THROUGH `card`, and Stripe decides per-device whether to render the wallet
+       button. So a session listing `card` is consistent with wallets working.
+     - What actually makes them appear is the Dashboard toggle
+       (Settings → Payment methods → Wallets) plus, for Apple Pay only, a
+       verified domain under Settings → Payment method domains. */
+async function probePaymentMethods() {
+  const form = new URLSearchParams();
+  form.set('mode', 'payment');
+  form.set('success_url', 'https://example.invalid/probe');
+  form.set('cancel_url', 'https://example.invalid/probe');
+  form.set('line_items[0][price_data][currency]', 'usd');
+  form.set('line_items[0][price_data][product_data][name]', 'payment method probe');
+  form.set('line_items[0][price_data][unit_amount]', '100');
+  form.set('line_items[0][quantity]', '1');
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  let resp;
+  try {
+    resp = await fetch(STRIPE_API, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Idempotency-Key': 'probe-' + Date.now().toString(36)
+      },
+      body: form.toString(),
+      signal: ac.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const session = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    return {
+      ok: false,
+      reason: 'stripe_error',
+      status: resp.status,
+      message: (session.error && session.error.message) || ('HTTP ' + resp.status)
+    };
+  }
+
+  /* Throw it away immediately so it can never be paid and never shows up in
+     the Dashboard as an abandoned cart. */
+  try {
+    await fetch(STRIPE_API_SESSION + session.id + '/expire', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + SECRET_KEY, 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+  } catch (e) { /* best effort — an unexpired $1 probe is harmless */ }
+
+  const types = session.payment_method_types || [];
+  return {
+    ok: true,
+    keyMode: KEY_MODE,
+    paymentMethodTypes: types,
+    hasCard: types.includes('card'),
+    /* Wallets ride on `card`; these flags tell the owner what to look for in the
+       Dashboard rather than claiming the buttons will appear. */
+    walletsCarriedByCard: types.includes('card'),
+    otherMethods: types.filter((t) => t !== 'card')
+  };
+}
+
+/* Write Stripe's verdict onto the board.
+   Shared by the guest-return path (handleVerifySession) and the staff re-check
+   path, so the two can never disagree about what "paid" means.
+
+   The proof is always Stripe's own session data, never anything the caller
+   asserts: client_reference_id carries our order number, so the mapping back to
+   the board is exact and a caller would need a session id that Stripe itself
+   reports as paid. */
+function settleBoardFromStripe(out) {
+  if (!out || !out.orderNo) return null;
+  const o = orders.get(out.orderNo);
+  if (!o) return null;
+  const want = out.paid ? 'verified' : (out.paymentStatus || 'unverified');
+  if (o.paymentStatus === want && (out.paid || o.status === 'cancelled')) return o;
+
+  o.paymentStatus = want;
+  o.paid = out.paid === true;
+  /* A session Stripe does not report as paid must not leave an active order on
+     the board — same intent the client had. */
+  if (!out.paid) o.status = 'cancelled';
+  o.updatedAt = new Date().toISOString();
+  orders.set(out.orderNo, o);
+  saveOrdersSoon();
+
+  /* Money just got confirmed: with automation on, this is the moment a
+     pickup/delivery order joins the kitchen. A dine-in order already went on
+     arrival, and an unpaid session was cancelled just above, so there is
+     nothing to advance in that direction. trustPayment because the verdict
+     came from Stripe itself, not from anything the caller sent. */
+  if (out.paid) {
+    maybeAutoPrepare(o, 'payment confirmed', { trustPayment: true });
+    /* …and this is also the only moment loyalty points are earned. Never at
+       order creation: a guest who opens Stripe and walks away has not paid for
+       anything. */
+    awardLoyaltyFor(o, 'stripe confirmed');
+  } else {
+    /* The money never arrived and the order is cancelled, so whatever reward it
+       was priced with goes back to the guest. */
+    releaseLoyaltyFor(o, 'stripe says unpaid');
+  }
+
+  console.log('[kpot] board settled by Stripe: order ' + out.orderNo +
+    ' -> ' + o.status + ' (' + o.paymentStatus + ')');
+  return o;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Finding the Stripe session for an order, without trusting the browser       */
+/* -------------------------------------------------------------------------- */
+/* The session id is handed to the guest's browser and kept in its
+   localStorage — the server never saw it. So when a guest pays and then closes
+   the tab (or the phone dies) the confirmation never arrives and the order sits
+   at 'pending' on the board forever, even though the money was taken.
+
+   That is a money-safety problem, not a cosmetic one: staff cannot tell a paid
+   order from an unpaid one, so they either collect twice or hand food over
+   unsure. This finds the session server-side using the one thing we control —
+   the order number we put in client_reference_id.
+
+   Stripe's Search API is not available for checkout sessions on every account
+   (verified: it returns "Received unknown parameters" here), so this lists
+   sessions in a window around the order and filters. Bounded and paged, and it
+   only ever runs when a human clicks "Re-check payment". */
+async function findSessionForOrder(order) {
+  const atMs = new Date(order.at || order.createdAt || Date.now()).getTime();
+
+  /* The window is deliberately ASYMMETRIC.
+
+     The order is written to the board before the guest is handed to Stripe (it
+     has to be — that is how the number is reserved), so the session is always
+     created AFTER the order. There is therefore little to look for before it:
+     6h of slack covers nothing but clock skew.
+
+     Forward is where the room is needed. A Checkout Session lives 24h, and a
+     guest who walks away and comes back to retry gets a NEW session. If that
+     retry landed outside the window we would find the OLD, unpaid session
+     instead and report "not paid" — the exact wrong answer this feature exists
+     to prevent. So the window runs out to 26h, just past Stripe's own expiry. */
+  const gte = Math.floor((atMs - 6 * 60 * 60 * 1000) / 1000);    // 6h before
+  const lte = Math.floor((atMs + 26 * 60 * 60 * 1000) / 1000);   // 26h after
+  let startingAfter = null;
+
+  /* Sessions come back newest first, so the walk starts at `lte` and goes
+     backwards — in practice the match is on the first page. This cap is a
+     safety net so a busy day cannot turn one button press into an unbounded
+     crawl, not an expectation of how deep the answer sits. */
+  for (let page = 0; page < 10; page++) {
+    const qs = new URLSearchParams();
+    qs.set('limit', '100');
+    qs.set('created[gte]', String(gte));
+    qs.set('created[lte]', String(lte));
+    if (startingAfter) qs.set('starting_after', startingAfter);
+
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 15000);
+    let resp;
+    try {
+      resp = await fetch(STRIPE_API + '?' + qs.toString(), {
+        method: 'GET',
+        headers: { Authorization: 'Bearer ' + SECRET_KEY },
+        signal: ac.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return { error: 'stripe_error', status: resp.status,
+        message: (data && data.error && data.error.message) || ('Stripe returned HTTP ' + resp.status) };
+    }
+
+    const rows = data.data || [];
+    const mine = rows.filter((s) => s.client_reference_id === order.id);
+    if (mine.length) {
+      /* A guest who retried payment can have more than one session. Prefer one
+         Stripe reports as paid; otherwise take the newest. */
+      const paid = mine.filter((s) => s.payment_status === 'paid');
+      const pick = (paid.length ? paid : mine).sort((a, b) => b.created - a.created)[0];
+      return { sessionId: pick.id };
+    }
+    if (!data.has_more || !rows.length) break;
+    startingAfter = rows[rows.length - 1].id;
+  }
+  return { error: 'session_not_found' };
+}
+
+/* Staff-facing: ask Stripe again and settle the board. */
+async function recheckPayment(orderId) {
+  const o = orders.get(orderId);
+  if (!o) return { error: 'order_not_found' };
+  if (!SECRET_KEY) return { error: 'stripe_not_configured' };
+  if (o.payMethod !== 'stripe') return { error: 'not_a_card_order', message: 'This order was not paid online.' };
+
+  const found = await findSessionForOrder(o);
+  if (found.error) {
+    return { error: found.error, message: found.message || 'No Stripe payment found for this order.' };
+  }
+
+  const out = await verifySession(found.sessionId);
+  if (out.error) return { error: out.error, message: out.message };
+
+  const settled = settleBoardFromStripe(out);
+  console.log('[kpot] recheck', orderId, found.sessionId.slice(0, 20) + '…',
+    '->', out.paymentStatus, settled ? settled.paymentStatus : '(order missing)');
+  return {
+    ok: true,
+    sessionId: found.sessionId,
+    paid: out.paid,
+    paymentStatus: out.paymentStatus,
+    sessionStatus: out.sessionStatus,
+    amountTotal: out.amountTotal
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Verifying that a payment actually happened                                  */
+/* -------------------------------------------------------------------------- */
+/* The success_url Stripe sends a guest back to is just a URL. Anyone can type
+   it into the address bar, so it can NEVER be treated as proof of payment.
+   This asks Stripe directly what happened to that session, and only a
+   payment_status of "paid" counts.
+
+   Only non-identifying fields are returned — no customer name, email or card
+   details — so a leaked session id (they are high-entropy and unguessable)
+   cannot be used to harvest anything. */
+async function verifySession(id) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  let resp;
+  try {
+    resp = await fetch(STRIPE_API_SESSION + encodeURIComponent(id), {
+      method: 'GET',
+      headers: { Authorization: 'Bearer ' + SECRET_KEY },
+      signal: ac.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const data = await resp.json().catch(() => ({}));
+
+  if (!resp.ok) {
+    return {
+      error: 'stripe_error',
+      status: resp.status,
+      message: (data && data.error && data.error.message) || ('Stripe returned HTTP ' + resp.status)
+    };
+  }
+
+  return {
+    paid: data.payment_status === 'paid',
+    sessionStatus: data.status,             // 'open' | 'complete' | 'expired'
+    paymentStatus: data.payment_status,     // 'paid' | 'unpaid' | 'no_payment_required'
+    amountTotal: data.amount_total,
+    currency: data.currency,
+    orderNo: data.client_reference_id || ''
+  };
+}
+
+/* Stripe session ids look like cs_test_<long> / cs_live_<long>. Reject anything
+   else before spending a network round trip on it. */
+const SESSION_ID_RE = /^cs_(test|live)_[A-Za-z0-9]{8,220}$/;
+
+/* -------------------------------------------------------------------------- */
+/* Request handling                                                            */
+/* -------------------------------------------------------------------------- */
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(new Error('payload_too_large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+/* Very light per-IP throttle so one script cannot hammer Stripe. */
+const hits = new Map();
+function throttled(ip, max, windowMs) {
+  const now = Date.now();
+  const rec = hits.get(ip) || { n: 0, t: now };
+  if (now - rec.t > windowMs) { rec.n = 0; rec.t = now; }
+  rec.n++;
+  hits.set(ip, rec);
+  if (hits.size > 5000) hits.clear();
+  return rec.n > max;
+}
+
+/* POST /api/price — what would this order cost, with this code?
+
+   Exists because the guest has to SEE the discount before they pay, and
+   because a pay-at-counter order never touches Stripe at all (so the checkout
+   response is not available to tell them). It prices and reports only: it
+   starts no payment, creates no order, and does not spend the code. */
+async function handlePrice(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled(ip, 40, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
+
+  let raw;
+  try { raw = await readBody(req, 64 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const base = priceOrder(body, ASSETS.MENU, ASSETS.CONFIG, deliveryPricingOpts());
+  if (base.error) return sendJSON(res, 400, { error: base.error, message: 'Could not price that order.' });
+
+  const reward = resolveOrderDiscount(body, base, body.orderType);
+  if (reward.error) return sendJSON(res, 409, { error: reward.error, message: reward.message });
+
+  const priced = reward.discount ? applyDiscount(base, reward.discount, ASSETS.CONFIG) : base;
+  return sendJSON(res, 200, {
+    subtotal: priced.subtotal,
+    delivery: priced.delivery,
+    tax: priced.tax,
+    tip: priced.tip,
+    total: priced.total,
+    discount: priced.discountAmount || 0,
+    discountCode: (priced.discount && priced.discount.code) || '',
+    discountLabel: (priced.discount && priced.discount.label) || '',
+    discountSource: (priced.discount && priced.discount.source) || ''
+  });
+}
+
+async function handleCheckout(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled(ip, 20, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
+
+  if (!SECRET_KEY) {
+    return sendJSON(res, 503, {
+      error: 'stripe_not_configured',
+      message: 'Online payment is not set up yet. Please choose "Pay at Counter".'
+    });
+  }
+
+  let raw;
+  try {
+    raw = await readBody(req, 64 * 1024);
+  } catch (e) {
+    return sendJSON(res, 413, { error: 'payload_too_large' });
+  }
+
+  let order;
+  try {
+    order = JSON.parse(raw);
+  } catch (e) {
+    return sendJSON(res, 400, { error: 'bad_json' });
+  }
+
+  const basePriced = priceOrder(order, ASSETS.MENU, ASSETS.CONFIG, deliveryPricingOpts());
+  if (basePriced.error) {
+    console.warn('[kpot] rejected order:', basePriced.error, basePriced.item || '');
+    return sendJSON(res, 400, { error: basePriced.error, message: 'We could not price that order. Please try again.' });
+  }
+
+  /* Discount code — or the guest's own reward. Resolved and priced HERE: a
+     guest can type any code they like into a request, so what it is worth has
+     to be decided where the price is decided. Not spent yet: this only starts
+     a payment. */
+  const reward = resolveOrderDiscount(order, basePriced, order.orderType);
+  if (reward.error) {
+    console.warn('[kpot] discount refused —', reward.error);
+    return sendJSON(res, 409, { error: reward.error, message: reward.message });
+  }
+  const priced = reward.discount ? applyDiscount(basePriced, reward.discount, ASSETS.CONFIG) : basePriced;
+
+  /* Re-check the store switches HERE, not just in the browser. The guest page
+     hides or greys out a switched-off channel, but the request that actually
+     moves money arrives from the client — and a client is not a place to
+     enforce a business rule. Delivery switched off mid-session must not be
+     able to take a card payment. */
+  const gate = storeGate(order.orderType);
+  if (gate.blocked) {
+    console.warn('[kpot] checkout refused —', gate.code, '| type:', JSON.stringify(order.orderType));
+    const msg = {
+      closed: 'We are currently closed. Please try again during opening hours.',
+      not_accepting: 'We are not accepting orders right now.',
+      type_off: 'We are not taking ' + gate.label + ' orders right now.',
+      unknown_type: 'That order type was not recognised. Please pick Pickup, Dine-In, or Delivery.'
+    }[gate.code] || 'We could not accept that order type.';
+    return sendJSON(res, 409, { error: gate.code, message: msg });
+  }
+
+  try {
+    const out = await createStripeSession(priced, order, requestBaseUrl(req));
+    if (out.error) {
+      console.error('[kpot] stripe error:', out.status || '', out.message);
+      /* Never surface Stripe's raw text to a guest — it can name the key mode
+         and expose internal detail. The full message is in the server log
+         above; the guest gets something actionable. */
+      const friendly = (out.status === 401 || out.status === 403)
+        ? 'Online payment is temporarily unavailable. Please choose "Pay at Counter".'
+        : 'We could not start the payment. Please try again, or choose "Pay at Counter".';
+      return sendJSON(res, 502, { error: out.error, message: friendly });
+    }
+    console.log('[kpot] session created', out.id, 'order', order.orderNo, 'total $' + priced.total.toFixed(2));
+    return sendJSON(res, 200, {
+      url: out.url,
+      id: out.id,
+      paymentIntent: out.paymentIntent,
+      total: priced.total,
+      breakdown: {
+        subtotal: priced.subtotal,
+        delivery: priced.delivery,
+        tax: priced.tax,
+        tip: priced.tip,
+        discount: priced.discountAmount || 0,
+        discountCode: (priced.discount && priced.discount.code) || '',
+        discountLabel: (priced.discount && priced.discount.label) || '',
+        discountSource: (priced.discount && priced.discount.source) || ''
+      }
+    });
+  } catch (e) {
+    const aborted = e && e.name === 'AbortError';
+    console.error('[kpot] checkout failed:', aborted ? 'stripe timeout' : e.message);
+    return sendJSON(res, 502, {
+      error: 'upstream_error',
+      message: aborted ? 'Stripe took too long to respond. Please try again.' : 'Could not reach Stripe. Please try again.'
+    });
+  }
+}
+
+/* GET /api/verify-session?id=cs_... — did this payment really go through?
+   Deliberately cheap to call and read-only, so it gets a looser throttle than
+   checkout: a guest returning from Stripe hits it once, but a flaky connection
+   may retry. */
+async function handleVerifySession(req, res, url) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled(ip, 60, 60000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many checks. Please wait a moment.' });
+  }
+
+  if (!SECRET_KEY) {
+    return sendJSON(res, 503, { error: 'stripe_not_configured', verified: false });
+  }
+
+  const id = url.searchParams.get('id') || '';
+  if (!SESSION_ID_RE.test(id)) {
+    return sendJSON(res, 400, { error: 'bad_session_id', verified: false });
+  }
+
+  const out = await verifySession(id);
+  if (out.error) {
+    console.error('[kpot] verify failed:', out.status || '', out.message);
+    /* A failed lookup must never read as "paid". The client treats anything
+       other than an explicit verified:true as unconfirmed. */
+    return sendJSON(res, 502, { error: out.error, verified: false });
+  }
+
+  console.log('[kpot] verify', id.slice(0, 20) + '…',
+    out.paymentStatus, '$' + ((out.amountTotal || 0) / 100).toFixed(2), 'order', out.orderNo || '-');
+
+  /* Settle the board HERE, on the server, the moment Stripe confirms.
+
+     The guest's browser used to PATCH the order itself after verifying — but
+     PATCH is admin-gated (see handleUpdateOrder), so the guest's request came
+     back 401 and a PAID order sat on the kitchen board still marked UNPAID.
+     The stubbed test server has no auth on PATCH, which is exactly why that
+     went unnoticed until a real Stripe run.
+
+     Doing it here is better regardless: the proof is Stripe's own session
+     data rather than anything the client asserts.
+
+     NOTE this still depends on the guest's browser making the call at all. If
+     they pay and close the tab, nothing arrives and the order stays 'pending'
+     — which is what the staff-facing re-check (POST .../recheck-payment) is
+     for. Do not remove it on the assumption that this covers every case. */
+  settleBoardFromStripe(out);
+
+  return sendJSON(res, 200, {
+    verified: out.paid,
+    sessionStatus: out.sessionStatus,
+    paymentStatus: out.paymentStatus,
+    amountTotal: out.amountTotal,
+    currency: out.currency,
+    orderNo: out.orderNo
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Order management — live board + customer status + store controls            */
+/* -------------------------------------------------------------------------- */
+/* The storefront is still a static SPA, but the owner needs a backend view of
+   incoming orders and a way to flip their status (so the guest's ticket page
+   can show "Being prepared" -> "Ready for pickup"). Orders live in memory and
+   are snapshotted to orders.local.json so a restart doesn't lose the night's
+   tickets. No database, no extra dependency. */
+
+/* Admin key resolution. The environment wins, exactly like the Stripe key
+   above: a host that injects ADMIN_KEY must not be silently overridden by a
+   stale copy left in secrets.local.json. */
+function loadAdminKey() {
+  if (process.env.ADMIN_KEY) return process.env.ADMIN_KEY.trim();
+  try {
+    const p = SECRETS_FILE;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (j && j.adminKey) return String(j.adminKey).trim();
+  } catch (e) { /* no local secrets — fine */ }
+  return '';
+}
+
+let ADMIN_KEY = loadAdminKey();
+if (!ADMIN_KEY) {
+  console.warn('[kpot] ADMIN_KEY not set — order/admin endpoints are OPEN. ' +
+    'Set adminKey in secrets.local.json before going live.');
+}
+
+/* The print agent's key. The agent runs on a machine in the restaurant, so it
+   gets its own credential rather than the owner's console password — if that
+   machine is ever compromised the blast radius stays "can fetch print jobs".
+   This key is INDEPENDENT of ADMIN_KEY: the admin/console key is never accepted
+   as a print key, so rotating the print key or the admin key does not weaken
+   the other. If the console is locked with ADMIN_KEY but no printKey is set,
+   the print endpoint is LOCKED — set printKey (a different value) to let the
+   agent fetch jobs. Only when NO keys are configured at all does the endpoint
+   run open (dev mode). */
+function loadPrintKey() {
+  if (process.env.PRINT_KEY) return process.env.PRINT_KEY.trim();
+  try {
+    const p = SECRETS_FILE;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (j && j.printKey) return String(j.printKey).trim();
+  } catch (e) { /* no local secrets — fine */ }
+  return '';
+}
+let PRINT_KEY = loadPrintKey();
+if (!PRINT_KEY && ADMIN_KEY) {
+  console.warn('[kpot] ADMIN_KEY is set but PRINT_KEY is not — the print agent');
+  console.warn('       endpoint is LOCKED until you add a printKey to');
+  console.warn('       secrets.local.json (a DIFFERENT value from adminKey).');
+} else if (!PRINT_KEY) {
+  console.warn('[kpot] PRINT_KEY not set — the print agent endpoint is OPEN (dev mode).');
+}
+
+const STATUS_LABELS = {
+  received: 'Order received',
+  preparing: 'Being prepared',
+  ready: 'Ready for pickup',
+  completed: 'Completed',
+  cancelled: 'Cancelled'
+};
+const VALID_STATUS = Object.keys(STATUS_LABELS);
+
+const orders = new Map();
+/* Redirectable so a test can run against scratch files instead of the shop's
+   real data. Defaults are unchanged, so production behaviour is identical. */
+const ORDERS_FILE = process.env.KPOT_ORDERS_FILE || path.join(ROOT, 'orders.local.json');
+
+/* The loyalty ledger. Declared HERE, next to the order board and well above
+   writeBackup(), because `let` sits in the temporal dead zone until its own
+   line runs — and the backup loop starts during module load, long before the
+   loyalty section further down would have been reached. */
+const CUSTOMERS_FILE = process.env.KPOT_CUSTOMERS_FILE || path.join(ROOT, 'customers.local.json');
+let customers = [];
+
+function loadCustomersStore() {
+  const r = L.loadCustomers(CUSTOMERS_FILE);
+  customers = r.customers;
+  if (customers.length) {
+    console.log('[kpot] loyalty: ' + customers.length + ' member(s) loaded from ' +
+      path.basename(CUSTOMERS_FILE));
+  }
+}
+
+function saveCustomersStore() {
+  try {
+    return L.saveCustomers(CUSTOMERS_FILE, customers);
+  } catch (e) {
+    console.error('[kpot] could not save customers:', e.message);
+    return null;
+  }
+}
+
+function loadOrders() {
+  try {
+    const raw = fs.readFileSync(ORDERS_FILE, 'utf8');
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      arr.forEach((o) => { if (o && o.id) orders.set(o.id, o); });
+      console.log('[kpot] loaded ' + orders.size + ' orders from ' + path.basename(ORDERS_FILE));
+    }
+  } catch (e) { /* no snapshot yet — fresh start */ }
+}
+
+let saveTimer = null;
+
+/* Write the board to disk right now. Used by the debounced saver and, more
+   importantly, on shutdown — without this a restart landing inside the 800ms
+   debounce window would silently drop the orders created in that window. */
+function saveOrdersNow() {
+  try {
+    fs.writeFileSync(ORDERS_FILE, JSON.stringify(Array.from(orders.values()), null, 2));
+  } catch (e) { console.error('[kpot] could not save orders:', e.message); }
+}
+
+/* ---- The signal problem (read this before touching shutdown) --------------
+   On Windows, SIGTERM is not a real signal: Node kills the process outright and
+   neither `process.on('SIGTERM')` nor `process.on('exit')` ever runs. Verified
+   on this machine — the child exits with signal=SIGTERM and prints nothing.
+
+   Consequences:
+     * On a Windows dev box the shutdown flush below CANNOT run, so anything
+       still inside the 800ms debounce window is lost on Ctrl-C / taskkill.
+     * On Linux (the deploy container) the handlers DO run, so the flush and the
+       shutdown backup work as intended.
+
+   Because we cannot rely on a clean shutdown anywhere, the real safety net is
+   the SHORT DEBOUNCE plus the periodic backup — not the exit handler. Keep the
+   debounce small and never make order durability depend on shutdown alone. */
+
+/* Re-entrancy / recursion guard: writeBackup is called from `exit`, and any
+   throw inside an exit handler can trigger another exit. */
+let busySaving = false;
+
+function saveOrdersNowSafe() {
+  if (busySaving) return;
+  busySaving = true;
+  try { saveOrdersNow(); }
+  catch (e) { console.error('[kpot] save failed:', e.message); }
+  finally { busySaving = false; }
+}
+
+/* ---- CSV shaping (shared by the export endpoint and the daily backup) -----
+   Declared up here on purpose: startBackupLoop() runs during startup, and a
+   `const` further down the file would still be in its temporal dead zone. */
+
+const CSV_COLUMNS = [
+  'id', 'at', 'updatedAt', 'status', 'paymentStatus', 'payMethod', 'orderType',
+  'table', 'customerName', 'customerPhone', 'subtotal', 'tax', 'tip',
+  'delivery', 'total', 'itemsSummary'
+];
+
+function csvCell(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  /* Quote everything and double any embedded quote — the safe universal form.
+     Also neutralise a leading =/+/-/@ so a spreadsheet cannot treat a customer
+     name as a formula. */
+  const dangerous = /^[=+\-@]/.test(s);
+  const body = s.replace(/"/g, '""');
+  return '"' + (dangerous ? "'" + body : body) + '"';
+}
+
+/* One human-readable line per ordered item, e.g.
+   "2x BBQ To Go (2 Meats) [Pork Belly, Beef Brisket]; 1x Thai Tea" */
+function summariseItems(o) {
+  const lines = Array.isArray(o.lines) && o.lines.length ? o.lines : (o.items || []);
+  return lines.map((l) => {
+    const qty = l.qty || l.quantity || 1;
+    const name = l.name || l.n || 'Item';
+    const mods = Array.isArray(l.mods) && l.mods.length ? ' [' + l.mods.join(', ') + ']' : '';
+    const addons = Array.isArray(l.addons) && l.addons.length ? ' {' + l.addons.join(', ') + '}' : '';
+    return qty + 'x ' + name + mods + addons;
+  }).join('; ');
+}
+
+function orderToRow(o) {
+  const c = o.customer || {};
+  return [
+    o.id, o.at, o.updatedAt, o.status, o.paymentStatus, o.payMethod, o.orderType,
+    o.table, c.name, c.phone, o.subtotal, o.tax, o.tip, o.delivery, o.total,
+    summariseItems(o)
+  ];
+}
+
+function csvFor(arr) {
+  const rows = [CSV_COLUMNS.map(csvCell).join(',')];
+  for (const o of arr) rows.push(orderToRow(o).map(csvCell).join(','));
+  return '\ufeff' + rows.join('\r\n') + '\r\n';
+}
+
+/* ---- Rolling backups ------------------------------------------------------
+   orders.local.json sits in the container and dies with it. Once a day (and on
+   every clean shutdown) we also drop a dated CSV + JSON into BACKUP_DIR. If
+   the platform maps that directory to persistent storage, the backups outlive
+   the container; if it does not, the owner can still pull them via
+   /api/orders/export.csv from the back office at any time.
+
+   Written atomically (temp file + rename) so a crash mid-write can never leave
+   a half-written backup where a good one used to be. */
+
+const BACKUP_DIR = process.env.ORDERS_BACKUP_DIR || path.join(ROOT, 'order-backups');
+const BACKUP_KEEP_DAYS = 30;
+
+function writeFileAtomic(file, data) {
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, file);
+}
+
+function writeBackup(reason) {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const arr = Array.from(orders.values()).sort((a, b) => new Date(a.at) - new Date(b.at));
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    writeFileAtomic(path.join(BACKUP_DIR, 'orders-' + stamp + '.csv'), csvFor(arr));
+    writeFileAtomic(
+      path.join(BACKUP_DIR, 'orders-' + stamp + '.json'),
+      JSON.stringify({ exportedAt: new Date().toISOString(), reason, count: arr.length, orders: arr }, null, 2)
+    );
+
+    /* The loyalty ledger gets the same treatment. It is far smaller than the
+       order board, but it is the one file a guest will come back and ask
+       about — losing it is not something an apology fixes. */
+    writeFileAtomic(path.join(BACKUP_DIR, 'members-' + stamp + '.csv'), L.toCsv(customers, Date.now()));
+    writeFileAtomic(
+      path.join(BACKUP_DIR, 'members-' + stamp + '.json'),
+      JSON.stringify({
+        exportedAt: new Date().toISOString(), reason,
+        count: customers.length, customers
+      }, null, 2)
+    );
+    pruneBackups();
+  } catch (e) {
+    /* A failed backup must never take the server down. */
+    console.error('[kpot] backup failed:', e.message);
+  }
+}
+
+/* Keep the directory from growing forever. */
+function pruneBackups() {
+  try {
+    const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      const m = /^(orders|members)-(\d{4}-\d{2}-\d{2})\.(csv|json)$/.exec(f);
+      if (!m) continue;
+      if (new Date(m[2] + 'T00:00:00Z').getTime() < cutoff) {
+        fs.unlinkSync(path.join(BACKUP_DIR, f));
+      }
+    }
+  } catch (e) { /* first run, or nothing to prune — fine */ }
+}
+
+let backupTimer = null;
+
+/* Snapshot at startup (captures the state we just loaded, so a restart never
+   leaves the day with no backup at all), then once every 24h. */
+function startBackupLoop() {
+  writeBackup('startup');
+  backupTimer = setInterval(() => writeBackup('daily'), 24 * 60 * 60 * 1000);
+  if (backupTimer.unref) backupTimer.unref();
+}
+
+/* Belt-and-braces flush. On Windows no exit handler runs (see the note above),
+   so a long-lived server must not depend on shutdown to get data to disk. This
+   writes the board whenever it changed — cheap, and it bounds the worst-case
+   loss to one interval even on a hard kill.
+
+   Overridable so the test suite can prove the behaviour quickly. */
+const FLUSH_MS = Math.max(500, parseInt(process.env.KPOT_FLUSH_MS || '', 10) || 30 * 1000);
+let lastFlushSignature = '';
+let flushTimer = null;
+
+function orderSignature() {
+  /* Cheap change-detector: count + newest updatedAt. Avoids re-serialising the
+     whole board just to discover nothing changed. */
+  let newest = '';
+  for (const o of orders.values()) {
+    if (o.updatedAt && o.updatedAt > newest) newest = o.updatedAt;
+  }
+  return orders.size + '|' + newest;
+}
+
+function startFlushLoop() {
+  lastFlushSignature = orderSignature();
+  flushTimer = setInterval(() => {
+    const sig = orderSignature();
+    if (sig !== lastFlushSignature) {
+      lastFlushSignature = sig;
+      saveOrdersNowSafe();
+      writeBackup('periodic');
+    }
+  }, FLUSH_MS);
+  if (flushTimer.unref) flushTimer.unref();
+}
+
+function saveOrdersSoon() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveOrdersNow();
+  }, 800);
+}
+
+loadOrders();
+/* Snapshot immediately so the day starts with a backup on disk, even if the
+   container is torn down before the first order arrives. */
+startBackupLoop();
+/* Independent of shutdown: get data to disk even if the process is killed
+   hard and no exit handler runs (always the case on Windows). */
+startFlushLoop();
+startScheduleLoop();
+
+/* ---- The delivery window tick ---------------------------------------------
+   A scheduled order sits on the board as `received` until its window opens,
+   then joins the kitchen by itself. Nothing else moves it: the guest is not
+   there to trigger anything, and there is no external cron.
+
+   Deliberately narrow. It only ever touches orders that HAVE a scheduledFor in
+   the past, so it can never reach a dine-in or pickup order that the arrival
+   and payment paths already handle. `maybeAutoPrepare` is idempotent by
+   status, so a tick that fires twice is a no-op the second time. */
+function startScheduleLoop() {
+  const timer = setInterval(() => {
+    const now = Date.now();
+    for (const o of orders.values()) {
+      if (o.status !== 'received') continue;
+      const due = scheduledForMsOf(o);
+      if (!due || due > now) continue;
+      if (maybeAutoPrepare(o, 'delivery window reached', { trustPayment: true })) {
+        saveOrdersSoon();
+        fireDispatch(o);
+      }
+    }
+  }, FLUSH_MS);
+  if (timer.unref) timer.unref();
+}
+
+/* ---- Order numbers --------------------------------------------------------
+   The SERVER owns order numbers. The old scheme generated KP-YYMMDD-NNN from a
+   per-device counter, so every guest's first order of the day was -001 and two
+   guests on different phones collided — the second order was silently merged
+   into the first. Now the server issues the number, so that can never happen.
+   The guest's suggested number is kept only when it is still free. */
+function todayKey() {
+  const d = new Date();
+  return String(d.getFullYear()).slice(2) +
+    String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+}
+let orderSeq = { day: todayKey(), n: 0 };
+
+function syncSeqFromOrders() {
+  const day = todayKey();
+  let max = 0;
+  for (const o of orders.values()) {
+    const m = /^KP-(\d{6})-(\d+)$/.exec(o.id || '');
+    if (m && m[1] === day) max = Math.max(max, parseInt(m[2], 10));
+  }
+  orderSeq = { day, n: max };
+}
+
+function nextServerOrderNo() {
+  const day = todayKey();
+  if (orderSeq.day !== day) orderSeq = { day, n: 0 };
+  let id;
+  do {
+    orderSeq.n += 1;
+    id = 'KP-' + day + '-' + String(orderSeq.n).padStart(3, '0');
+  } while (orders.has(id));
+  return id;
+}
+syncSeqFromOrders();
+
+/* -------------------------------------------------------------------------- */
+/* Store controls — manual open/closed + per-order-type availability           */
+/* -------------------------------------------------------------------------- */
+/* The owner can stop taking orders entirely, or switch off ONE channel
+   (e.g. delivery driver called in sick → turn Delivery off, keep Pickup on).
+   The guest page consults this before letting anyone start an order, and the
+   checkout route re-checks it server-side, so a tampered browser cannot push
+   through an order for a channel that is switched off.
+
+   IMPORTANT: this used to live in memory only, so every redeploy silently
+   reset the switches to "everything on" — the owner would turn Delivery off
+   and it would quietly come back the next time we published. It is now
+   persisted to store.local.json (gitignored) and reloaded at startup. */
+
+const STORE_FILE = process.env.KPOT_STORE_FILE || path.join(ROOT, 'store.local.json');
+
+/* The channels the owner can switch off, in display order. Kept as an explicit
+   list so an unknown key from a client is rejected rather than written. */
+const ORDER_TYPES = ['pickup', 'dinein', 'delivery'];
+
+/* The payment statuses a BROWSER is allowed to declare. Every one of them means
+   "not paid". Anything outside this list is treated as a forgery, and
+   handleCreateOrder replaces it with what the pay method implies. Keeping the
+   list here — next to the other fail-closed allowlists — means there is exactly
+   one place to look when asking "what can a guest claim about money?". */
+const UNPAID_STATUSES = ['counter', 'unverified', 'pending', 'unpaid'];
+
+/* The runtime switches, plus the defaults the very first boot starts from.
+   `orderTypes` is SEEDED from the static config rather than hard-coded: the
+   guest page hides Delivery when config says the shop does not offer it, and a
+   server that still accepted a crafted POST for it would be a promise the
+   storefront never made. The store file then overrides the seed — the owner's
+   runtime switch is the last word. */
+let storeStatus = {
+  open: true,
+  acceptingOrders: true,
+  orderTypes: {
+    pickup: true,
+    dinein: true,
+    delivery: deliveryChannelConfigured()
+  },
+  /* Kitchen automation: skip the PREPARING tap. OFF by default — the owner
+     turns it on from the board. Losing this switch silently to a default of
+     ON would mean a re-publish starts cooking orders nobody checked, which is
+     money, so the safe default is the one that needs a human to say yes. */
+  autoPrepare: false,
+  updatedAt: new Date().toISOString()
+};
+
+function loadStoreStatus() {
+  try {
+    const j = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+    if (typeof j.open === 'boolean') storeStatus.open = j.open;
+    if (typeof j.acceptingOrders === 'boolean') storeStatus.acceptingOrders = j.acceptingOrders;
+    if (j.orderTypes && typeof j.orderTypes === 'object') {
+      for (const k of ORDER_TYPES) {
+        if (typeof j.orderTypes[k] === 'boolean') storeStatus.orderTypes[k] = j.orderTypes[k];
+      }
+    }
+    if (typeof j.autoPrepare === 'boolean') storeStatus.autoPrepare = j.autoPrepare;
+    if (j.updatedAt) storeStatus.updatedAt = j.updatedAt;
+    console.log('[kpot] store status loaded from ' + path.basename(STORE_FILE) +
+      ' (' + ORDER_TYPES.filter((k) => storeStatus.orderTypes[k]).join(', ') + ' on' +
+      (storeStatus.autoPrepare ? ', auto-prepare on' : '') + ')');
+  } catch (e) { /* no saved status — keep the all-on defaults */ }
+}
+
+function saveStoreStatus() {
+  storeStatus.updatedAt = new Date().toISOString();
+  try {
+    writeFileAtomic(STORE_FILE, JSON.stringify(storeStatus, null, 2));
+  } catch (e) { console.error('[kpot] could not save store status:', e.message); }
+}
+
+/* Is this channel currently orderable? Unknown types are refused rather than
+   silently allowed — a typo must fail closed, not open. */
+function orderTypeEnabled(t) {
+  if (!ORDER_TYPES.includes(t)) return false;
+  return storeStatus.orderTypes[t] !== false;
+}
+
+/* Human-readable channel names, used in guest-facing refusals. */
+const ORDER_TYPE_LABELS = { pickup: 'pickup', dinein: 'dine-in', delivery: 'delivery' };
+
+/* The single rule for "may this order go through right now?".
+   Both the guest page and the checkout route read it, so there is one place to
+   change and no chance of the two drifting apart.
+
+   Order matters: a fully-closed store is reported as `closed` rather than as a
+   disabled channel, because "we are closed" is the truthful thing to tell
+   someone during the night.
+
+   An unrecognised type is REFUSED. Coercing junk to "pickup" would mean a
+   tampered client sending {"orderType":"teleport"} gets served as a normal
+   pickup order — a typo, or an attempt to slip past a switched-off channel,
+   must fail closed. */
+function storeGate(t) {
+  if (!ORDER_TYPES.includes(t)) {
+    return { blocked: true, code: 'unknown_type', label: 'that' };
+  }
+  if (!storeStatus.open) {
+    return { blocked: true, code: 'closed', label: ORDER_TYPE_LABELS[t] };
+  }
+  if (!storeStatus.acceptingOrders) {
+    return { blocked: true, code: 'not_accepting', label: ORDER_TYPE_LABELS[t] };
+  }
+  if (storeStatus.orderTypes[t] === false) {
+    return { blocked: true, code: 'type_off', label: ORDER_TYPE_LABELS[t] };
+  }
+  return { blocked: false };
+}
+
+/* Is this order type switched OFF by the owner? Only the per-channel switch —
+   deliberately NOT the open/closed or accepting-orders flags, because those are
+   about NOW, and a scheduled delivery is about tomorrow. A guest booking
+   tomorrow's lunch at 11 PM has every right to do so while the kitchen is
+   locked up. */
+function storeTypeOff(t) {
+  if (!ORDER_TYPES.includes(t)) return true;
+  if (storeStatus.orderTypes[t] === false) return true;
+  return false;
+}
+
+/* What the guest page is allowed to know. Deliberately a narrow projection of
+   storeStatus — the file also carries updatedAt and could later carry notes
+   that are for staff eyes only. */
+function publicStoreView() {
+  return {
+    open: storeStatus.open,
+    acceptingOrders: storeStatus.acceptingOrders,
+    orderTypes: {
+      pickup: storeStatus.orderTypes.pickup !== false,
+      dinein: storeStatus.orderTypes.dinein !== false,
+      delivery: storeStatus.orderTypes.delivery !== false
+    },
+    updatedAt: storeStatus.updatedAt
+  };
+}
+
+loadStoreStatus();
+
+/* ---- Kitchen automation (auto-prepare) ------------------------------------
+   The owner can stop tapping PREPARING on the board: with the switch on, an
+   order goes to the kitchen by itself and the ticket prints exactly as if a
+   human had tapped — it is the same enqueue, the same idempotent queue, and
+   there is still a Reprint button if the paper jams.
+
+   Which orders may go through WITHOUT a human checking them first:
+
+     * dine-in  — yes, on arrival. The guest is at the table, in the building,
+       with staff walking past. A no-show would have to leave the restaurant.
+       Payment state is irrelevant to this one, which also keeps it safe.
+     * pickup / delivery — only once the money is confirmed (`paymentStatus:
+       verified`). A card order is written to the board BEFORE the guest pays,
+       so auto-cooking on arrival would cook food for money that may never
+       arrive — the same risk the pay-at-counter ceiling guards against. The
+       confirm can come from the guest's phone returning from Stripe or from
+       staff tapping Re-check; both go through settleBoardFromStripe.
+
+   Two deliberate refusals:
+     * the switch itself defaults to OFF and can only be turned on by an admin
+       PATCH, so a re-publish can never silently start cooking orders;
+     * an order type we do not recognise never auto-advances. A typo must fail
+       closed here like everywhere else. */
+function shouldAutoPrepare(order, opts) {
+  if (!order || !storeStatus.autoPrepare) return false;
+  if (!ORDER_TYPES.includes(order.orderType)) return false;
+  /* A scheduled delivery order is for TOMORROW. Cooking it now would put a
+     cold Korean BBQ on a van, and printing it now would put tomorrow's ticket
+     on today's rail where the cook thinks it is due in twenty minutes. So it
+     waits — and because printing is triggered by the transition into
+     'preparing', the ticket waits with it without the print queue knowing
+     anything about schedules. */
+  if (scheduledForMsOf(order) > Date.now()) return false;
+  if (order.orderType === 'dinein') return true;
+  /* A pickup/delivery order needs confirmed money — but only when the caller
+     is allowed to claim it. The checkout payload is PUBLIC: anyone can POST
+     {"paymentStatus":"verified"} with curl. That number is stored and shown on
+     the board (which is what Re-check exists to correct), yet it must not be
+     the thing that starts a grill. At creation the caller is therefore NOT
+     trusted; settleBoardFromStripe (Stripe's own answer) and the admin PATCH
+     are. */
+  if (!opts || opts.trustPayment !== true) return false;
+  return order.paymentStatus === 'verified';
+}
+
+/* Move an order to the kitchen if the rules above allow it. Only ever acts on
+   an order still sitting in `received`: a staff member who already tapped
+   PREPARING (or cancelled the order) wins, and an order the kitchen is already
+   working on can never be re-queued. `opts.trustPayment` says whether the
+   caller is entitled to claim the money is in — false for a public checkout
+   payload, true for Stripe's answer or an admin PATCH. Returns true when it
+   advanced the order, so callers can log honestly. */
+function maybeAutoPrepare(order, why, opts) {
+  if (!order || order.status !== 'received') return false;
+  if (!shouldAutoPrepare(order, opts)) return false;
+  order.status = 'preparing';
+  order.updatedAt = new Date().toISOString();
+  enqueueKitchenTicket(order);
+  console.log('[kpot] order ' + order.id + ' auto-prepared (' + why + ', ' +
+    order.paymentStatus + ')');
+  return true;
+}
+
+function adminAuthorized(req) {
+  if (!ADMIN_KEY) return true; // dev/open mode — see startup warning
+  return String(req.headers['x-admin-key'] || '') === ADMIN_KEY;
+}
+
+/* Human wording for every way a delivery day/window can be refused. The guest
+   has to be able to act on each one: "that day is full" means pick another day,
+   "we are closed that day" means it will never be available, and "today is not
+   bookable" means tomorrow is the earliest. One shared "not available" would
+   turn three different conversations into the same shrug. */
+const SCHEDULE_ERRORS = {
+  schedule_disabled: 'Delivery is not scheduled at the moment.',
+  schedule_required: 'Choose a delivery day and time window.',
+  schedule_not_delivery: 'A delivery day and window only apply to delivery orders.',
+  delivery_unavailable: 'Delivery is not taking orders right now. Please choose Pickup or Dine-In.',
+  bad_date: 'That delivery date could not be read.',
+  date_too_soon: 'Delivery is booked for the next day onwards — please pick tomorrow or later.',
+  date_too_far: 'That date is further ahead than we are taking bookings.',
+  date_not_open: 'We are closed that day.',
+  bad_slot: 'That delivery window could not be read.',
+  slot_full: 'That window is fully booked. Please choose another window or day.',
+  slot_outside_hours: 'That window falls outside our opening hours.'
+};
+
+/* When the kitchen should start on a scheduled order. Returns a timestamp, or
+   0 for an order with no schedule (everything except a windowed delivery).
+
+   The value is stored on the order as `scheduledFor` when it is created and
+   never recomputed from the slot afterwards: if staff move an order to a
+   different window on the board, that is a different timestamp and it has to
+   be written then. Reading a stale field would silently cook at the old time. */
+function scheduledForMsOf(order) {
+  if (!order || !order.scheduledFor) return 0;
+  const t = Date.parse(order.scheduledFor);
+  return isFinite(t) ? t : 0;
+}
+
+/* Best-effort push to the owner's own automation (Zapier / Make / n8n / a
+   Google Sheet script) when an order arrives or its status changes. Never
+   blocks the request. */
+function fireDispatch(order) {
+  const url = ASSETS.CONFIG.dispatch && ASSETS.CONFIG.dispatch.webhookUrl;
+  if (!url) return;
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 8000);
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event: 'order_update', order }),
+    signal: ac.signal
+  }).then(() => clearTimeout(t)).catch(() => { clearTimeout(t); console.error('[kpot] dispatch webhook failed'); });
+}
+
+/* ---- Pay-at-counter ceiling ----------------------------------------------
+   A counter order reaches the kitchen BEFORE any money is taken, so a
+   no-show is a straight loss. The config caps how large such an order may
+   be; anything above the cap must be prepaid.
+
+   Two deliberate design choices:
+
+     * Fail CLOSED on a capped order — refuse it rather than quietly letting
+       it through. The guest is told to pay online instead.
+
+     * Do NOT enforce the cap when no online method is configured. A ceiling
+       with no alternative would block every large order, which is a worse
+       outcome than the no-show risk it is meant to reduce.
+
+   Kept pure so _dev/test_counter_cap.js can lift it out of this file and
+   exercise the real rule rather than a re-implementation of it. */
+function counterCapVerdict(total, payMethod, cfg, onlineAvailable) {
+  if (payMethod !== 'counter') return { blocked: false };
+  const counter = (cfg && cfg.payment && cfg.payment.counter) || {};
+  const cap = Number(counter.maxTotal);
+  if (!isFinite(cap) || cap <= 0) return { blocked: false };  // no ceiling configured
+  if (!onlineAvailable) return { blocked: false };            // nothing to fall back to
+  if (!isFinite(total) || total <= cap) return { blocked: false };
+  return { blocked: true, code: 'counter_over_cap', cap: cap };
+}
+
+/* Is there a real online payment path on this server? Mirrors the guest
+   page's own check (stripe enabled + a way to actually charge). */
+function onlinePaymentAvailable() {
+  const p = (ASSETS.CONFIG.payment && ASSETS.CONFIG.payment.stripe) || {};
+  if (p.enabled === false) return false;
+  return !!SECRET_KEY || !!p.paymentLink;
+}
+
+function counterMaxTotal() {
+  const counter = (ASSETS.CONFIG.payment && ASSETS.CONFIG.payment.counter) || {};
+  const n = Number(counter.maxTotal);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+async function handleCreateOrder(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled(ip, 30, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many orders. Please wait a moment.' });
+
+  let raw;
+  try { raw = await readBody(req, 64 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  /* Recompute the price here, just like checkout — a guest can't sneak a
+     cheaper total past the kitchen board. */
+  const basePriced = priceOrder(body, ASSETS.MENU, ASSETS.CONFIG, deliveryPricingOpts());
+  if (basePriced.error) return sendJSON(res, 400, { error: basePriced.error, message: 'Could not price that order.' });
+
+  /* Same rule as checkout: the code — or the guest's own reward — is resolved
+     and priced here, and the guest's idea of what it is worth is ignored. */
+  const reward = resolveOrderDiscount(body, basePriced, body.orderType);
+  if (reward.error) return sendJSON(res, 409, { error: reward.error, message: reward.message });
+  const priced = reward.discount ? applyDiscount(basePriced, reward.discount, ASSETS.CONFIG) : basePriced;
+
+  const claimed = Number(body.total);
+  if (!isFinite(claimed) || Math.abs(priced.total - claimed) > 0.02) {
+    return sendJSON(res, 400, { error: 'total_mismatch', message: 'Order total did not match our records.' });
+  }
+
+  /* Idempotent retry: the same client order (matched by its token) returns the
+     order we already created, so a network retry never makes a duplicate. */
+  if (body.token) {
+    for (const o of orders.values()) {
+      if (o.clientToken === body.token) {
+        return sendJSON(res, 200, { ok: true, id: o.id, status: o.status, existing: true });
+      }
+    }
+  }
+
+  /* ---- Scheduled delivery ------------------------------------------------
+     A Delivery order is for TOMORROW in a named window, so it must arrive with
+     a day and a window — and both are re-checked HERE rather than trusted from
+     the page. Two guests racing for the last slot in a window is settled by
+     whichever request the server processes first; the loser is told the window
+     is full instead of being quietly overbooked.
+
+     `schedule` on the payload is ignored for every other order type: a guest
+     who picks Pickup and still posts a delivery window has not earned one. */
+  const effectiveType = ORDER_TYPES.includes(body.orderType) ? body.orderType : 'pickup';
+  const sched = (body.schedule && typeof body.schedule === 'object') ? body.schedule : null;
+  let schedule = null;
+
+  if (effectiveType !== 'delivery') {
+    if (sched && (sched.date || sched.slot)) {
+      return sendJSON(res, 400, {
+        error: 'schedule_not_delivery',
+        message: 'A delivery day and window only apply to delivery orders.'
+      });
+    }
+  } else if (storeTypeOff('delivery')) {
+    return sendJSON(res, 409, {
+      error: 'delivery_unavailable',
+      message: 'Delivery is not taking orders right now. Please choose Pickup or Dine-In.'
+    });
+  } else if (!sched || !sched.date || !sched.slot) {
+    return sendJSON(res, 400, {
+      error: 'schedule_required',
+      message: 'Choose a delivery day and time window.'
+    });
+  } else {
+    const verdict = SC.resolveSchedule(sched, Array.from(orders.values()),
+      scheduleCfg(), hoursSpec(), Date.now());
+    if (!verdict.ok) {
+      return sendJSON(res, 409, {
+        error: verdict.error,
+        message: SCHEDULE_ERRORS[verdict.error] || 'That delivery day or window is not available.'
+      });
+    }
+    schedule = verdict;
+  }
+  /* Pay-at-counter ceiling. Checked HERE, on the server, because a greyed-out
+     button in the browser is only a hint — the rule has to hold where the
+     order is actually accepted. Placed after the idempotency check so a retry
+     of an order we already took still resolves to that order instead of being
+     refused (e.g. the owner lowers the cap while a guest is mid-checkout). */
+  const capVerdict = counterCapVerdict(priced.total, body.payMethod, ASSETS.CONFIG, onlinePaymentAvailable());
+  if (capVerdict.blocked) {
+    console.warn('[kpot] refused pay-at-counter order over the cap — $' +
+      priced.total.toFixed(2) + ' > $' + capVerdict.cap.toFixed(2));
+    return sendJSON(res, 400, {
+      error: 'counter_over_cap',
+      cap: capVerdict.cap,
+      total: priced.total,
+      message: 'Orders over $' + capVerdict.cap.toFixed(2) + ' must be paid online. ' +
+        'Please choose ' + ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
+    });
+  }
+
+  /* Keep the guest's suggested number when it is still free; otherwise the
+     server issues the next one for today, so two devices can never collide. */
+  const suggested = String(body.no || body.orderNo || '').slice(0, 60);
+  const id = (suggested && !orders.has(suggested)) ? suggested : nextServerOrderNo();
+
+  const now = new Date().toISOString();
+  const order = {
+    id,
+    clientToken: body.token || '',
+    at: now,
+    updatedAt: now,
+    status: 'received',
+    /* The guest's word about PAYMENT is worth nothing: this payload arrives from
+       a public web page and can say anything. A browser that POSTed
+       paymentStatus:'verified' was being believed wholesale, and the next time a
+       staff member touched that order for an unrelated reason awardLoyaltyFor()
+       saw "verified", minted the points, and nobody was any the wiser.
+
+       So only values that mean NOT PAID are accepted from the browser — the two
+       the storefront actually sends, plus the two the server has always used as
+       its own fallback. Anything else (a forged 'verified', a forged 'paid') is
+       replaced by what the pay method implies. A status can only become paid
+       through Stripe's own answer (settleBoardFromStripe) or an admin PATCH —
+       the same rule that governs auto-prepare's trustPayment. */
+    paymentStatus: UNPAID_STATUSES.includes(body.paymentStatus)
+      ? body.paymentStatus
+      : (body.payMethod === 'counter' ? 'counter' : 'pending'),
+    payMethod: body.payMethod || 'unknown',
+    orderType: ORDER_TYPES.includes(body.orderType) ? body.orderType : 'pickup',
+    /* Only ever present on a windowed delivery order, and only with values
+       resolveSchedule() already accepted. Everything else carries no schedule
+       fields at all, so the board and the ticket can simply test for their
+       presence rather than asking what they mean. */
+    deliveryDate: schedule ? schedule.date : '',
+    deliverySlot: schedule ? schedule.slot : '',
+    deliverySlotLabel: schedule ? schedule.slotLabel : '',
+    scheduledFor: schedule ? schedule.scheduledFor : '',
+    table: body.table || '',
+    customer: body.customer || {},
+    /* The guest's raw payload is kept for reference (mods, notes, addons), but
+       the PRICES we show the kitchen come from `lines` — the server's own
+       recomputation. Never render a line price from `items`: that number came
+       from a public web page and can say anything. */
+    items: body.items || [],
+    lines: priced.lines,
+    subtotal: priced.subtotal, tax: priced.tax, tip: priced.tip,
+    delivery: priced.delivery, total: priced.total,
+    discountAmount: priced.discountAmount || 0,
+    discount: priced.discount || null,
+    source: body.source || 'storefront'
+  };
+
+  /* Spend the code — or take the reward out of the guest's own ledger — only
+     now that the order really exists. A guest who opens Stripe and walks away
+     must not burn one of the owner's codes, nor their own points. */
+  if (reward.kind === 'code' && reward.entry) {
+    discountCodes = D.spendCode(discountCodes, reward.entry);
+    saveDiscountCodes();
+  }
+
+  orders.set(id, order);
+  saveOrdersSoon();
+
+  /* Loyalty points are the guest's property, so they leave the balance here
+     and come back in releaseLoyaltyFor() if this order is ever cancelled for
+     non-payment. */
+  if (reward.kind === 'loyalty') commitLoyalty(order, reward);
+
+  /* Kitchen automation. A dine-in order starts cooking on arrival; pickup and
+     delivery stay on the board until settleBoardFromStripe confirms the money
+     (guest's phone coming back, or staff tapping Re-check). The third argument
+     matters: this payload is public, so a client's CLAIM of having paid is not
+     evidence — at creation only the dine-in rule can fire. */
+  maybeAutoPrepare(order, 'arrival', { trustPayment: false });
+
+  console.log('[kpot] order created ' + id + ' (' + (body.payMethod || '') + ') $' + order.total.toFixed(2) +
+    (order.status === 'preparing' ? ' [auto-preparing]' : ''));
+  fireDispatch(order);
+  return sendJSON(res, 200, { ok: true, id, status: order.status });
+}
+
+function listOrders(since) {
+  let arr = Array.from(orders.values());
+  if (since) {
+    const t = new Date(since).getTime();
+    if (isFinite(t)) arr = arr.filter((o) => new Date(o.at).getTime() >= t);
+  }
+  arr.sort((a, b) => new Date(b.at) - new Date(a.at));
+  return arr.slice(0, 200);
+}
+
+async function handleListOrders(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  const url = new URL(req.url, 'http://localhost');
+  /* Attach the kitchen-print state so the board can show whether the ticket
+     actually came out. Without it staff have no way to tell "the printer is
+     out of paper" from "the order is fine" — they would just re-tap and hope. */
+  const list = listOrders(url.searchParams.get('since')).map((o) => {
+    const p = printStateFor(o.id);
+    return p ? Object.assign({}, o, { print: p }) : o;
+  });
+
+  /* The loyalty ledger for just the guests shown on this board, keyed by
+     normalised phone. Small (at most one row per order listed) and it means a
+     staff member can answer "how many points do I have?" without leaving the
+     board or opening the owner console. */
+  const now = Date.now();
+  const members = {};
+  for (const o of list) {
+    const phone = L.normalizePhone((o.customer || {}).phone);
+    if (!phone || members[phone]) continue;
+    const c = L.find(customers, phone);
+    if (!c) continue;
+    members[phone] = {
+      phone,
+      name: c.name,
+      points: c.points,
+      settledOrders: c.settledOrders,
+      stampsEvery: L.STAMP_EVERY,
+      unusedCoupons: (c.coupons || []).filter((x) => L.isUsable(x, now))
+        .map((x) => ({ id: x.id, value: x.value, label: x.label, expiresAt: x.expiresAt }))
+    };
+  }
+
+  return sendJSON(res, 200, { orders: list, store: storeStatus, members });
+}
+
+function publicOrderView(o) {
+  return {
+    id: o.id, status: o.status, statusLabel: STATUS_LABELS[o.status] || o.status,
+    updatedAt: o.updatedAt, createdAt: o.at,
+    paymentStatus: o.paymentStatus
+  };
+}
+
+async function handleGetOrder(req, res, id) {
+  const o = orders.get(id);
+  if (!o) return sendJSON(res, 404, { error: 'not_found' });
+  return sendJSON(res, 200, publicOrderView(o));
+}
+
+async function handleUpdateOrder(req, res, id) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  const o = orders.get(id);
+  if (!o) return sendJSON(res, 404, { error: 'not_found' });
+  let raw;
+  try { raw = await readBody(req, 8 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const wasStatus = o.status;
+  if (body.status && VALID_STATUS.includes(body.status)) {
+    o.status = body.status;
+  }
+  /* Allow the owner to also confirm/correct payment status (e.g. a cash
+     payment that was marked pending). */
+  if (body.paymentStatus && typeof body.paymentStatus === 'string') {
+    o.paymentStatus = body.paymentStatus;
+  }
+
+  /* ---- move a scheduled delivery to a different window ------------------
+     A guest phones and says "can we make that 6pm instead of noon?" — this is
+     that. The new window is re-validated exactly as at creation, and the
+     order's own slot is excluded from the count so re-picking the SAME window
+     is not read as "already there". */
+  if (body.schedule !== undefined) {
+    if (!body.schedule || typeof body.schedule !== 'object') {
+      return sendJSON(res, 400, { error: 'bad_schedule', message: 'Send a delivery day and window.' });
+    }
+    if (o.orderType !== 'delivery') {
+      return sendJSON(res, 400, {
+        error: 'schedule_not_delivery',
+        message: 'Only delivery orders have a delivery window.'
+      });
+    }
+    const others = Array.from(orders.values()).filter((x) => x.id !== o.id);
+    const verdict = SC.resolveSchedule(body.schedule, others, scheduleCfg(), hoursSpec(), Date.now());
+    if (!verdict.ok) {
+      return sendJSON(res, 409, {
+        error: verdict.error,
+        message: SCHEDULE_ERRORS[verdict.error] || 'That delivery day or window is not available.'
+      });
+    }
+    const wasFor = o.scheduledFor;
+    o.deliveryDate = verdict.date;
+    o.deliverySlot = verdict.slot;
+    o.deliverySlotLabel = verdict.slotLabel;
+    o.scheduledFor = verdict.scheduledFor;
+    console.log('[kpot] order ' + id + ' rescheduled ' + (wasFor || 'immediate') +
+      ' -> ' + verdict.scheduledFor + ' (' + verdict.slotLabel + ')');
+  }
+
+  /* Staff discount, applied to an order that already exists.
+
+     One discount per order: a staff discount REPLACES any code discount rather
+     than stacking with it, so a guest's 10% code and a staff $5-off can never
+     quietly add up to a bigger give-away than either side intended.
+
+     `subtotal` and `delivery` are stored GROSS (the discount is a separate
+     `discountAmount`), so re-pricing from them is exact — including taking a
+     discount back off again with `discount: null`. */
+  if (body.discount !== undefined) {
+    if (body.discount === null || body.discount === '') {
+      o.discountAmount = 0;
+      o.discount = null;
+      o.tax = round2(((Number(o.subtotal) || 0) + (Number(o.delivery) || 0)) * ASSETS.CONFIG.taxRate);
+      o.total = round2((Number(o.subtotal) || 0) + (Number(o.delivery) || 0) + o.tax + (Number(o.tip) || 0));
+    } else {
+      /* A staff member is typing this by hand, so a number that cannot be
+         right has to be reported rather than clamped. compedMealOf(999) on a
+         $16 order would silently become "free food" if we just capped it —
+         the guest gets a comped meal and nobody notices the typo. A guest's
+         CODE still clamps inside pricing.js: an owner's misconfiguration must
+         not cost the guest money, nor the house its price integrity. */
+      const stype = String(body.discount.type || '');
+      const sval = Number(body.discount.value);
+      const gross = Number(o.subtotal) || 0;
+      if (stype === 'amount') {
+        if (!isFinite(sval) || sval <= 0) {
+          return sendJSON(res, 400, { error: 'bad_discount', message: 'Enter an amount greater than 0.' });
+        }
+        if (sval > gross) {
+          return sendJSON(res, 400, {
+            error: 'bad_discount',
+            message: 'That is more than the order is worth ($' + gross.toFixed(2) + ').'
+          });
+        }
+      }
+
+      const nd = applyDiscount({
+        subtotal: gross,
+        delivery: Number(o.delivery) || 0,
+        tax: Number(o.tax) || 0,
+        tip: Number(o.tip) || 0,
+        total: Number(o.total) || 0
+      }, body.discount, ASSETS.CONFIG);
+
+      if (!(nd.discountAmount > 0)) {
+        return sendJSON(res, 400, {
+          error: 'bad_discount',
+          message: 'That discount does not apply to this order.'
+        });
+      }
+      o.discountAmount = nd.discountAmount;
+      o.discount = nd.discount;
+      o.tax = nd.tax;
+      o.total = nd.total;
+    }
+  }
+
+  o.updatedAt = new Date().toISOString();
+  orders.set(id, o);
+  saveOrdersSoon();
+
+  /* A staff member correcting a payment status (say a pickup order the guest
+     settled in cash at the counter) counts as "money confirmed" for automation,
+     exactly as Stripe's own answer does. Idempotent: a PATCH that ALSO sets
+     status:'preparing' cannot print twice, because the queue is keyed by order
+     id and maybeAutoPrepare only acts on an order still in `received`.
+     trustPayment because this route is admin-gated — the same trust as Stripe. */
+  maybeAutoPrepare(o, 'payment set by staff', { trustPayment: true });
+
+  /* Staff confirming the money — the board's "💵 Collected" button, or a
+     correction — earns the guest their points on exactly the same terms as
+     Stripe's own answer. Idempotent by the order, so re-saving cannot pay
+     twice. Cancelling an order that had a reward priced into it gives that
+     reward back. */
+  awardLoyaltyFor(o, 'payment set by staff');
+  if (o.status === 'cancelled') releaseLoyaltyFor(o, 'cancelled by staff');
+
+  /* Reaching 'preparing' means the kitchen is about to cook this — that is the
+     moment the ticket has to come out. Only on the TRANSITION, so re-saving an
+     order that is already being prepared does not spit out another ticket.
+     (The queue is separately idempotent by order id, so a duplicate PATCH
+     cannot double-print either.) */
+  if (o.status === 'preparing' && wasStatus !== 'preparing') {
+    enqueueKitchenTicket(o);
+  }
+
+  console.log('[kpot] order ' + id + ' -> ' + o.status + ' (' + o.paymentStatus + ')');
+  fireDispatch(o);
+  return sendJSON(res, 200, {
+    ok: true, id, status: o.status, statusLabel: STATUS_LABELS[o.status],
+    total: o.total, discountAmount: o.discountAmount || 0, discount: o.discount || null
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Kitchen printing                                                           */
+/* -------------------------------------------------------------------------- */
+/* Tapping PREPARING on the board is what tells the kitchen to start cooking, so
+   that is the moment the ticket has to come out.
+
+   The awkward part is geography: the printer is on the restaurant's LAN and
+   this server is not. So the server RENDERS the ticket, queues it durably, and
+   a small agent on an always-on PC in the restaurant collects the bytes and
+   writes them to the printer over TCP 9100 (see print-agent/).
+
+   Rendering here rather than in the agent is deliberate:
+     * the layout has exactly one home;
+     * it can be unit-tested byte-for-byte without any hardware;
+     * changing it never means touching the machine in the restaurant.
+
+   The queue is lease-based rather than push-based. The agent polls, takes a
+   lease, prints, and acks. If the agent dies mid-job the lease expires and the
+   job comes back, so a crashed PC cannot swallow a ticket. */
+
+const PRINT_FILE = process.env.KPOT_PRINT_FILE || path.join(ROOT, 'print.local.json');
+const printJobs = new Map();
+
+/* Stamped on every agent poll, so the owner console can say "the restaurant PC
+   last checked in 3 seconds ago" instead of guessing whether the agent is even
+   running. */
+let lastAgentPoll = null;
+
+/* How long a job may sit "printing" before we assume the agent died. Generous:
+   a normal print + ack is well under a second, and re-printing a ticket the
+   kitchen already has is only mildly annoying, whereas a ticket that never
+   arrives stops the order. */
+const PRINT_LEASE_MS = 120 * 1000;
+/* Overridable for tests only: reaching the cap takes ~5 minutes in real life
+   (the retry backoff runs 2s, 4s, 8s … 60s), which is far too slow for a suite.
+   Left unset in the shop, so the real value is 10. */
+const PRINT_MAX_ATTEMPTS = Math.max(1,
+  parseInt(process.env.KPOT_PRINT_MAX_ATTEMPTS || '', 10) || 10);
+
+function printConfig() {
+  const p = (ASSETS.CONFIG && ASSETS.CONFIG.printer) || {};
+  return {
+    enabled: p.enabled !== false,
+    paper: String(p.paper || '80'),
+    cut: p.cut !== false
+  };
+}
+
+function printAuthorized(req) {
+  /* The print key is independent of the admin key — the agent never holds the
+     console password, and the admin key never unlocks printing. */
+  if (PRINT_KEY) return String(req.headers['x-print-key'] || '') === PRINT_KEY;
+  if (ADMIN_KEY) return false;       // console locked, no print key => locked
+  return true;                       // dev/open mode: nothing configured
+}
+
+/* Job ids are derived from the order, not random, which is what makes enqueue
+   idempotent: tapping PREPARING twice (or a retried PATCH) cannot produce two
+   tickets. A reprint is an explicit, deliberate action instead. */
+function printJobId(orderId, kind) { return orderId + ':' + kind; }
+
+function loadPrintJobs() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(PRINT_FILE, 'utf8'));
+    if (!Array.isArray(arr)) return;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const j of arr) {
+      if (!j || !j.id) continue;
+      /* Keep the file small: drop finished jobs older than a day, but keep
+         anything still pending however old — an unprinted ticket matters. */
+      const done = j.status === 'printed' || j.status === 'failed';
+      if (done && new Date(j.at).getTime() < cutoff) continue;
+      printJobs.set(j.id, j);
+    }
+    if (printJobs.size) console.log('[kpot] loaded ' + printJobs.size + ' print job(s)');
+  } catch (e) { /* no snapshot yet */ }
+}
+
+let printSaveTimer = null;
+function savePrintNow() {
+  try {
+    fs.writeFileSync(PRINT_FILE, JSON.stringify(Array.from(printJobs.values()), null, 2));
+  } catch (e) { console.error('[kpot] could not save print jobs:', e.message); }
+}
+function savePrintSoon() {
+  if (printSaveTimer) return;
+  printSaveTimer = setTimeout(() => { printSaveTimer = null; savePrintNow(); }, 800);
+}
+
+/* Render the ticket NOW and store the bytes on the job.
+   Storing bytes rather than a reference to the order is what lets a ticket
+   still print correctly after the order has been edited, or after a restart
+   that lost the in-memory board. */
+function enqueueKitchenTicket(order, opts) {
+  const cfg = printConfig();
+  const kind = 'kitchen';
+  const id = printJobId(order.id, kind);
+  const existing = printJobs.get(id);
+  if (existing) return existing;
+
+  let bytes = null, error = '';
+  try {
+    bytes = renderKitchenTicket(order, { paper: cfg.paper, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
+  } catch (e) {
+    error = e.message;
+    console.error('[kpot] could not render ticket for ' + order.id + ':', e.message);
+  }
+
+  const job = {
+    id,
+    orderId: order.id,
+    kind,
+    at: new Date().toISOString(),
+    attempts: 0,
+    status: error ? 'failed' : 'pending',
+    notBefore: 0,
+    leaseUntil: 0,
+    lastError: error,
+    bytes: bytes ? bytes.toString('base64') : '',
+    /* Kept for the on-screen preview and for re-rendering a reprint. */
+    orderSnapshot: opts && opts.snapshot === false ? null : order
+  };
+  printJobs.set(id, job);
+  savePrintSoon();
+  console.log('[kpot] print job queued: ' + id + ' (' + (bytes ? bytes.length + ' bytes' : 'RENDER FAILED') + ')');
+  return job;
+}
+
+/* Hand out whatever is due. Jobs are leased so two agents (or one agent with
+   two tabs) cannot print the same ticket twice. */
+function leasePrintJobs(limit) {
+  const now = Date.now();
+  const out = [];
+  for (const j of printJobs.values()) {
+    if (out.length >= (limit || 5)) break;
+    if (j.status === 'printing' && j.leaseUntil > now) continue;   // someone else has it
+    if (j.status === 'printing' && j.leaseUntil <= now) {
+      /* The agent vanished. Put it back in the queue rather than losing it. */
+      console.warn('[kpot] print lease expired for ' + j.id + ' — re-queueing');
+      j.status = 'pending';
+    }
+    if (j.status !== 'pending') continue;
+    if (j.notBefore && j.notBefore > now) continue;
+    j.status = 'printing';
+    j.attempts += 1;
+    j.leaseUntil = now + PRINT_LEASE_MS;
+    out.push(j);
+  }
+  if (out.length) savePrintSoon();
+  return out;
+}
+
+function ackPrintJob(id, ok, error) {
+  const j = printJobs.get(id);
+  if (!j) return { error: 'not_found' };
+  j.leaseUntil = 0;
+  if (ok) {
+    j.status = 'printed';
+    j.printedAt = new Date().toISOString();
+    j.lastError = '';
+    console.log('[kpot] printed ' + id + ' (attempt ' + j.attempts + ')');
+  } else {
+    j.lastError = String(error || 'unknown').slice(0, 300);
+    if (j.attempts >= PRINT_MAX_ATTEMPTS) {
+      j.status = 'failed';
+      console.error('[kpot] print FAILED permanently: ' + id + ' — ' + j.lastError);
+    } else {
+      j.status = 'pending';
+      /* Exponential backoff, capped — a printer that is merely switched off
+         should be picked up again within a minute of coming back. */
+      const backoff = Math.min(60000, 2000 * Math.pow(2, j.attempts - 1));
+      j.notBefore = Date.now() + backoff;
+      console.warn('[kpot] print failed for ' + id + ' (attempt ' + j.attempts + '): ' + j.lastError +
+        ' — retrying in ' + Math.round(backoff / 1000) + 's');
+    }
+  }
+  savePrintSoon();
+  return { ok: true, status: j.status };
+}
+
+/* What the board shows next to an order. */
+function printStateFor(orderId) {
+  /* Report the LATEST attempt for this order, not just the original job.
+     A ticket that failed and was then successfully reprinted must stop showing
+     "PRINT FAILED" — otherwise staff reprint it forever, or worse, learn to
+     ignore the badge. Reprints carry the same orderId, so pick the newest. */
+  let latest = null;
+  for (const j of printJobs.values()) {
+    if (j.orderId !== orderId || String(j.kind || '').indexOf('kitchen') !== 0) continue;
+    if (!latest || String(j.at) > String(latest.at)) latest = j;
+  }
+  if (!latest) return null;
+  return {
+    status: latest.status,      // pending | printing | printed | failed
+    attempts: latest.attempts,
+    at: latest.printedAt || latest.at,
+    error: latest.lastError || '',
+    reprint: !!latest.reprint
+  };
+}
+
+/* Manual reprint — staff need this when the roll ran out or a ticket was lost.
+   Creates a NEW job id each time so it is never deduplicated away. */
+function reprintKitchenTicket(orderId) {
+  const o = orders.get(orderId);
+  if (!o) return { error: 'order_not_found' };
+  const cfg = printConfig();
+  let bytes;
+  try {
+    bytes = renderKitchenTicket(o, { paper: cfg.paper, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
+  } catch (e) {
+    return { error: 'render_failed', message: e.message };
+  }
+  const id = printJobId(orderId, 'kitchen:reprint:' + Date.now().toString(36));
+  const job = {
+    id, orderId, kind: 'kitchen', reprint: true,
+    at: new Date().toISOString(), attempts: 0, status: 'pending',
+    notBefore: 0, leaseUntil: 0, lastError: '', bytes: bytes.toString('base64')
+  };
+  printJobs.set(id, job);
+  savePrintSoon();
+  console.log('[kpot] REPRINT queued: ' + id);
+  return { ok: true, id };
+}
+
+/* ---- Print endpoints ------------------------------------------------------ */
+
+/* GET /api/print/jobs — the agent asks for work. Leases and returns bytes. */
+function handlePrintJobs(req, res, url) {
+  if (!printAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  lastAgentPoll = new Date().toISOString();
+  if (!printConfig().enabled) return sendJSON(res, 200, { jobs: [], printing: false });
+
+  const limit = Math.min(20, Math.max(1, parseInt(url.searchParams.get('limit') || '5', 10) || 5));
+  const jobs = leasePrintJobs(limit).map((j) => ({
+    id: j.id,
+    orderId: j.orderId,
+    kind: j.kind,
+    attempts: j.attempts,
+    reprint: !!j.reprint,
+    bytes: j.bytes
+  }));
+  return sendJSON(res, 200, { jobs, printing: true });
+}
+
+/* POST /api/print/jobs/:id/ack — did it come out? */
+async function handlePrintAck(req, res, id) {
+  if (!printAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  let body = {};
+  try {
+    const raw = await readBody(req, 8 * 1024);
+    if (raw) body = JSON.parse(raw);
+  } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const out = ackPrintJob(id, body.ok !== false, body.error);
+  if (out.error) return sendJSON(res, 404, { error: out.error });
+  return sendJSON(res, 200, out);
+}
+
+/* GET /api/print/status — is the printer setup actually alive? The single most
+   useful question when a ticket does not appear.
+   Accepts EITHER key: the owner console uses the admin key, and the agent uses
+   its print key to confirm on startup that it is actually connected. */
+function handlePrintStatus(req, res) {
+  if (!printAuthorized(req) && !adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  const jobs = Array.from(printJobs.values());
+  const cfg = printConfig();
+  const pending = jobs.filter((j) => j.status === 'pending').length;
+  const printing = jobs.filter((j) => j.status === 'printing').length;
+  const printed = jobs.filter((j) => j.status === 'printed').length;
+  const failed = jobs.filter((j) => j.status === 'failed');
+  const lastPrinted = jobs
+    .filter((j) => j.printedAt)
+    .sort((a, b) => (a.printedAt < b.printedAt ? 1 : -1))[0];
+
+  /* "No agent has ever collected a job" and "the agent collected it but the
+     printer refused" look identical from the board, and they need completely
+     different fixes — so report whether the agent has ever checked in. */
+  return sendJSON(res, 200, {
+    enabled: cfg.enabled,
+    paper: cfg.paper,
+    cut: cfg.cut,
+    hasPrintKey: !!PRINT_KEY,
+    usingDedicatedKey: !!PRINT_KEY,
+    counts: { pending, printing, printed, failed: failed.length, total: jobs.length },
+    lastAgentPoll: lastAgentPoll || null,
+    lastPrinted: lastPrinted ? { orderId: lastPrinted.orderId, at: lastPrinted.printedAt } : null,
+    failed: failed.slice(-10).map((j) => ({ id: j.id, orderId: j.orderId, attempts: j.attempts, error: j.lastError }))
+  });
+}
+
+/* Load any jobs left over from before the last restart. Called here, at the end
+   of the print section, because printJobs/PRINT_FILE above are `const` — calling
+   it up in the generic startup block would hit their temporal dead zone. */
+loadPrintJobs();
+
+/* ---- Backup / export ------------------------------------------------------
+   The order board lives in the container's memory and is snapshotted to
+   orders.local.json. A redeploy or container restart wipes that file, so the
+   owner needs a way to pull the data OUT of the container and keep it.
+
+   Two formats, both admin-gated:
+     /api/orders/export.json   full fidelity (what to re-import if we ever add it)
+     /api/orders/export.csv    opens straight in Excel / Google Sheets
+
+   Read-only. It never mutates the board. */
+
+function handleExportOrders(req, res, format) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+
+  const url = new URL(req.url, 'http://localhost');
+  const from = url.searchParams.get('from');
+  const to = url.searchParams.get('to');
+
+  let arr = Array.from(orders.values());
+  if (from) {
+    const t = new Date(from).getTime();
+    if (isFinite(t)) arr = arr.filter((o) => new Date(o.at).getTime() >= t);
+  }
+  if (to) {
+    const t = new Date(to).getTime();
+    if (isFinite(t)) arr = arr.filter((o) => new Date(o.at).getTime() <= t);
+  }
+  /* Oldest first — that is the order a bookkeeper expects to read. */
+  arr.sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  const stamp = new Date().toISOString().slice(0, 10);
+
+  if (format === 'csv') {
+    const rows = [CSV_COLUMNS.map(csvCell).join(',')];
+    for (const o of arr) rows.push(orderToRow(o).map(csvCell).join(','));
+    /* BOM so Excel on Windows reads the UTF-8 correctly. */
+    const body = '\ufeff' + rows.join('\r\n') + '\r\n';
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="kpot-orders-' + stamp + '.csv"',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store'
+    });
+    return res.end(body);
+  }
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    count: arr.length,
+    currency: 'USD',
+    range: { from: from || null, to: to || null },
+    /* storeStatus is not order data, but it is small and useful context. */
+    store: storeStatus,
+    orders: arr
+  };
+  return sendJSON(res, 200, payload);
+}
+
+async function handleGetStore(req, res) {
+  /* Public on purpose: the guest page needs to know which channels are open
+     before it renders the order-type cards, and it has no admin key. The
+     projection carries nothing sensitive — see publicStoreView(). */
+  return sendJSON(res, 200, publicStoreView());
+}
+
+async function handleSetStore(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  /* Only the three known top-level fields are honoured. Anything else in the
+     payload is ignored, so a stray key (or a hostile one) cannot end up in the
+     saved file or in what we hand back to the guest page. */
+  let changed = [];
+
+  if (typeof body.open === 'boolean') {
+    storeStatus.open = body.open;
+    changed.push('open=' + body.open);
+  }
+  if (typeof body.acceptingOrders === 'boolean') {
+    storeStatus.acceptingOrders = body.acceptingOrders;
+    changed.push('acceptingOrders=' + body.acceptingOrders);
+  }
+  /* Kitchen automation. Explicitly REQUIRES a boolean — the value decides
+     whether food is cooked without a human looking at the order first, so a
+     sloppy payload must be refused rather than interpreted. */
+  if (body.autoPrepare !== undefined) {
+    if (typeof body.autoPrepare !== 'boolean') {
+      return sendJSON(res, 400, { error: 'bad_value', message: 'autoPrepare must be true or false' });
+    }
+    storeStatus.autoPrepare = body.autoPrepare;
+    changed.push('autoPrepare=' + body.autoPrepare);
+  }
+
+  /* Per-channel switches. Accepts either a single key
+       { orderType: 'delivery', enabled: false }
+     or a partial map, which is what the toggle row sends:
+       { orderTypes: { delivery: false } } */
+  let ot = null;
+  if (typeof body.orderType === 'string' && typeof body.enabled === 'boolean') {
+    ot = { [body.orderType]: body.enabled };
+  } else if (body.orderTypes && typeof body.orderTypes === 'object') {
+    ot = body.orderTypes;
+  }
+  if (ot) {
+    for (const k of Object.keys(ot)) {
+      if (!ORDER_TYPES.includes(k)) {
+        return sendJSON(res, 400, { error: 'unknown_order_type', message: 'order type must be one of: ' + ORDER_TYPES.join(', ') });
+      }
+      if (typeof ot[k] !== 'boolean') {
+        return sendJSON(res, 400, { error: 'bad_value', message: k + ' must be true or false' });
+      }
+      storeStatus.orderTypes[k] = ot[k];
+      changed.push(k + '=' + ot[k]);
+    }
+  }
+
+  if (!changed.length) {
+    return sendJSON(res, 400, { error: 'nothing_to_update', message: 'send open, acceptingOrders, or orderTypes' });
+  }
+
+  saveStoreStatus();
+  console.log('[kpot] store status -> ' + JSON.stringify(storeStatus));
+  return sendJSON(res, 200, storeStatus);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Live menu — the owner edits products from the back-office                   */
+/* -------------------------------------------------------------------------- */
+/* The menu ships in assets/menu.js. When the owner edits it in admin-menu.html
+   we keep the live copy in memory (ASSETS.MENU — the SAME object the pricing
+   engine reads, so prices stay consistent with no restart) and snapshot it to
+   menu.local.json so it survives a restart. Guests get it via GET /api/menu. */
+
+const MENU_FILE = process.env.KPOT_MENU_FILE || path.join(ROOT, 'menu.local.json');
+let menuMeta = { custom: false, updatedAt: null };
+
+function loadMenuStore() {
+  try {
+    const j = JSON.parse(fs.readFileSync(MENU_FILE, 'utf8'));
+    if (j && j.menu && j.categories) {
+      ASSETS.MENU = j.menu;
+      ASSETS.CATEGORIES = j.categories;
+      menuMeta = { custom: true, updatedAt: j.updatedAt || null };
+      console.log('[kpot] loaded owner menu from ' + path.basename(MENU_FILE));
+    }
+  } catch (e) { /* no custom menu — keep menu.js defaults */ }
+}
+
+function saveMenuStore() {
+  menuMeta = { custom: true, updatedAt: new Date().toISOString() };
+  try {
+    fs.writeFileSync(MENU_FILE, JSON.stringify({ menu: ASSETS.MENU, categories: ASSETS.CATEGORIES, updatedAt: menuMeta.updatedAt }, null, 2));
+  } catch (e) { console.error('[kpot] could not save menu:', e.message); }
+}
+
+/* Structural validation — refuse anything that would break pricing or render. */
+const isNum = (x) => typeof x === 'number' && isFinite(x) && x >= 0;
+const isStr = (x) => typeof x === 'string' && x.length > 0 && x.length <= 200;
+
+function validateMenu(menu, cats) {
+  if (!menu || typeof menu !== 'object') return 'menu must be an object';
+  for (const k of ['hotpot', 'bbq', 'drinks', 'sides']) {
+    if (!menu[k] || typeof menu[k] !== 'object') return 'missing section: ' + k;
+  }
+
+  const hp = menu.hotpot;
+  if (!isNum(hp.basePrice)) return 'Hot Pot base price must be a number ≥ 0';
+  if (!Array.isArray(hp.steps) || !hp.steps.length) return 'Hot Pot needs at least one step';
+  for (const s of hp.steps) {
+    if (!isStr(s.id) || !isStr(s.title)) return 'every Hot Pot step needs an id and a title';
+    if (!(Number(s.choose) >= 1)) return 'step "' + s.title + '" needs "choose" ≥ 1';
+    if (!Array.isArray(s.items) || !s.items.length) return 'step "' + s.title + '" needs at least one option';
+    for (const it of s.items) if (!isStr(it.n)) return 'Hot Pot options need a name';
+  }
+  if (!Array.isArray(hp.addons)) return 'Hot Pot add-ons must be a list';
+  for (const a of hp.addons) {
+    if (!isStr(a.n)) return 'add-ons need a name';
+    if (!isNum(a.price)) return 'add-on price must be a number ≥ 0';
+  }
+
+  const b = menu.bbq;
+  if (!Array.isArray(b.sizes) || !b.sizes.length) return 'BBQ needs at least one size';
+  for (const s of b.sizes) {
+    if (!isStr(s.id) || !isStr(s.n)) return 'every BBQ size needs an id and a name';
+    if (!isNum(s.price)) return 'BBQ size price must be a number ≥ 0';
+    if (!(Number(s.picks) >= 1)) return 'BBQ size "' + s.n + '" needs "picks" ≥ 1';
+  }
+  if (!Array.isArray(b.proteins) || !b.proteins.length) return 'BBQ needs at least one protein';
+  for (const p of b.proteins) if (!isStr(p.n)) return 'BBQ proteins need a name';
+  if (!Array.isArray(b.comesWith)) return 'BBQ "comes with" must be a list';
+  for (const c of b.comesWith) if (!isStr(c)) return '"comes with" entries must be text';
+  if (!Array.isArray(b.addons)) return 'BBQ add-ons must be a list';
+  for (const a of b.addons) { if (!isStr(a.n)) return 'add-ons need a name'; if (!isNum(a.price)) return 'add-on price must be a number ≥ 0'; }
+
+  const d = menu.drinks;
+  if (!Array.isArray(d.groups)) return 'Drinks must be a list of groups';
+  for (const g of d.groups) {
+    if (!isStr(g.id) || !isStr(g.n)) return 'every drink group needs an id and a name';
+    if (!isNum(g.price)) return 'drink group "' + g.n + '" price must be a number ≥ 0';
+    if (!Array.isArray(g.options) || !g.options.length) return 'drink group "' + g.n + '" needs at least one option';
+    for (const o of g.options) if (!isStr(o)) return 'drink options must be names';
+  }
+
+  const sd = menu.sides;
+  if (!Array.isArray(sd.groups)) return 'A La Carte must be a list of groups';
+  for (const g of sd.groups) {
+    if (!isStr(g.id) || !isStr(g.n)) return 'every side group needs an id and a name';
+    if (!Array.isArray(g.items) || !g.items.length) return 'side group "' + g.n + '" needs at least one item';
+    for (const it of g.items) {
+      if (!isStr(it.n)) return 'side items need a name';
+      if (!isNum(it.price)) return 'side item "' + it.n + '" price must be a number ≥ 0';
+    }
+  }
+
+  if (!Array.isArray(cats) || !cats.length) return 'categories must be a non-empty list';
+  for (const c of cats) if (!isStr(c.id) || !isStr(c.n)) return 'every category needs an id and a name';
+
+  return null;
+}
+
+function handleGetMenu(req, res) {
+  return sendJSON(res, 200, { menu: ASSETS.MENU, categories: ASSETS.CATEGORIES, custom: menuMeta.custom, updatedAt: menuMeta.updatedAt });
+}
+
+async function handlePutMenu(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  let raw;
+  try { raw = await readBody(req, 512 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+  const err = validateMenu(body.menu, body.categories);
+  if (err) return sendJSON(res, 400, { error: 'invalid_menu', message: err });
+  /* Point pricing at the new menu immediately — no restart needed. */
+  ASSETS.MENU = body.menu;
+  ASSETS.CATEGORIES = body.categories;
+  saveMenuStore();
+  console.log('[kpot] menu updated by owner (' + Object.keys(ASSETS.MENU).length + ' sections)');
+  return sendJSON(res, 200, { ok: true, updatedAt: menuMeta.updatedAt });
+}
+
+async function handleResetMenu(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  try { fs.unlinkSync(MENU_FILE); } catch (e) { /* nothing saved yet */ }
+  try {
+    const fresh = loadAssets(ROOT);
+    ASSETS.MENU = fresh.MENU;
+    ASSETS.CATEGORIES = fresh.CATEGORIES;
+  } catch (e) { return sendJSON(res, 500, { error: 'reload_failed', message: e.message }); }
+  menuMeta = { custom: false, updatedAt: null };
+  console.log('[kpot] menu reset to menu.js defaults');
+  return sendJSON(res, 200, { ok: true, menu: ASSETS.MENU, categories: ASSETS.CATEGORIES });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Discount codes (owner-managed)                                              */
+/* -------------------------------------------------------------------------- */
+
+/* Overridable for the same reason as every other state file: a test must be
+   able to run without touching the owner's real codes. */
+const DISCOUNTS_FILE = process.env.KPOT_DISCOUNTS_FILE || path.join(ROOT, 'discounts.local.json');
+
+let discountCodes = [];
+
+function loadDiscountCodes() {
+  const r = D.loadDiscounts(DISCOUNTS_FILE);
+  discountCodes = r.codes;
+  if (discountCodes.length) {
+    console.log('[kpot] discount codes: ' + discountCodes.length + ' loaded from ' + path.basename(DISCOUNTS_FILE));
+  }
+}
+
+function saveDiscountCodes() {
+  try {
+    return D.saveDiscounts(DISCOUNTS_FILE, discountCodes);
+  } catch (e) {
+    console.error('[kpot] could not save discounts:', e.message);
+    return null;
+  }
+}
+
+/* Resolve a guest-supplied code against the CURRENT subtotal. Returns
+   { none: true }, { entry, discount }, or { error, message }.
+
+   Never spends the code here — handing a guest to Stripe is not a purchase.
+   The code is spent when the order is actually placed. */
+function resolveCoupon(rawCode, priced) {
+  if (rawCode == null || String(rawCode).trim() === '') return { none: true };
+  const r = D.resolveCode(discountCodes, rawCode, priced.subtotal, Date.now());
+  if (!r.ok) return { error: r.error, message: r.message };
+  return { entry: r.code, discount: r.discount };
+}
+
+/* Stripe has no way to say "take $1.38 off" other than a coupon: it rejects a
+   negative line item outright ("Invalid non-negative integer"). So we mint a
+   one-shot coupon for the exact amount we already computed.
+
+   Fails CLOSED on purpose. If the coupon cannot be created we must not fall
+   back to charging the full price — the guest was shown the discounted total,
+   and silently taking more is worse than refusing the order. */
+async function createDiscountCoupon(cents, label) {
+  const form = new URLSearchParams();
+  form.set('amount_off', String(cents));
+  form.set('currency', 'usd');
+  form.set('duration', 'once');
+  form.set('max_redemptions', '1');
+  form.set('name', String(label || 'Discount').slice(0, 40));
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  let resp;
+  try {
+    resp = await fetch(STRIPE_COUPON_API, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + SECRET_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: form.toString(),
+      signal: ac.signal
+    });
+  } catch (e) {
+    return { error: 'coupon_failed', message: e && e.name === 'AbortError' ? 'Stripe coupon timed out.' : 'Could not reach Stripe.' };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data.id) {
+    const msg = (data && data.error && data.error.message) || ('Stripe returned HTTP ' + resp.status);
+    return { error: 'coupon_failed', status: resp.status, message: msg };
+  }
+  return { id: data.id };
+}
+
+function handleGetDiscounts(req, res) {
+  return sendJSON(res, 200, { codes: discountCodes, types: D.TYPES });
+}
+
+async function handlePutDiscounts(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  let raw;
+  try { raw = await readBody(req, 128 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const err = D.validateList(body.codes);
+  if (err) return sendJSON(res, 400, { error: 'invalid_discount', message: err });
+
+  discountCodes = body.codes.map(D.normalizeOne);
+  const updatedAt = saveDiscountCodes();
+  console.log('[kpot] discounts updated by owner (' + discountCodes.length + ' codes)');
+  return sendJSON(res, 200, { ok: true, updatedAt, codes: discountCodes });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Loyalty — points, stamps and come-back coupons                              */
+/* -------------------------------------------------------------------------- */
+/* The ledger itself (CUSTOMERS_FILE / `customers` / load / save) is declared
+   up beside the order board, because writeBackup() needs it. Everything below
+   is the RULE: who earns what, what may come off a bill, and who may look. */
+
+/* What the guest ASKED FOR, resolved against their own ledger and the price
+   the server just computed. The browser sends a wish ("use my points"), never
+   an amount — exactly the rule a discount code already follows. */
+/* Everything a guest may take off a bill in exchange for being a member:
+   their points, one of their coupons, or a member perk. THREE mutually
+   exclusive requests, and the guest is allowed exactly one — a code, a staff
+   discount, points, a coupon and a member perk are five doors to the same
+   wallet, and letting two of them ride together is how a house hands out more
+   than it meant to.
+
+   `orderType` and `priced.delivery` are needed because a member's free-delivery
+   perk only exists on a delivery order that actually has a fee to waive. */
+function resolveLoyalty(req, priced, orderType) {
+  if (!req || typeof req !== 'object') return { none: true };
+  const wantsPoints = !!req.redeemPoints;
+  const couponId = req.couponId ? String(req.couponId).trim() : '';
+  const memberChoice = req.memberChoice ? String(req.memberChoice).trim() : '';
+
+  const asked = (wantsPoints ? 1 : 0) + (couponId ? 1 : 0) + (memberChoice ? 1 : 0);
+  if (asked > 1) {
+    return {
+      error: 'one_reward_only',
+      message: 'Pick one reward for this order: points, a coupon, or your member discount.'
+    };
+  }
+  if (asked === 0) return { none: true };
+
+  const phone = L.normalizePhone(req.phone);
+  if (!phone) return { error: 'bad_phone', message: 'We could not read that mobile number.' };
+
+  const cust = L.find(customers, phone);
+  if (!cust) {
+    return { error: 'unknown_customer', message: 'We have no rewards on that mobile number yet.' };
+  }
+
+  /* ---- the member perk ---- */
+  if (memberChoice) {
+    const benefits = MB.benefitsFor(cust, memberCfg(), Date.now());
+    if (!benefits.member) {
+      return {
+        error: 'member_unavailable',
+        message: 'That membership is not active. Ask at the counter to renew it.'
+      };
+    }
+    const choices = MB.memberDiscountChoices(benefits, orderType, priced.delivery || 0);
+    const picked = choices.find((c) => c.id === memberChoice);
+    if (!picked) {
+      return {
+        error: 'member_unavailable',
+        message: 'That member discount is not available on this order.'
+      };
+    }
+    return { entry: cust, member: benefits, discount: picked.discount };
+  }
+
+  const r = L.resolveRedemption(cust, { redeemPoints: wantsPoints, couponId }, priced.subtotal, Date.now());
+  if (r.error) return { error: r.error, message: r.message };
+  if (r.none) return { none: true };
+  return { entry: cust, redemption: r.redemption, discount: L.toDescriptor(r.redemption) };
+}
+
+/* ONE give-away per order. An owner's code, a staff discount, a member perk and
+   a loyalty reward all come off the same bill, so letting two of them ride
+   together is how a house hands out more than it meant to. The guest page
+   offers them as an either/or choice; this is the server refusing to be talked
+   out of it.
+   Order matters: a bad code is reported before a bad reward, so the guest
+   fixes the thing they typed rather than the thing we looked up. */
+function resolveOrderDiscount(body, basePriced, orderType) {
+  const coupon = resolveCoupon(body.couponCode, basePriced);
+  if (coupon.error) return { error: coupon.error, message: coupon.message };
+
+  const loyalty = resolveLoyalty(body.loyalty, basePriced, orderType);
+  if (loyalty.error) return { error: loyalty.error, message: loyalty.message };
+
+  if (coupon.discount && loyalty.discount) {
+    return {
+      error: 'one_discount_only',
+      message: 'Use either a discount code or your rewards on this order, not both.'
+    };
+  }
+  if (coupon.discount) return { kind: 'code', entry: coupon.entry, discount: coupon.discount };
+  if (loyalty.discount) {
+    return {
+      kind: 'loyalty', customer: loyalty.entry,
+      /* `redemption` is absent for a member perk: nothing is taken out of the
+         ledger, so there is nothing to commit or release. The perk is a
+         property of the membership, not a coin in the wallet. */
+      redemption: loyalty.redemption || null,
+      member: loyalty.member || null,
+      discount: loyalty.discount
+    };
+  }
+  return { none: true };
+}
+
+/* Take the reward out of the ledger, once the order really exists. Mirrors
+   spendCode(): handing a guest to Stripe is not a purchase. */
+function commitLoyalty(order, reward) {
+  if (!order || !reward || reward.kind !== 'loyalty' || !reward.customer) return false;
+  const at = new Date().toISOString();
+  const ok = L.commitRedemption(reward.customer, reward.redemption, order.id, at);
+  if (!ok) return false;
+  L.touch(reward.customer, (order.customer || {}).name, at);
+  order.loyalty = Object.assign({}, order.loyalty, {
+    redeemed: {
+      kind: reward.redemption.kind,
+      points: reward.redemption.points || 0,
+      couponId: reward.redemption.couponId || '',
+      value: reward.redemption.value,
+      label: reward.discount.label || ''
+    }
+  });
+  saveCustomersStore();
+  return true;
+}
+
+/* Money is confirmed — pay out the points, the stamps and the come-back
+   coupon. Called from exactly the two places that can confirm money: Stripe's
+   own answer, and an admin PATCH that sets a paid status. Idempotent by the
+   ORDER, so a Re-check, a second Stripe callback or a repeated PATCH can never
+   pay the same order's points twice. */
+function awardLoyaltyFor(order, why) {
+  if (!order || !L.isPaidStatus(order.paymentStatus)) return null;
+  const phone = L.normalizePhone((order.customer || {}).phone);
+  if (!phone) return null;
+
+  const at = new Date().toISOString();
+  const cust = L.ensure(customers, phone, at);
+  if (!cust) return null;
+
+  /* The points multiplier comes from the LEDGER, never from the order payload.
+     A guest who POSTs {loyalty:{pointsMultiplier:50}} must not be listened to —
+     the same rule that says a browser cannot claim it has paid. Membership is
+     a fact about the customer record, read at award time. */
+  const benefits = MB.benefitsFor(cust, memberCfg(), Date.parse(at));
+
+  const r = L.awardForOrder(cust, order, at, {
+    pointsMultiplier: benefits.pointsMultiplier
+  });
+  if (!r.changed) return null;
+
+  L.touch(cust, (order.customer || {}).name, at);
+  order.loyalty = Object.assign({}, order.loyalty, {
+    awarded: true,
+    awardedAt: at,
+    earnedPoints: r.points,
+    earnedCoupons: (r.coupons || []).map((c) => c.id)
+  });
+  orders.set(order.id, order);
+  saveOrdersSoon();
+  saveCustomersStore();
+  console.log('[kpot] loyalty: ' + order.id + ' earned ' + r.points + ' point(s)' +
+    ((r.coupons || []).length ? ' + ' + r.coupons.length + ' reward(s)' : '') + ' (' + why + ')');
+  return r;
+}
+
+/* The order never collected its money — an abandoned Stripe session is
+   cancelled by settleBoardFromStripe — so whatever it was priced with has to
+   go back. releaseRedemption() is itself guarded by order.loyalty.released, so
+   a second cancellation cannot refund the same points twice. */
+function releaseLoyaltyFor(order, why) {
+  if (!order || !order.loyalty || !order.loyalty.redeemed || order.loyalty.released) return null;
+  const phone = L.normalizePhone((order.customer || {}).phone);
+  const cust = phone ? L.find(customers, phone) : null;
+  if (!cust) return null;
+
+  const at = new Date().toISOString();
+  if (!L.releaseRedemption(cust, order, at)) return null;
+
+  order.loyalty = Object.assign({}, order.loyalty, { released: true, releasedAt: at });
+  orders.set(order.id, order);
+  saveOrdersSoon();
+  saveCustomersStore();
+  console.log('[kpot] loyalty: released the reward on cancelled ' + order.id + ' (' + why + ')');
+  return true;
+}
+
+/* GET /api/customer?phone=…&subtotal=…
+
+   Public, because a guest has no admin key. It is a lookup by an EXACT mobile
+   number and returns only what that guest already knows about themselves: a
+   masked name, their points balance, and their own unused rewards. Never the
+   full name, never the ledger, never another guest's row. Throttled, so the
+   endpoint cannot be used to walk the phone-number space. */
+function handleGetCustomer(req, res, url) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled(ip, 60, 60000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many lookups. Please wait a moment.' });
+  }
+  const phone = L.normalizePhone(url.searchParams.get('phone'));
+  if (!phone) {
+    return sendJSON(res, 400, { error: 'bad_phone', message: 'That does not look like a mobile number.' });
+  }
+  const raw = Number(url.searchParams.get('subtotal'));
+  const subtotal = isFinite(raw) && raw >= 0 ? raw : null;
+  return sendJSON(res, 200, L.publicView(L.find(customers, phone), subtotal, Date.now()));
+}
+
+/* GET /api/schedule?date=YYYY-MM-DD — which days a guest may book, and how
+   much room is left in each window of a given day.
+
+   The guest page needs this to draw the picker, so it is public. It leaks
+   nothing about anyone: capacities are counts, and counts of a shop's own
+   delivery schedule are the shop's business to publish.
+
+   With no `date` it returns the selectable days only — enough to draw the
+   calendar. With one, it also returns that day's windows with the remaining
+   capacity for each, which is what the time picker needs. */
+function handleGetSchedule(req, res, url) {
+  const cfg = scheduleCfg();
+  const spec = hoursSpec();
+  const now = Date.now();
+  const out = {
+    /* What the guest may act on: the RUNTIME channel switch, not the static
+       config. An owner who turns Delivery back on from the board must see the
+       picker light up without a redeploy. */
+    enabled: !storeTypeOff('delivery'),
+    fee: cfg.fee,
+    perDayPerSlot: cfg.perDayPerSlot,
+    maxDaysAhead: cfg.maxDaysAhead,
+    days: SC.selectableDates(now, spec, cfg, 14)
+  };
+  const date = String(url.searchParams.get('date') || '').trim();
+  if (date) {
+    const ms = SC.dateKeyToMs(date);
+    if (ms === null) {
+      return sendJSON(res, 400, { error: 'bad_date', message: 'Use YYYY-MM-DD.' });
+    }
+    const key = SC.dateKeyOf(ms);
+    out.date = key;
+    out.open = SC.dayOpen(key, spec);
+    out.slots = SC.slotsForDate(key, Array.from(orders.values()), cfg, spec);
+  }
+  return sendJSON(res, 200, out);
+}
+
+/* GET /api/customers?q=… — the owner's member list. Admin-gated: this one does
+   show full phone numbers, because the owner already has them on every order
+   and needs them to look a guest up at the counter. */
+function handleListCustomers(req, res, url) {
+  const q = String(url.searchParams.get('q') || '').trim();
+  const lower = q.toLowerCase();
+  const digits = q.replace(/\D/g, '');
+
+  let arr = customers.slice();
+  if (q) {
+    arr = arr.filter((c) => (digits && c.phone.indexOf(digits) !== -1) ||
+      (c.name && c.name.toLowerCase().indexOf(lower) !== -1));
+  }
+  arr.sort((a, b) => (Number(b.points) || 0) - (Number(a.points) || 0));
+
+  const now = Date.now();
+  return sendJSON(res, 200, {
+    count: arr.length,
+    customers: arr.slice(0, 500).map((c) => {
+      const b = MB.benefitsFor(c, memberCfg(), now);
+      return {
+        phone: c.phone,
+        name: c.name,
+        points: c.points,
+        lifetimePoints: c.lifetimePoints,
+        settledOrders: c.settledOrders,
+        stampsIssued: c.stampsIssued,
+        unusedCoupons: (c.coupons || []).filter((x) => L.isUsable(x, now)).length,
+        lastSeenAt: c.lastSeenAt,
+        /* Membership, so the console can show "member until …" and offer the
+           renew/cancel buttons without a second round trip. */
+        member: b.member,
+        memberUntil: c.memberUntil || null,
+        memberDaysLeft: b.daysLeft
+      };
+    }),
+    rules: loyaltyRules(),
+    memberRules: (() => {
+      const m = memberCfg();
+      return {
+        enabled: m.enabled, fee: m.fee, periodDays: m.periodDays, percent: m.percent,
+        freeDelivery: m.freeDelivery, pointsMultiplier: m.pointsMultiplier,
+        couponValue: m.couponValue
+      };
+    })()
+  });
+}
+
+function loyaltyRules() {
+  return L.rules();
+}
+
+/* POST /api/customers/adjust  { phone, delta?, coupon?, name?, note? }
+
+   The escape hatch for the two things that WILL happen: a guest types the
+   wrong mobile number, and a staff member forgets to confirm a payment.
+   Without this the only remedy available at the counter is "sorry". Every
+   change lands in the customer's own log, so a balance that looks wrong can
+   be traced to whoever changed it. */
+async function handleAdjustCustomer(req, res) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  let raw;
+  try { raw = await readBody(req, 16 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const phone = L.normalizePhone(body.phone);
+  if (!phone) {
+    return sendJSON(res, 400, { error: 'bad_phone', message: 'Enter a 10-digit mobile number.' });
+  }
+
+  const at = new Date().toISOString();
+  const cust = L.ensure(customers, phone, at);
+  if (!cust) return sendJSON(res, 400, { error: 'too_many_customers', message: 'The member list is full.' });
+
+  const note = String(body.note || '').slice(0, 120);
+  let changed = false;
+
+  if (body.delta != null) {
+    const delta = Number(body.delta);
+    if (!isFinite(delta) || Math.floor(delta) !== delta) {
+      return sendJSON(res, 400, { error: 'bad_delta', message: 'Points must be a whole number.' });
+    }
+    const next = Math.floor(Number(cust.points) || 0) + delta;
+    /* Refused rather than clamped: a balance silently going to zero hides the
+       mistake that caused it. */
+    if (next < 0) {
+      return sendJSON(res, 400, {
+        error: 'points_negative',
+        message: 'That would take the balance below zero — they have ' + cust.points + ' points.'
+      });
+    }
+    cust.points = next;
+    L.pushLog(cust, 'adjust', delta, note || 'staff adjustment', at);
+    changed = true;
+  }
+
+  if (body.coupon) {
+    const value = Number(body.coupon.value);
+    if (!isFinite(value) || value <= 0 || value > 500) {
+      return sendJSON(res, 400, { error: 'bad_coupon', message: 'Reward value must be between $0 and $500.' });
+    }
+    if ((cust.coupons || []).length >= L.MAX_COUPONS) {
+      return sendJSON(res, 400, {
+        error: 'too_many_coupons',
+        message: 'That guest already holds ' + cust.coupons.length + ' rewards.'
+      });
+    }
+    const c = L.makeCoupon('stamp', value,
+      String(body.coupon.label || ('$' + value + ' off')).slice(0, 60), '', at);
+    const days = Math.floor(Number(body.coupon.days));
+    if (isFinite(days) && days > 0) {
+      c.expiresAt = new Date(Date.parse(at) + days * 24 * 60 * 60 * 1000).toISOString();
+    }
+    cust.coupons.push(c);
+    L.pushLog(cust, 'coupon_given', 0, c.label + (note ? ' — ' + note : ''), at);
+    changed = true;
+  }
+
+  if (body.name) {
+    cust.name = String(body.name).slice(0, 80);
+    changed = true;
+  }
+
+  /* ---- membership: confirm / cancel -----------------------------------
+     `body.member` is a string, not a number, because the only two things an
+     owner can do to a membership are roll it forward and end it. Anything
+     else is refused rather than treated as "cancel" — an unrecognised verb
+     must not unlock or lock a guest out by accident. */
+  if (body.member != null) {
+    const verb = String(body.member).trim().toLowerCase();
+    if (verb === 'confirm' || verb === 'renew') {
+      const r = MB.confirmMember(cust, Date.parse(at), memberCfg());
+      if (r.changed) {
+        if (r.coupon) {
+          if ((cust.coupons || []).length < L.MAX_COUPONS) {
+            /* makeCoupon() only expires 'return' coupons; a member coupon is
+               minted here and then given its own window, exactly as the staff
+               one-off reward below does. */
+            const c = L.makeCoupon('member', r.coupon.value,
+              String(r.coupon.label).slice(0, 60), '', at);
+            const days = Math.floor(Number(r.coupon.days));
+            if (isFinite(days) && days > 0) {
+              c.expiresAt = new Date(Date.parse(at) + days * 24 * 60 * 60 * 1000).toISOString();
+            }
+            cust.coupons.push(c);
+            L.pushLog(cust, 'coupon_given', 0, c.label, at);
+          }
+        }
+        L.pushLog(cust, 'member_renewed', 0,
+          'member until ' + String(r.memberUntil).slice(0, 10), at);
+        changed = true;
+      } else {
+        /* Tapping twice inside the same period is not an error, but it is not
+           a change either — and it must NOT mint a second coupon. */
+        return sendJSON(res, 200, {
+          ok: true, id: phone, customer: L.adminView(cust), member: 'already_current'
+        });
+      }
+    } else if (verb === 'cancel') {
+      const r = MB.cancelMember(cust);
+      if (r.changed) {
+        L.pushLog(cust, 'member_cancelled', 0, 'membership ended', at);
+        changed = true;
+      }
+    } else {
+      return sendJSON(res, 400, {
+        error: 'bad_member',
+        message: 'Send member: "confirm" or member: "cancel".'
+      });
+    }
+  }
+
+  if (!changed) {
+    return sendJSON(res, 400, { error: 'nothing_to_do', message: 'Send a points change, a reward, a name, or a member action.' });
+  }
+
+  saveCustomersStore();
+  console.log('[kpot] loyalty: staff adjusted ' + phone + (note ? ' — ' + note : ''));
+  return sendJSON(res, 200, { ok: true, customer: L.adminView(cust) });
+}
+
+/* GET /api/customers/export.csv|.json — the owner's own copy of the ledger.
+   Same reasoning as the order export: the container is not durable, so the
+   back office must be able to pull a full snapshot at any moment. */
+function handleExportCustomers(req, res, format) {
+  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const arr = customers.slice().sort((a, b) => (Number(b.points) || 0) - (Number(a.points) || 0));
+
+  if (format === 'csv') {
+    const body = L.toCsv(arr, Date.now());
+    res.writeHead(200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="kpot-members-' + stamp + '.csv"',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store'
+    });
+    return res.end(body);
+  }
+
+  return sendJSON(res, 200, {
+    exportedAt: new Date().toISOString(),
+    count: arr.length,
+    currency: 'USD',
+    rules: loyaltyRules(),
+    customers: arr
+  });
+}
+
+loadDiscountCodes();
+loadCustomersStore();
+loadMenuStore();
+
+const server = http.createServer((req, res) => {
+  let url, pathname;
+  try {
+    url = new URL(req.url, 'http://localhost');
+    pathname = decodeURIComponent(url.pathname);
+  } catch (e) {
+    return send(res, 400, 'Bad request');
+  }
+
+  if (pathname === '/api/health') {
+    return sendJSON(res, 200, {
+      ok: true,
+      checkout: !!SECRET_KEY,
+      verify: !!SECRET_KEY,
+      keyMode: KEY_MODE,
+      currency: ASSETS.CONFIG.currency || 'usd'
+    });
+  }
+
+  /* Which payment methods does Stripe ACTUALLY offer right now?
+     ---------------------------------------------------------------------
+     Wallet buttons (Apple Pay / Google Pay) are gated by Dashboard toggles and
+     by device support, not by anything in this codebase — so "I don't see them"
+     cannot be answered by reading our source. This asks Stripe directly:
+     create a $1 session, read back `payment_method_types`, then expire it.
+     Read-only in the sense that nothing is chargeable (we expire it, and
+     nobody ever sees the URL).
+
+     Admin-gated: it creates a live session, so it must not be a public probe. */
+  if (pathname === '/api/payment-methods') {
+    if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    if (!SECRET_KEY) return sendJSON(res, 200, { ok: false, reason: 'no_key' });
+    return probePaymentMethods().then((r) => sendJSON(res, 200, r))
+      .catch((e) => {
+        console.error('[kpot] payment-methods probe failed:', e && e.message);
+        sendJSON(res, 500, { ok: false, reason: 'probe_failed', message: e && e.message });
+      });
+  }
+
+  if (pathname === '/api/verify-session') {
+    if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleVerifySession(req, res, url).catch((e) => {
+      console.error('[kpot] verify unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error', verified: false });
+    });
+  }
+
+  if (pathname === '/api/price') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handlePrice(req, res).catch((e) => {
+      console.error('[kpot] price unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  if (pathname === '/api/checkout') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleCheckout(req, res).catch((e) => {
+      console.error('[kpot] unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  /* ---- Kitchen printing ---- */
+  if (pathname === '/api/print/jobs') {
+    if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handlePrintJobs(req, res, url);
+  }
+  if (pathname === '/api/print/status') {
+    if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handlePrintStatus(req, res);
+  }
+  const printAckMatch = pathname.match(/^\/api\/print\/jobs\/([^/]+)\/ack$/);
+  if (printAckMatch) {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handlePrintAck(req, res, decodeURIComponent(printAckMatch[1])).catch((e) => {
+      console.error('[kpot] print ack unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+  /* Manual reprint — admin-gated: it is a staff action, not something an agent
+     or a guest should be able to trigger. */
+  const reprintMatch = pathname.match(/^\/api\/orders\/([^/]+)\/reprint$/);
+  if (reprintMatch) {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    const out = reprintKitchenTicket(decodeURIComponent(reprintMatch[1]));
+    if (out.error) return sendJSON(res, out.error === 'order_not_found' ? 404 : 500, out);
+    return sendJSON(res, 200, out);
+  }
+
+  /* Staff re-check: ask Stripe again whether this order was paid, and settle the
+     board from Stripe's own answer. Needed when the guest paid and then closed
+     the tab, so the browser never called /api/verify-session and the order sat
+     at 'pending' while the money was already taken.
+
+     Admin-gated for the same reason as reprint: it is a staff action, and it
+     spends a Stripe round trip. It is also safe to press repeatedly — Stripe is
+     the source of truth, so the result is the same every time. */
+  const recheckMatch = pathname.match(/^\/api\/orders\/([^/]+)\/recheck-payment$/);
+  if (recheckMatch) {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    const id = decodeURIComponent(recheckMatch[1]);
+    return recheckPayment(id).then((out) => {
+      if (!out.ok) {
+        const status = out.error === 'order_not_found' ? 404
+          : out.error === 'stripe_not_configured' ? 503
+          : out.error === 'not_a_card_order' ? 400
+          : out.error === 'stripe_error' ? 502
+          : 200;   // session_not_found is a legitimate "not paid yet" answer
+        return sendJSON(res, status, out);
+      }
+      return sendJSON(res, 200, out);
+    }).catch((e) => {
+      console.error('[kpot] recheck unhandled:', e && e.message);
+      return sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  /* ---- Order board + store controls ---- */
+  if (pathname === '/api/orders') {
+    if (req.method === 'POST') return handleCreateOrder(req, res).catch((e) => {
+      console.error('[kpot] create-order unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    if (req.method === 'GET') return handleListOrders(req, res).catch((e) => {
+      console.error('[kpot] list-orders unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  /* ---- Order export (must be matched BEFORE /api/orders/:id, or "export.csv"
+     would be read as an order id) ---- */
+  const exportMatch = pathname.match(/^\/api\/orders\/export\.(json|csv)$/);
+  if (exportMatch) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    return handleExportOrders(req, res, exportMatch[1]);
+  }
+
+  const orderMatch = pathname.match(/^\/api\/orders\/([^/]+)$/);
+  if (orderMatch) {
+    const id = decodeURIComponent(orderMatch[1]);
+    if (req.method === 'GET') return handleGetOrder(req, res, id).catch((e) => {
+      console.error('[kpot] get-order unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    if (req.method === 'PATCH') return handleUpdateOrder(req, res, id).catch((e) => {
+      console.error('[kpot] update-order unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  /* ---- Discount codes ----
+     GET is admin-gated: the list is the owner's pricing, not something a guest
+     should be able to enumerate. The guest flow only ever sends a code in and
+     gets a price back. */
+  if (pathname === '/api/discounts') {
+    if (req.method === 'GET') {
+      if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+      return handleGetDiscounts(req, res);
+    }
+    if (req.method === 'PUT' || req.method === 'POST') {
+      return handlePutDiscounts(req, res).catch((e) => {
+        console.error('[kpot] put-discounts unhandled:', e && e.message);
+        sendJSON(res, 500, { error: 'internal_error' });
+      });
+    }
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  /* ---- Loyalty ----
+     /api/customer is the only public one, and it is a lookup by an exact
+     mobile number that returns the guest nothing they do not already know
+     about themselves. The rest are admin-gated. */
+  if (pathname === '/api/customer') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    return handleGetCustomer(req, res, url);
+  }
+
+  /* ---- Delivery schedule ----
+     What days a guest may book, and how much room is left in each window.
+     Public, because the guest has to see it to choose — but it reveals nothing
+     about anyone: no guest names, no phone numbers, just capacities. */
+  if (pathname === '/api/schedule') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    return handleGetSchedule(req, res, url);
+  }
+
+  /* Must be matched before /api/customers, or "export.csv" is read as a
+     query — same trap as /api/orders/export.csv. */
+  const memberExportMatch = pathname.match(/^\/api\/customers\/export\.(json|csv)$/);
+  if (memberExportMatch) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    return handleExportCustomers(req, res, memberExportMatch[1]);
+  }
+
+  if (pathname === '/api/customers/adjust') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleAdjustCustomer(req, res).catch((e) => {
+      console.error('[kpot] adjust-customer unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  if (pathname === '/api/customers') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    return handleListCustomers(req, res, url);
+  }
+
+  if (pathname === '/api/store') {
+    if (req.method === 'GET') return handleGetStore(req, res);
+    if (req.method === 'POST') return handleSetStore(req, res).catch((e) => {
+      console.error('[kpot] set-store unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  /* ---- Live menu (owner editing) ---- */
+  if (pathname === '/api/menu') {
+    if (req.method === 'GET') return handleGetMenu(req, res);
+    if (req.method === 'PUT' || req.method === 'POST') return handlePutMenu(req, res).catch((e) => {
+      console.error('[kpot] put-menu unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  if (pathname === '/api/menu/reset') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleResetMenu(req, res).catch((e) => {
+      console.error('[kpot] reset-menu unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  if (pathname.startsWith('/api/')) return sendJSON(res, 404, { error: 'not_found' });
+
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
+
+  return serveStatic(req, res, pathname);
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log('[kpot] listening on 0.0.0.0:' + PORT);
+  console.log('[kpot] stripe key: ' + (SECRET_KEY ? KEY_MODE + ' mode' : 'NOT SET — online payment disabled'));
+  console.log('[kpot] tax rate: ' + (ASSETS.CONFIG.taxRate * 100).toFixed(2) + '%');
+});
+
+/* Flush the order board before we go, so a deploy or Ctrl-C never loses the
+   last few orders to the debounce window. The CSV/JSON backup is written here
+   too: a redeploy is the single most likely moment to lose the container, so
+   this is the backup that matters most.
+
+   NOTE: on Windows this handler never runs (see the signal note above) — the
+   30s flush loop is what protects data there. On the Linux deploy container it
+   works normally. */
+function shutdown(sig) {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (backupTimer) { clearInterval(backupTimer); backupTimer = null; }
+  if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
+  saveOrdersNowSafe();
+  writeBackup('shutdown-' + sig);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+/* Last-ditch for any other process.exit() path. Synchronous work only — async
+   anything will not complete. */
+process.on('exit', () => {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  saveOrdersNowSafe();
+  writeBackup('exit');
+});

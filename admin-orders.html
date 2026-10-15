@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<title>KPOT To Go — Orders</title>
+<link rel="manifest" href="staff-board.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kitchen">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<style>
+  :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
+          --line:#322f3a; --txt:#F4F1EA; --mut:#9a93a0; --green:#2EA043; --amber:#E8B44A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family: Inter, -apple-system, system-ui, Segoe UI, Roboto, sans-serif; }
+  a { color:var(--red); }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 16px 14px 60px; }
+  header.bar { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .logo-k { width:38px; height:38px; border-radius:10px; background:var(--red);
+            color:#fff; font-weight:900; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  header.bar h1 { font-size:18px; margin:0; flex:1; }
+  header.bar a.home { font-size:13px; color:var(--mut); text-decoration:none; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); margin:0 0 10px; }
+  .store-controls { display:flex; gap:10px; flex-wrap:wrap; }
+  .toggle { flex:1; min-width:160px; background:var(--card2); border:1px solid var(--line);
+            border-radius:12px; padding:12px; display:flex; align-items:center; justify-content:space-between; }
+  .toggle b { font-size:14px; }
+  .sw { width:50px; height:28px; border-radius:99px; background:#444; position:relative; border:none; cursor:pointer; transition:.2s; }
+  .sw::after { content:''; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%; background:#fff; transition:.2s; }
+  .sw.on { background:var(--green); }
+  .sw.on::after { left:25px; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  select, .btn { font:inherit; }
+  select { background:var(--card2); color:var(--txt); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .pill { font-size:12px; padding:3px 9px; border-radius:99px; font-weight:700; }
+  .pill.received { background:rgba(232,180,74,.18); color:var(--amber); }
+  .pill.preparing { background:rgba(232,180,74,.28); color:var(--amber); }
+  .pill.ready { background:rgba(46,160,67,.2); color:#6ee787; }
+  .pill.completed { background:rgba(255,255,255,.12); color:#cfc9d6; }
+  .pill.cancelled { background:rgba(248,81,73,.2); color:#ff7b72; }
+  /* Payment state. UNPAID is deliberately the loudest thing on the card — it is
+     money we have not collected, and it has to be caught before handover. */
+  .pill.paid { background:rgba(46,160,67,.2); color:#6ee787; }
+  .pill.unpaid { background:#e5484d; color:#fff; letter-spacing:.02em; }
+  .pill.warnpay { background:rgba(232,180,74,.28); color:var(--amber); }
+  /* Print state. "PRINT FAILED" is red and loud for the same reason UNPAID is:
+     the ticket is the only thing the kitchen actually works from, and a failure
+     here is otherwise completely silent — the order just never appears on paper. */
+  .pill.printed { background:rgba(255,255,255,.10); color:#b9b3c2; }
+  .pill.printwait { background:rgba(232,180,74,.28); color:var(--amber); }
+  .pill.printfail { background:#e5484d; color:#fff; }
+  .pill.disc { background:rgba(46,160,67,.2); color:#6ee787; }
+  /* Rewards. Deliberately green and quiet — it is information, not a warning. */
+  .pill.loy { background:rgba(110,231,135,.14); color:#8fe6a3; }
+  .pill.mem { background:rgba(232,180,74,.14); color:var(--gold); }
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.65);display:grid;place-items:center;z-index:60;padding:18px}
+  .modal[hidden]{display:none}
+  .modal-box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;width:100%;max-width:360px}
+  .modal-box h3{margin:0 0 8px;font-size:16px}
+  .modal-box label{display:block;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin:12px 0 5px}
+  .modal-box select,.modal-box input{width:100%;background:var(--card2);color:var(--txt);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;font-size:14px}
+  .modal-box .row{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+  .modal-box .row button{flex:1;min-width:88px;padding:11px;border-radius:10px;font:inherit;font-weight:700;
+    font-size:13px;cursor:pointer;border:1px solid var(--line);background:var(--card2);color:var(--txt)}
+  .modal-box .row button.primary{background:var(--amber);color:#241a05;border-color:transparent}
+  .modal-box .status{font-size:12.5px;margin-top:10px;color:var(--amber);min-height:1em}
+  .modal-box .hint{font-size:12px;color:var(--mut);line-height:1.5}
+  .o-actions button.discount{color:var(--green)}
+  .o-actions button.reprint, .o-actions button.recheck, .o-actions button.discount,
+  .o-actions button.collect { flex:0 0 auto; min-width:0; padding:9px 12px; }
+  /* Collect takes money, so it is tinted like Re-check but green: both are
+     "settle this order", and both must be distinguishable from Reprint at a
+     glance — one moves money, the other moves paper. */
+  .o-actions button.collect { border-color:rgba(46,160,67,.6); color:var(--green); }
+  /* Re-check is tinted so it is not mistaken for Reprint at a glance — one moves
+     paper, the other moves money, and mixing them up wastes a Stripe round trip. */
+  .o-actions button.recheck { border-color:rgba(232,180,74,.55); color:var(--amber); }
+  .printer-line { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--mut);
+                  margin:-4px 0 12px; flex-wrap:wrap; }
+  .printer-line .dot { width:8px; height:8px; border-radius:50%; background:var(--mut); flex:0 0 auto; }
+  .printer-line.ok .dot { background:var(--green); }
+  .printer-line.warn .dot { background:var(--amber); }
+  .printer-line.bad .dot { background:var(--red); }
+  .order { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  .order .o-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .order .o-no { font-weight:900; font-size:16px; }
+  .order .o-time { color:var(--mut); font-size:12px; margin-left:auto; }
+  .order .o-cust { color:var(--mut); font-size:13px; margin-bottom:8px; }
+  .order .o-cust a { color:var(--txt); }
+  .order .o-items { font-size:13px; border-top:1px dashed var(--line); border-bottom:1px dashed var(--line);
+                    padding:8px 0; margin-bottom:10px; }
+  .order .o-items div { display:flex; justify-content:space-between; padding:2px 0; }
+  .order .o-total { font-weight:800; margin-bottom:10px; }
+  .o-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .o-actions button { flex:1; min-width:90px; padding:9px 6px; border-radius:10px; border:1px solid var(--line);
+                      background:var(--card2); color:var(--txt); font-weight:700; cursor:pointer; }
+  .o-actions button.primary { background:var(--red); border-color:var(--red); color:#fff; }
+  .o-actions button.done { opacity:.4; cursor:default; }
+  .o-actions button.ghost { background:transparent; }
+  .empty { text-align:center; color:var(--mut); padding:30px 0; }
+  #keybar { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+  #keybar input { flex:1; background:var(--card2); border:1px solid var(--line); color:var(--txt);
+                  border-radius:10px; padding:9px 10px; font:inherit; }
+  .badge-live { font-size:11px; color:var(--green); }
+  /* Install / notify controls. The install button is always rendered; see
+     assets/staff-pwa.js for why it can't rely on beforeinstallprompt alone. */
+  .staff-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .staff-bar .install-btn, .staff-bar .notify-btn {
+    background:var(--card2); color:var(--txt); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px; font:inherit; font-weight:700; cursor:pointer;
+  }
+  .staff-bar .install-btn[hidden], .staff-bar .notify-btn[hidden] { display:none; }
+  .staff-bar .notify-btn.on { background:var(--green); border-color:var(--green); color:#08120c; }
+  .staff-bar .notify-btn.denied { border-color:var(--red); color:#ff9b93; }
+  .install-note { flex-basis:100%; font-size:12px; color:var(--mut); line-height:1.5; }
+  .install-note[hidden] { display:none; }
+  .order.fresh { border-color:var(--green); box-shadow:0 0 0 1px rgba(46,160,67,.35); }
+  .banner { background:var(--red); color:#fff; padding:8px 12px; border-radius:10px; margin-bottom:12px; font-weight:700; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#000; color:#fff;
+           padding:10px 16px; border-radius:10px; opacity:0; transition:.3s; pointer-events:none; z-index:99; }
+  .toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <div class="logo-k">K</div>
+    <h1>Live Orders</h1>
+    <a class="home" href="admin.html">← Admin</a>
+    <a class="home" href="admin-menu.html">🍔 Edit Menu</a>
+    <a class="home" href="index.html">Store ↗</a>
+  </header>
+
+  <div id="keybar">
+    <input id="adminKey" placeholder="Admin key (leave blank if none set)" autocomplete="off">
+    <button class="btn" id="saveKey" style="background:var(--card2);color:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 12px">Save</button>
+  </div>
+  <div id="authBanner" class="banner" hidden>🔒 Set the admin key above, then reload the list.</div>
+
+  <div class="staff-bar">
+    <span id="installHost"></span>
+    <button type="button" class="notify-btn" id="notifyBtn" hidden>🔔 Enable new-order alerts</button>
+  </div>
+
+  <div class="card">
+    <h2>Store status</h2>
+    <div class="store-controls">
+      <div class="toggle"><b>Accepting orders</b><button class="sw" id="swAccept" data-k="acceptingOrders"></button></div>
+      <div class="toggle"><b>Store open</b><button class="sw" id="swOpen" data-k="open"></button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Order channels</h2>
+    <div class="hint" style="margin:-4px 0 10px">
+      Switch a channel off when you stop taking it — e.g. turn <b>Delivery</b> off when
+      no driver is on. Guests see it greyed out and cannot order it. Your choice is
+      saved and survives a re-publish.
+    </div>
+    <div class="store-controls">
+      <div class="toggle"><b>🍽️ Dine-In</b><button class="sw" id="swDinein" data-ot="dinein"></button></div>
+      <div class="toggle"><b>🛍️ Pickup / To Go</b><button class="sw" id="swPickup" data-ot="pickup"></button></div>
+      <div class="toggle"><b>🛵 Delivery</b><button class="sw" id="swDelivery" data-ot="delivery"></button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Kitchen automation</h2>
+    <div class="hint" style="margin:-4px 0 10px">
+      Skip the <b>PREPARING</b> tap. <b>Dine-in</b> orders start cooking the moment
+      they arrive — the guest is at the table. <b>Pickup</b> and <b>delivery</b>
+      start the moment their payment is confirmed: when the guest's phone comes
+      back from Stripe, or when you tap <b>💳 Re-check payment</b>. Anything still
+      unpaid waits for you as usual. Your choice is saved and survives a
+      re-publish.
+    </div>
+    <div class="store-controls">
+      <div class="toggle"><b>🚀 Auto-start cooking</b><button class="sw" id="swAuto" data-k="autoPrepare"></button></div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <select id="filter">
+      <option value="active">Active (received / preparing / ready)</option>
+      <option value="all">All orders</option>
+      <option value="today">Today</option>
+    </select>
+    <span class="badge-live">● auto-refresh</span>
+  </div>
+
+  <!-- Printer health. The single most useful thing when a ticket does not appear:
+       it separates "the kitchen PC never asked for work" from "the PC asked and
+       the printer refused", which need completely different fixes. -->
+  <div class="printer-line" id="printerLine" hidden><span class="dot"></span><span id="printerText"></span></div>
+
+  <div id="list"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<!-- Discount an existing order. A modal rather than an inline form because the
+     board re-renders every 4 seconds — anything drawn inside a card would be
+     wiped out from under someone who is still typing. -->
+<div class="modal" id="discModal" hidden>
+  <div class="modal-box">
+    <h3>🏷️ Discount <span id="discNo"></span></h3>
+    <div class="o-total" id="discNow"></div>
+
+    <label for="discType">Type</label>
+    <select id="discType">
+      <option value="percent">% off subtotal</option>
+      <option value="amount">$ off subtotal</option>
+      <option value="freeship">Free delivery</option>
+    </select>
+
+    <label for="discVal">Amount</label>
+    <input id="discVal" type="number" min="0" step="0.01" inputmode="decimal" placeholder="10">
+
+    <div class="hint" style="margin-top:10px">
+      One discount per order — this replaces any code discount already on it.
+      Tax is recalculated on the discounted amount.
+    </div>
+
+    <div class="row">
+      <button class="primary" id="discApply">Apply</button>
+      <button id="discClear">Remove</button>
+      <button id="discCancel">Cancel</button>
+    </div>
+    <div class="status" id="discMsg"></div>
+  </div>
+</div>
+
+<script src="assets/staff-pwa.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = (n) => '$' + Number(n || 0).toFixed(2);
+const STATUS = { received:'received', preparing:'preparing', ready:'ready', completed:'completed', cancelled:'cancelled' };
+const NEXT = { received:['preparing'], preparing:['ready'], ready:['completed'], completed:[], cancelled:[] };
+
+let KEY = sessionStorage.getItem('kpotAdminKey') || '';
+$('#adminKey').value = KEY;
+
+/* --- new-order alerts -----------------------------------------------------
+   The board already polls every 4s, so we don't need push: we diff the ids we
+   have seen against each poll and shout about the new ones. `seen` is seeded on
+   the first successful load WITHOUT notifying, otherwise opening the board would
+   fire an alert for every order already on it. */
+const SEEN_KEY = 'kpotBoardSeen';
+let seen = null;                       // null until the first load seeds it
+let notifyOn = localStorage.getItem('kpotNotify') === '1';
+let audioUnlocked = false;
+
+function headers() { return { 'Content-Type':'application/json', ...(KEY ? { 'X-Admin-Key': KEY } : {}) }; }
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
+
+$('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorage.setItem('kpotAdminKey', KEY); toast('Key saved'); load(); };
+
+function renderNotifyBtn() {
+  const b = $('#notifyBtn');
+  if (!b) return;
+  if (!StaffPWA.notifySupported()) { b.hidden = true; return; }
+  b.hidden = false;
+  const perm = StaffPWA.notifyPermission();
+  const on = notifyOn && perm === 'granted';
+  b.classList.toggle('on', on);
+  b.classList.toggle('denied', perm === 'denied');
+  b.textContent = on ? '🔔 New-order alerts ON'
+    : perm === 'denied' ? '🔕 Alerts blocked in browser settings'
+    : '🔔 Enable new-order alerts';
+}
+
+/* Permission requests must come from a real user gesture, and the same click is
+   what unlocks Web Audio — so we do both here rather than at page load. */
+$('#notifyBtn').onclick = () => {
+  if (StaffPWA.notifyPermission() === 'denied') {
+    toast('Notifications are blocked — allow them in your browser settings');
+    return;
+  }
+  StaffPWA.requestNotify().then((p) => {
+    notifyOn = (p === 'granted');
+    localStorage.setItem('kpotNotify', notifyOn ? '1' : '0');
+    if (notifyOn) {
+      audioUnlocked = true;
+      StaffPWA.chime();
+      StaffPWA.notify('🔔 Alerts are on', { body: 'New orders will pop up here.', requireInteraction: false });
+      toast('New-order alerts enabled');
+    } else {
+      toast('Notifications were not allowed');
+    }
+    renderNotifyBtn();
+  });
+};
+
+function showAuth(b) { $('#authBanner').hidden = !b; }
+
+function patchStatus(id, patch) {
+  return fetch('/api/orders/' + encodeURIComponent(id), { method:'PATCH', headers: headers(), body: JSON.stringify(patch) })
+    .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
+    .then(j => j).catch(e => { if (e.message !== 'unauthorized') toast('Update failed'); return null; });
+}
+
+async function setStore(k, v) {
+  const j = await fetch('/api/store', { method:'POST', headers: headers(), body: JSON.stringify({ [k]: v }) })
+    .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); }).catch(()=>null);
+  if (j && j.error) { toast(j.message || 'Could not update'); return null; }
+  const LABEL = { acceptingOrders:'Accepting orders', open:'Store open', autoPrepare:'Auto-start cooking' };
+  if (j) toast((LABEL[k] || k) + ' ' + (v ? 'ON' : 'OFF'));
+  return j;
+}
+
+/* Per-channel switches (pickup / dine-in / delivery). Separate call from
+   setStore() because the payload shape differs — this one sends
+   { orderType, enabled } and the server validates the key against its own
+   list of known channels. */
+const OT_LABEL = { dinein:'Dine-In', pickup:'Pickup', delivery:'Delivery' };
+async function setOrderType(t, v) {
+  const j = await fetch('/api/store', { method:'POST', headers: headers(), body: JSON.stringify({ orderType: t, enabled: v }) })
+    .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); }).catch(()=>null);
+  if (j && j.error) { toast(j.message || 'Could not update'); return null; }
+  if (j) toast((OT_LABEL[t] || t) + ' orders ' + (v ? 'ON' : 'OFF'));
+  return j;
+}
+
+function renderStore(s) {
+  if (!s) return;
+  const a = $('#swAccept'), o = $('#swOpen');
+  a.classList.toggle('on', s.acceptingOrders !== false);
+  o.classList.toggle('on', s.open !== false);
+
+  /* Auto-start is a plain boolean in the saved store status. It is NOT tied to
+     the open/accepting row: greying it out with the channels would suggest it
+     stops mattering when orders are off, when what actually happens is that it
+     simply has nothing to do. */
+  const swAuto = $('#swAuto');
+  if (swAuto) swAuto.classList.toggle('on', s.autoPrepare === true);
+
+  /* The channel switches only mean something while the store is actually
+     taking orders — grey the whole row out otherwise, so it is obvious that
+     flipping one of them will not bring orders back on its own. */
+  const ot = s.orderTypes || {};
+  let anyOff = false;
+  for (const t of ['dinein', 'pickup', 'delivery']) {
+    const el = $('#sw' + t.charAt(0).toUpperCase() + t.slice(1));
+    if (!el) continue;
+    const on = ot[t] !== false;
+    el.classList.toggle('on', on);
+    if (!on) anyOff = true;
+  }
+  const master = s.open !== false && s.acceptingOrders !== false;
+  for (const t of ['dinein', 'pickup', 'delivery']) {
+    const el = $('#sw' + t.charAt(0).toUpperCase() + t.slice(1));
+    if (el) el.closest('.toggle').style.opacity = master ? '1' : '.45';
+  }
+  return anyOff;
+}
+
+$('#swAccept').onclick = () => { const on = !$('#swAccept').classList.contains('on'); setStore('acceptingOrders', on).then(renderStore); };
+$('#swOpen').onclick = () => { const on = !$('#swOpen').classList.contains('on'); setStore('open', on).then(renderStore); };
+
+if ($('#swAuto')) {
+  $('#swAuto').onclick = () => {
+    const on = !$('#swAuto').classList.contains('on');
+    setStore('autoPrepare', on).then(renderStore);
+  };
+}
+
+for (const t of ['dinein', 'pickup', 'delivery']) {
+  const id = '#sw' + t.charAt(0).toUpperCase() + t.slice(1);
+  const el = $(id);
+  if (el) el.onclick = () => {
+    const on = !el.classList.contains('on');
+    setOrderType(t, on).then(renderStore);
+  };
+}
+
+function statusBadge(st) { return '<span class="pill ' + (STATUS[st]||'received') + '">' + (st||'received') + '</span>'; }
+
+/* Payment at a glance.
+   A pay-at-counter order is money we have NOT taken yet, so it has to be
+   impossible to miss at the moment the food is handed over. That is why this
+   shows the AMOUNT TO COLLECT rather than just echoing the word "counter" —
+   the old version printed the raw status in the same styling as a normal
+   received order, which read as "nothing to worry about here". */
+function payBadge(o) {
+  const ps = o.paymentStatus || (o.payMethod === 'counter' ? 'counter' : 'unverified');
+  if (ps === 'verified' || ps === 'paid') return '<span class="pill paid">PAID</span>';
+  if (ps === 'counter') return '<span class="pill unpaid">UNPAID · collect ' + money(o.total) + '</span>';
+  return '<span class="pill warnpay">NOT CONFIRMED · ' + money(o.total) + '</span>';
+}
+
+/* Did the kitchen ticket actually come out?
+   `o.print` is present only once the server has queued a ticket for this order
+   (i.e. since it was moved to preparing), so an order that was never sent to the
+   kitchen shows nothing here rather than a misleading "not printed". */
+function printBadge(o) {
+  const p = o.print;
+  if (!p) return '';
+  const title = p.error ? esc(p.error) : (p.at ? new Date(p.at).toLocaleString() : '');
+  if (p.status === 'printed') {
+    return '<span class="pill printed" title="' + title + '">🖨️ ' + (p.reprint ? 'REPRINTED' : 'PRINTED') + '</span>';
+  }
+  if (p.status === 'failed') {
+    return '<span class="pill printfail" title="' + title + '">🖨️ PRINT FAILED</span>';
+  }
+  if (p.status === 'printing') return '<span class="pill printwait">🖨️ PRINTING…</span>';
+  return '<span class="pill printwait">🖨️ QUEUED</span>';
+}
+
+/* Is a payment re-check worth offering on this order?
+
+   Only for an online (card) order whose payment we have NOT confirmed. Two
+   exclusions, each for a reason:
+     - pay-at-counter orders have no Stripe session at all, so the button would
+       always come back "not a card order" — noise;
+     - an already-confirmed order has nothing left to learn, and offering the
+       button invites pointless Stripe round trips on every card in the list.
+
+   A CANCELLED card order is deliberately still eligible: "we cancelled it, but
+   the guest had already paid" is precisely the case that needs a refund, and it
+   is invisible unless someone asks Stripe. */
+function needsRecheck(o) {
+  if (o.payMethod !== 'stripe') return false;
+  const ps = o.paymentStatus || '';
+  return ps !== 'verified' && ps !== 'paid';
+}
+
+/* What came off, and why. Named so a staff discount, a guest's code and a
+   loyalty reward are not confused for each other when someone is reading the
+   board quickly — all three are a dollar amount, and only the label says which
+   one the house just gave away. */
+function discBadge(o) {
+  const amt = Number(o.discountAmount) || 0;
+  if (amt <= 0) return '';
+  const d = o.discount || {};
+  const label = d.label ? esc(d.label)
+    : d.code ? esc(d.code)
+    : (d.source === 'staff' ? 'staff' : 'discount');
+  return '<span class="pill disc">🏷️ ' + label + ' −' + money(amt) + '</span>';
+}
+
+/* Is there money still to take on this order?
+
+   True for a pay-at-counter order — the normal case — and also for a card
+   order whose payment we never confirmed, because in both the guest still owes
+   the bill. A cancelled order is excluded: there is nothing to collect on food
+   nobody is making.
+
+   This is what makes "confirm the payment before crediting the points" possible
+   at all. Without it a counter order's UNPAID badge was permanent: the only
+   settle button on the board was Re-check, and the server refuses that for
+   anything that was not paid online. */
+function needsCollect(o) {
+  if (o.status === 'cancelled') return false;
+  const ps = o.paymentStatus || (o.payMethod === 'counter' ? 'counter' : 'unverified');
+  return ps !== 'verified' && ps !== 'paid';
+}
+
+function orderCard(o) {
+  /* Line prices come from the SERVER's recomputation (o.lines), never from the
+     browser's own numbers — the client payload is untrusted and could claim any
+     unit price. Orders written before `lines` existed fall back to their items. */
+  const lines = (Array.isArray(o.lines) && o.lines.length)
+    ? o.lines.map(l => ({ qty: l.qty, name: l.name, desc: l.desc || '', unit: l.unit }))
+    : (o.items || []).map(it => ({
+        qty: it.qty,
+        name: it.name,
+        desc: (it.mods || []).concat(it.addons || []).join(', '),
+        unit: it.unit
+      }));
+  const items = lines.map(l => {
+    /* If we genuinely have no unit price (a record written before `lines`
+       existed), show a dash rather than $0.00 — "$0.00" reads as "this item is
+       free", which is worse than admitting we don't know. */
+    const amount = Number.isFinite(Number(l.unit)) ? money(l.unit * l.qty) : '—';
+    return '<div><span>' + esc(l.qty) + '× ' + esc(l.name) +
+      (l.desc ? ' (' + esc(l.desc) + ')' : '') + '</span><span>' + amount + '</span></div>';
+  }).join('');
+  const cur = o.status || 'received';
+  const actions = ['preparing','ready','completed','cancelled'].map(a => {
+    const isCur = a === cur;
+    const label = a === 'completed' ? 'Complete' : a === 'cancelled' ? 'Cancel' : (a.charAt(0).toUpperCase()+a.slice(1));
+    const cls = (a==='ready' ? 'primary' : a==='cancelled' ? 'ghost' : '') + (isCur ? ' done' : '');
+    return '<button class="' + cls + '" data-act="'+a+'" data-id="'+esc(o.id)+'" '+(isCur?'disabled':'')+'>' + label + '</button>';
+  }).join('');
+  const cust = (o.customer||{});
+  const when = o.orderType === 'dinein' ? ('Table ' + esc(o.table||'?')) : (esc(cust.when||'ASAP'));
+  /* Build the detail line as parts so a guest with no phone doesn't print their
+     name twice ("Alex · Alex · pickup"). */
+  const meta = [esc(cust.name||'Guest')];
+  if (cust.phone) meta.push('<a href="tel:' + esc(cust.phone) + '">📞 ' + esc(cust.phone) + '</a>');
+  meta.push(esc(o.orderType||'pickup'), when);
+
+  /* What this guest is worth to us, from the loyalty ledger the server sent
+     alongside the orders. Staff can answer "how many points do I have?" from
+     the board instead of opening the owner console. */
+  const mem = memberFor(cust.phone);
+  if (mem) {
+    const bits = [];
+    if (mem.points > 0) bits.push(mem.points + ' pts');
+    if (mem.unusedCoupons && mem.unusedCoupons.length) {
+      bits.push(mem.unusedCoupons.length + ' reward' + (mem.unusedCoupons.length === 1 ? '' : 's'));
+    }
+    if (bits.length) meta.push('<span class="pill loy">⭐ ' + esc(bits.join(' · ')) + '</span>');
+  } else if (o.loyalty && o.loyalty.earnedPoints > 0) {
+    meta.push('<span class="pill loy">⭐ earned ' + esc(o.loyalty.earnedPoints) + ' pts</span>');
+  }
+
+  /* Delivery schedule marker: the window the guest booked, so staff know
+     when to have it ready without opening the order detail. */
+  if (o.orderType === 'delivery' && (o.deliverySlotLabel || o.deliveryDate)) {
+    const schedBits = [];
+    if (o.deliverySlotLabel) schedBits.push(esc(o.deliverySlotLabel));
+    if (o.deliveryDate) schedBits.push(esc(o.deliveryDate));
+    if (o.scheduledFor && isFinite(o.scheduledFor) && o.scheduledFor > 0) {
+      schedBits.push(new Date(o.scheduledFor).toLocaleString());
+    }
+    if (schedBits.length) meta.push('<span class="pill mem">📅 ' + schedBits.join(' · ') + '</span>');
+  }
+
+  return '<div class="order" data-id="'+esc(o.id)+'">' +
+    '<div class="o-head">' + statusBadge(cur) +
+      payBadge(o) +
+      printBadge(o) +
+      '<span class="o-no">#' + esc(o.id) + '</span>' +
+      '<span class="o-time">' + new Date(o.at).toLocaleString() + '</span>' +
+    '</div>' +
+    '<div class="o-cust">' + meta.join(' · ') + '</div>' +
+    '<div class="o-items">' + items + '</div>' +
+    /* The discount is shown as its own line rather than folded into the total:
+       a server that says "$18.10" when the menu says "$20.00" looks like a bug
+       unless you can see why. */
+    (discBadge(o) ? '<div class="o-total">' + discBadge(o) + '</div>' : '') +
+    '<div class="o-total">Total: ' + money(o.total) + ' · Tip: ' + money(o.tip) + '</div>' +
+    '<div class="o-actions">' + actions +
+      '<button class="discount" data-disc="'+esc(o.id)+'" title="Discount this order">🏷️ Discount</button>' +
+      (needsCollect(o) ? '<button class="collect" data-collect="'+esc(o.id)+'" title="The guest has paid — mark this order settled and credit their points">💵 Collected</button>' : '') +
+      /* Reprint is offered on every order that reached the kitchen — the roll
+         runs out, the paper jams, and the original was a blank page. */
+      (o.print ? '<button class="reprint" data-reprint="'+esc(o.id)+'" title="Print this kitchen ticket again">🖨️ Reprint</button>' : '') +
+      /* Offered on any card order we have not confirmed as paid — including one
+         that never reached the kitchen, because that is exactly the case where a
+         guest paid and closed the tab and nothing else would ever fix it. */
+      (needsRecheck(o) ? '<button class="recheck" data-recheck="'+esc(o.id)+'" title="Ask Stripe again whether this order was paid">💳 Re-check payment</button>' : '') +
+    '</div>' +
+  '</div>';
+}
+
+function passFilter(o, f) {
+  if (f === 'all') return true;
+  if (f === 'today') { const d = new Date(o.at); const n = new Date();
+    return d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate(); }
+  // active
+  return ['received','preparing','ready'].includes(o.status || 'received');
+}
+
+let freshIds = new Set();
+/* Last poll's orders, kept so the discount dialog can show what the order costs
+   right now without another round trip. */
+let boardOrders = [];
+/* The loyalty ledger for the guests on this board, keyed by normalised phone.
+   Sent alongside the orders so the board can show a balance without a second
+   request — and so the key here matches the server's exactly. */
+let boardMembers = {};
+
+/* Mirrors customers.js normalizePhone(). Only a LOOKUP key: it decides which
+   row to read, never what a guest is owed. */
+function normPhone(raw) {
+  const digits = String(raw == null ? '' : raw).replace(/\D/g, '');
+  const local = (digits.length === 11 && digits.charAt(0) === '1') ? digits.slice(1) : digits;
+  return local.length === 10 ? local : '';
+}
+
+function memberFor(phone) {
+  const p = normPhone(phone);
+  return p ? (boardMembers[p] || null) : null;
+}
+
+/* Diff the poll against what we've already seen.
+   First successful load only SEEDS the set — otherwise opening the board would
+   alert on every order already sitting on it. A cancelled/completed order that
+   later reappears is not "new" either, so we track ids, not a count. */
+function handleNewOrders(orders) {
+  const ids = orders.map(o => o.id).filter(Boolean);
+  if (seen === null) {
+    seen = new Set(ids);
+    try {
+      const cached = JSON.parse(localStorage.getItem(SEEN_KEY) || '[]');
+      if (Array.isArray(cached)) cached.forEach(id => seen.add(id));
+    } catch (e) { /* first run, nothing cached */ }
+    freshIds = new Set();
+    return;
+  }
+  const added = ids.filter(id => !seen.has(id));
+  added.forEach(id => seen.add(id));
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen).slice(-400))); } catch (e) {}
+
+  freshIds = new Set(added);
+  if (!added.length) return;
+
+  /* Only shout about orders that actually need action — a cancelled order
+     arriving over the wire isn't something the kitchen should be pinged for. */
+  const actionable = orders.filter(o => added.includes(o.id) &&
+    ['received', 'preparing'].includes(o.status || 'received'));
+  if (!actionable.length) return;
+
+  const first = actionable[0];
+  const who = (first.customer && first.customer.name) || 'Guest';
+  const more = actionable.length > 1 ? ' (+' + (actionable.length - 1) + ' more)' : '';
+  const title = '🛎️ New order — #' + first.id + more;
+  const body = who + ' · ' + money(first.total) +
+    (first.orderType === 'dinein' ? ' · Table ' + (first.table || '?') : ' · ' + ((first.customer || {}).when || 'ASAP'));
+
+  if (notifyOn && StaffPWA.notifyPermission() === 'granted') {
+    StaffPWA.notify(title, { body: body, tag: 'kpot-new-' + first.id, url: 'admin-orders.html' });
+  }
+  if (audioUnlocked) StaffPWA.chime();
+  toast(title);
+}
+
+/* Printer health, polled alongside the order list.
+   Deliberately distinguishes the three failures that look identical from the
+   board — nothing queued, agent never connected, agent connected but the
+   printer refused — because each one has a different fix. A failed print also
+   carries the agent's own reason, so the address it could not reach is on the
+   board instead of only in a log on the kitchen PC. */
+async function loadPrinter() {
+  const el = $('#printerLine');
+  if (!el) return;
+  const j = await fetch('/api/print/status', { headers: headers() })
+    .then(r => (r.ok ? r.json() : null)).catch(() => null);
+  if (!j) { el.hidden = true; return; }
+  el.hidden = false;
+
+  const counts = j.counts || {};
+  let cls = 'ok', text = '';
+  if (!j.enabled) {
+    cls = 'warn';
+    text = 'Kitchen printing is switched off in the app settings.';
+  } else if (!j.lastAgentPoll) {
+    cls = 'bad';
+    text = 'No print agent has ever connected — the program on the kitchen PC is not running.';
+  } else {
+    const age = Date.now() - new Date(j.lastAgentPoll).getTime();
+    if (age > 60000) {
+      cls = 'bad';
+      text = 'Print agent last checked in ' + Math.round(age / 60000) + ' min ago — is the kitchen PC asleep or off?';
+    } else if (counts.failed) {
+      cls = 'bad';
+      /* Say WHY, not just how many. "N ticket(s) failed to print" alone sends the
+         owner hunting; the agent's reason names the address it could not reach,
+         which is usually the whole answer — e.g. "timed out after 0/965 bytes
+         — tried 192.168.1.50:9100" means the printer is at a different IP now. */
+      const last = (j.failed && j.failed.length) ? j.failed[j.failed.length - 1] : null;
+      const raw = (last && last.error) ? String(last.error) : '';
+      const why = raw ? ' — ' + (raw.length > 140 ? raw.slice(0, 137) + '…' : raw) : '';
+      text = counts.failed + ' ticket(s) failed to print' + why + ' · open the order and use Reprint.';
+    } else if (counts.pending) {
+      cls = 'warn';
+      text = counts.pending + ' ticket(s) waiting to print…';
+    } else {
+      text = 'Printer ready · agent checked in ' + Math.max(0, Math.round(age / 1000)) + 's ago.';
+    }
+  }
+  el.className = 'printer-line ' + cls;
+  $('#printerText').textContent = text;
+}
+
+async function load() {
+  const j = await fetch('/api/orders', { headers: headers() })
+    .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
+    .catch(() => null);
+  if (!j) { $('#list').innerHTML = '<div class="empty">Could not load orders.</div>'; return; }
+  showAuth(false);
+  renderStore(j.store);
+  boardOrders = j.orders || [];
+  boardMembers = j.members || {};
+  handleNewOrders(j.orders || []);
+  loadPrinter();
+  const f = $('#filter').value;
+  const list = (j.orders||[]).filter(o => passFilter(o, f));
+  $('#list').innerHTML = list.length
+    ? list.map(orderCard).join('')
+    : '<div class="empty">No orders here yet.</div>';
+  /* Ring the cards that arrived since the last poll so they're spottable at a
+     glance on a wall-mounted tablet, where a toast may go unnoticed. */
+  document.querySelectorAll('#list .order').forEach(el => {
+    if (freshIds.has(el.dataset.id)) el.classList.add('fresh');
+  });
+}
+
+/* ---- staff discount ------------------------------------------------------
+   A staff discount is re-priced by the SERVER, not by this page: the board
+   sends { type, value } and gets the new total back. Only one discount is ever
+   on an order, so applying one here replaces a guest's code rather than
+   stacking with it — the alternative (silent stacking) is how a $30 order
+   quietly becomes a $12 order. */
+let discFor = null;
+
+function openDisc(id) {
+  const o = boardOrders.find(x => x.id === id);
+  if (!o) { toast('Order not found'); return; }
+  discFor = id;
+  $('#discNo').textContent = '#' + o.id;
+  $('#discNow').textContent = 'Current total: ' + money(o.total) +
+    (Number(o.discountAmount) > 0 ? ' · discount −' + money(o.discountAmount) : '');
+  $('#discMsg').textContent = '';
+  $('#discModal').hidden = false;
+  $('#discVal').focus();
+}
+
+function closeDisc() { discFor = null; $('#discModal').hidden = true; }
+
+async function applyDisc(discount) {
+  if (!discFor) return;
+  const j = await fetch('/api/orders/' + encodeURIComponent(discFor), {
+    method: 'PATCH', headers: headers(), body: JSON.stringify({ discount })
+  }).then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
+    .catch(() => null);
+
+  if (!j || j.error) {
+    $('#discMsg').textContent = (j && j.message) || 'Could not apply that discount.';
+    return;
+  }
+  closeDisc();
+  toast(discount
+    ? 'Discount applied — new total ' + money(j.total)
+    : 'Discount removed — new total ' + money(j.total));
+  load();
+}
+
+$('#discApply').onclick = () => {
+  const type = $('#discType').value;
+  const val = Number($('#discVal').value);
+  if (type !== 'freeship') {
+    if (!isFinite(val) || val <= 0) { $('#discMsg').textContent = 'Enter an amount greater than 0.'; return; }
+    if (type === 'percent' && val > 100) { $('#discMsg').textContent = 'Percent cannot be more than 100.'; return; }
+  }
+  applyDisc({ type, value: type === 'freeship' ? 0 : val, source: 'staff' });
+};
+$('#discClear').onclick = () => applyDisc(null);
+$('#discCancel').onclick = closeDisc;
+$('#discModal').onclick = (e) => { if (e.target.id === 'discModal') closeDisc(); };
+
+$('#list').addEventListener('click', async (e) => {
+  const db = e.target.closest('button[data-disc]');
+  if (db) { openDisc(db.dataset.disc); return; }
+  /* Payment re-check. The board can only settle an order when the guest's
+     browser reports back from Stripe; if they paid and closed the tab, the order
+     sits unconfirmed with the money already taken. This asks the SERVER to look
+     the session up by order number and settle from Stripe's own answer, so a
+     human never has to guess whether the guest actually paid. */
+  const rc = e.target.closest('button[data-recheck]');
+  if (rc) {
+    rc.disabled = true;
+    rc.textContent = '💳 Checking…';
+    const j = await fetch('/api/orders/' + encodeURIComponent(rc.dataset.recheck) + '/recheck-payment',
+      { method: 'POST', headers: headers() })
+      .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
+      .catch(() => null);
+    if (!j) toast('Re-check failed — could not reach the server');
+    else if (j.ok && j.paid) toast('Paid ✓ — board updated');
+    else if (j.ok) toast('Stripe says this order was NOT paid');
+    else if (j.error === 'session_not_found') toast('Stripe has no payment for this order');
+    else if (j.error === 'not_a_card_order') toast('This order was not paid online');
+    else toast('Re-check failed: ' + (j.error || 'unknown'));
+    rc.disabled = false;
+    rc.textContent = '💳 Re-check payment';
+    load();
+    return;
+  }
+  const rp = e.target.closest('button[data-reprint]');
+  if (rp) {
+    rp.disabled = true;
+    const j = await fetch('/api/orders/' + encodeURIComponent(rp.dataset.reprint) + '/reprint',
+      { method: 'POST', headers: headers() })
+      .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
+      .catch(() => null);
+    toast(j && j.ok ? 'Reprint sent to the printer' : 'Reprint failed');
+    rp.disabled = false;
+    load();
+    return;
+  }
+  /* Money handed over at the counter. This is also the moment the guest earns
+     their points — the server credits them from the payment status, so marking
+     it here is all that is needed. 'paid' rather than 'verified': the verdict
+     came from a person, not from Stripe, and the board already renders both as
+     PAID. */
+  const cb = e.target.closest('button[data-collect]');
+  if (cb) {
+    cb.disabled = true;
+    cb.textContent = '💵 Saving…';
+    const j = await patchStatus(cb.dataset.collect, { paymentStatus: 'paid' });
+    if (j && j.ok) toast('Marked paid — points credited');
+    else if (j && j.message) toast(j.message);
+    load();
+    return;
+  }
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const id = b.dataset.id, act = b.dataset.act;
+  patchStatus(id, { status: act }).then(() => load());
+});
+
+$('#filter').onchange = load;
+
+/* ---- boot ----------------------------------------------------------------
+   StaffPWA.init() registers the service worker, captures beforeinstallprompt
+   (when Chrome feels like firing it), and renders the install button into the
+   staff-bar. renderNotifyBtn() makes the notification toggle match the current
+   permission + on/off state — both must run BEFORE the first load() so the
+   board UI is correct even if the API request is slow. */
+if (window.StaffPWA) {
+  StaffPWA.init({ installHost: document.getElementById('installHost') });
+}
+renderNotifyBtn();
+
+// initial load + poll
+load();
+setInterval(load, 4000);
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "KPOT To Go — Admin",
+  "short_name": "KPOT Admin",
+  "description": "Owner console: generate QR codes, print table cards, check configuration.",
+  "id": "admin.html",
+  "start_url": "./admin.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111014",
+  "theme_color": "#D7263D",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

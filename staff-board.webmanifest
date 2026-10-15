@@ -1,0 +1,17 @@
+{
+  "name": "KPOT Kitchen — Orders",
+  "short_name": "Kitchen",
+  "description": "Live order board for KPOT To Go. Get a notification the moment a new order comes in.",
+  "id": "admin-orders.html",
+  "start_url": "./admin-orders.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111014",
+  "theme_color": "#D7263D",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

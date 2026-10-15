@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">
+<meta name="theme-color" content="#111014">
+<meta name="description" content="KPOT To Go — order Korean BBQ & Hot Pot online. Scan, build your bowl, pay, pick up.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KPOT To Go">
+<title>KPOT To Go — Order &amp; Pay</title>
+
+<!-- Installable PWA: lets guests add the page to their Home Screen so we can
+     send them a phone notification when their order is ready. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='48' fill='%23D7263D'/><text x='50' y='70' font-size='62' font-family='Arial' font-weight='bold' fill='white' text-anchor='middle'>K</text></svg>">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ============ TOP BAR ============ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo-k">K</div>
+      <div class="brand-txt">
+        <b id="storeName">KPOT To Go</b>
+        <span id="storeTag">Order &amp; Pay</span>
+      </div>
+    </div>
+    <button class="icon-btn hist-btn" id="histBtn" aria-label="Recent orders" hidden>
+      🧾<span class="cart-badge" id="histBadge">0</span>
+    </button>
+    <button class="icon-btn cart-btn" id="cartBtn" aria-label="View order">
+      🛒<span class="cart-badge" id="cartBadge">0</span>
+    </button>
+  </header>
+
+  <!-- ============ ADD-TO-HOME-SCREEN PROMPT ============ -->
+  <div id="installBanner" class="install-banner" hidden></div>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="hero-eyebrow">🔥 Same bold flavors, a faster way</div>
+    <h1>Korean BBQ &amp; <em>Hot Pot</em><br>ready to go.</h1>
+    <p>Build your bowl, pick your proteins, pay on your phone. We'll have it hot and waiting.</p>
+    <div class="hero-badges">
+      <span class="badge live" id="openBadge">Kitchen open now</span>
+      <span class="badge">🛍️ Ready in ~20 min</span>
+      <span class="badge">📱 No app needed</span>
+    </div>
+  </section>
+
+  <!-- ============ ORDER TYPE ============ -->
+  <section class="ordertype">
+    <div class="section-label">How would you like it?</div>
+    <div class="ot-grid" id="otGrid"></div>
+    <div class="table-input" id="tableWrap">
+      <label for="tableNo">🍽️ Your table number</label>
+      <input id="tableNo" type="tel" inputmode="numeric" placeholder="12" aria-label="Table number">
+    </div>
+  </section>
+
+  <!-- ============ CATEGORY TABS ============ -->
+  <div class="tabs-wrap" id="tabsWrap">
+    <nav class="tabs" id="tabs" aria-label="Menu categories"></nav>
+  </div>
+
+  <!-- ============ MENU ============ -->
+  <main class="menu-body" id="menuBody"></main>
+
+  <!-- ============ STORE INFO FOOTER ============ -->
+  <footer class="site-foot" id="siteFoot"></footer>
+
+  <!-- ============ STICKY CART BAR ============ -->
+  <div class="cart-bar" id="cartBar">
+    <button class="btn btn-primary" id="cartBarBtn" onclick="document.getElementById('cartBtn').click()">
+      <span>View Order</span>
+      <span class="cnt" id="cartBarCount">0</span>
+      <span class="spacer"></span>
+      <span id="cartBarTotal">$0.00</span>
+    </button>
+  </div>
+
+  <!-- ============ SHEET ============ -->
+  <div class="sheet-backdrop" id="backdrop"></div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
+
+  <!-- ============ TOASTS ============ -->
+  <div class="toast-wrap" id="toasts"></div>
+
+</div>
+
+<script src="assets/qrcode.min.js"></script>
+<script src="assets/config.js"></script>
+<script src="assets/menu.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

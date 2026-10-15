@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<meta name="robots" content="noindex, nofollow">
+<title>KPOT To Go — Menu Editor</title>
+<link rel="manifest" href="staff-menu.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Menu">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<style>
+  :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
+          --line:#322f3a; --txt:#F4F1EA; --mut:#9a93a0; --green:#2EA043; --amber:#E8B44A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family: Inter, -apple-system, system-ui, Segoe UI, Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+  a { color:var(--red); }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 16px 14px 90px; }
+  header.bar { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .logo-k { width:38px; height:38px; border-radius:10px; background:var(--red);
+            color:#fff; font-weight:900; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  header.bar h1 { font-size:18px; margin:0; flex:1; }
+  header.bar a.home { font-size:13px; color:var(--mut); text-decoration:none; }
+  #keybar { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+  #keybar input { flex:1; background:var(--card2); border:1px solid var(--line); color:var(--txt);
+                  border-radius:10px; padding:9px 10px; font:inherit; }
+  .banner { background:var(--red); color:#fff; padding:8px 12px; border-radius:10px; margin-bottom:12px; font-weight:700; }
+  .toolbar { position:sticky; top:0; z-index:5; background:rgba(17,16,20,.92); backdrop-filter:blur(6px);
+             display:flex; gap:8px; align-items:center; padding:10px 0; margin-bottom:6px; flex-wrap:wrap;
+             border-bottom:1px solid var(--line); }
+  .btn { font:inherit; font-weight:800; padding:10px 15px; border-radius:10px; border:1px solid var(--line);
+         background:var(--card2); color:var(--txt); cursor:pointer; }
+  .btn.primary { background:var(--red); border-color:var(--red); color:#fff; }
+  .btn.ghost { background:transparent; }
+  .status { font-size:13px; margin-left:auto; color:var(--mut); }
+  .status.ok { color:#6ee787; } .status.err { color:#ff7b72; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  .card h2 .hint { font-weight:400; font-size:12px; color:var(--mut); margin-left:6px; }
+  .card h3 { font-size:12.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut);
+             margin:16px 0 8px; display:flex; align-items:center; gap:8px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+  .row .grow { flex:1; }
+  input { background:var(--card2); border:1px solid var(--line); color:var(--txt); border-radius:9px;
+          padding:9px 10px; font:inherit; min-width:0; flex:1; }
+  input:focus { outline:none; border-color:var(--red); }
+  input[type=number] { max-width:120px; }
+  .idx { width:24px; height:24px; flex:none; border-radius:50%; background:var(--card2); border:1px solid var(--line);
+         display:grid; place-items:center; font-size:12px; font-weight:800; color:var(--mut); }
+  .box { border:1px dashed var(--line); border-radius:12px; padding:12px; margin:10px 0; }
+  .opts { display:flex; flex-direction:column; gap:6px; margin:6px 0; }
+  .opt { display:flex; gap:8px; align-items:center; }
+  .opt input:first-child { flex:0 0 64px; max-width:64px; text-align:center; }
+  .x { flex:none; background:transparent; border:1px solid var(--line); color:var(--mut); border-radius:8px;
+       width:34px; height:34px; cursor:pointer; font-size:15px; line-height:1; }
+  .x:hover { color:#ff7b72; border-color:#ff7b72; }
+  .x.wide { width:auto; padding:0 12px; font-size:12px; font-weight:700; }
+  .add { background:transparent; border:1px dashed var(--line); color:var(--mut); border-radius:8px;
+         padding:7px 12px; cursor:pointer; font:inherit; font-weight:700; font-size:12.5px; }
+  .add:hover { color:var(--txt); border-color:var(--red); }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#000; color:#fff;
+           padding:10px 16px; border-radius:10px; opacity:0; transition:.3s; pointer-events:none; z-index:99; }
+  .toast.show { opacity:1; }
+  /* Staff install bar (shared look with admin.html / admin-orders.html). */
+  .staff-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;
+    background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .staff-bar .install-btn{background:var(--card2);color:var(--txt);
+    border:1px solid var(--line);border-radius:10px;padding:8px 12px;
+    font:inherit;font-weight:700;cursor:pointer}
+  .staff-bar .install-btn:hover{border-color:var(--red)}
+  .staff-bar .install-btn[hidden]{display:none}
+  .install-note{flex-basis:100%;font-size:12px;color:var(--mut);line-height:1.5}
+  .install-note[hidden]{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <div class="logo-k">K</div>
+    <h1>Menu Editor</h1>
+    <a class="home" href="admin-orders.html">📋 Live Orders</a>
+    <a class="home" href="admin.html">← Admin</a>
+    <a class="home" href="index.html">Store ↗</a>
+  </header>
+
+  <div id="keybar">
+    <input id="adminKey" placeholder="Admin key (leave blank if none set)" autocomplete="off">
+    <button class="btn" id="saveKey">Save</button>
+  </div>
+  <div id="authBanner" class="banner" hidden>🔒 Set the admin key above, then reload the menu.</div>
+
+  <div class="staff-bar">
+    <span id="installHost"></span>
+    <span style="font-size:12px;color:var(--mut);flex:1">Pin the menu editor to your home screen so you can tweak prices on the fly.</span>
+  </div>
+
+  <div class="toolbar">
+    <button class="btn primary" id="save">💾 Save changes</button>
+    <button class="btn" id="reload">↻ Reload</button>
+    <button class="btn ghost" id="reset">Reset to defaults</button>
+    <span class="status" id="status">Loading…</span>
+  </div>
+
+  <div id="editor"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="assets/staff-pwa.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let KEY = sessionStorage.getItem('kpotAdminKey') || '';
+$('#adminKey').value = KEY;
+function headers() { return { 'Content-Type':'application/json', ...(KEY ? { 'X-Admin-Key': KEY } : {}) }; }
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2000); }
+function status(ok, m) { const s = $('#status'); s.textContent = m; s.className = 'status ' + (ok === null ? '' : (ok ? 'ok' : 'err')); }
+function showAuth(b) { $('#authBanner').hidden = !b; }
+
+/* state mirrors the menu; DOM inputs are bound to it by dotted path. */
+const state = { menu: null, categories: null };
+
+function getPath(obj, path) { return path.split('.').reduce((o,k) => (o==null ? undefined : o[k]), obj); }
+function setPath(obj, path, val) {
+  const segs = path.split('.'); let cur = obj;
+  for (let i=0;i<segs.length-1;i++) cur = cur[segs[i]];
+  cur[segs[segs.length-1]] = val;
+}
+
+function inp(path, ph, type) {
+  const t = type || 'text';
+  const v = getPath(state, path);
+  const val = Array.isArray(v) ? v.join(', ') : (v == null ? '' : String(v));
+  const tn = (t === 'number') ? 'number' : 'text';
+  const extra = (t === 'number') ? ' step="0.01" min="0"' : '';
+  const dt = (t === 'list') ? 'list' : t;
+  return '<input type="'+tn+'"'+extra+' data-bind="'+path+'" data-type="'+dt+'" placeholder="'+esc(ph||'')+'" value="'+esc(val)+'">';
+}
+function delBtn(path, label) { return '<button class="x'+(label?' wide':'')+'" data-del="'+path+'" title="Remove">'+(label||'×')+'</button>'; }
+function addBtn(path, kind, label) { return '<button class="add" data-add="'+path+'" data-kind="'+kind+'">'+(label||'+ add')+'</button>'; }
+
+/* DOM -> state */
+function harvest() {
+  document.querySelectorAll('[data-bind]').forEach((el) => {
+    const p = el.dataset.bind, t = el.dataset.type;
+    let v = el.value;
+    if (t === 'number') v = v === '' ? 0 : Number(v);
+    if (t === 'list') v = v.split(',').map(s=>s.trim()).filter(Boolean);
+    setPath(state, p, v);
+  });
+}
+
+function tmpl(kind) {
+  const n = Math.floor(Math.random()*9000+1000);
+  switch (kind) {
+    case 'hotpotStep': return { id:'step'+n, title:'New Step', choose:1, items:[{ n:'New Option', emoji:'🍽️' }] };
+    case 'hotpotItem': return { n:'New Option', emoji:'🍽️' };
+    case 'addon':      return { id:'addon'+n, n:'New Add-on', d:'', price:0 };
+    case 'bbqSize':    return { id:'size'+n, n:'New Size', price:0, picks:1, emoji:'🍽️' };
+    case 'protein':    return { n:'New Protein', emoji:'🍖' };
+    case 'drinkGroup': return { id:'group'+n, n:'New Group', price:0, options:['New Option'] };
+    case 'drinkOption':return 'New Option';
+    case 'sideGroup':  return { id:'group'+n, n:'New Group', items:[{ n:'New Item', price:0, emoji:'🍽️' }] };
+    case 'sideItem':   return { n:'New Item', price:0, emoji:'🍽️' };
+    default: return '';
+  }
+}
+function addAt(path, kind) {
+  harvest();
+  const arr = getPath(state, path);
+  if (Array.isArray(arr)) arr.push(tmpl(kind));
+  render();
+}
+function delAt(path) {
+  harvest();
+  const segs = path.split('.'); const idx = Number(segs.pop());
+  const arr = getPath(state, segs.join('.'));
+  if (Array.isArray(arr) && idx >= 0 && idx < arr.length) arr.splice(idx, 1);
+  render();
+}
+
+function addonRows(list, base) {
+  let h = '';
+  (list||[]).forEach((a, i) => {
+    h += '<div class="row">' + inp(base+'.'+i+'.n','Name') + inp(base+'.'+i+'.d','Description')
+       + inp(base+'.'+i+'.price','Price','number') + delBtn(base+'.'+i) + '</div>';
+  });
+  h += addBtn(base, 'addon', '+ add-on');
+  return h;
+}
+
+function render() {
+  const m = state.menu, c = state.categories;
+  if (!m) return;
+  let h = '';
+
+  /* Categories */
+  h += '<div class="card"><h2>Categories <span class="hint">the tabs across the top</span></h2>';
+  c.forEach((cat, i) => {
+    h += '<div class="row"><span class="idx">'+(i+1)+'</span>'
+       + inp('categories.'+i+'.n','Name') + inp('categories.'+i+'.sub','Subtitle') + '</div>';
+  });
+  h += '</div>';
+
+  /* Hot Pot */
+  const hp = m.hotpot;
+  h += '<div class="card"><h2>🔥 Hot Pot — Build Your Own Bowl</h2>';
+  h += '<div class="row">' + inp('menu.hotpot.basePrice','Base price','number') + inp('menu.hotpot.priceLabel','Price label') + '</div>';
+  h += '<h3>Steps ' + addBtn('menu.hotpot.steps','hotpotStep','+ step') + '</h3>';
+  hp.steps.forEach((s, si) => {
+    h += '<div class="box">';
+    h += '<div class="row"><b class="grow">Step '+(si+1)+'</b>' + delBtn('menu.hotpot.steps.'+si,'remove step') + '</div>';
+    h += '<div class="row">' + inp('menu.hotpot.steps.'+si+'.title','Step title')
+       + inp('menu.hotpot.steps.'+si+'.choose','Choose how many','number') + '</div>';
+    h += '<div class="opts">';
+    (s.items||[]).forEach((it, ii) => {
+      h += '<div class="opt">' + inp('menu.hotpot.steps.'+si+'.items.'+ii+'.emoji','😀')
+         + inp('menu.hotpot.steps.'+si+'.items.'+ii+'.n','Option name')
+         + delBtn('menu.hotpot.steps.'+si+'.items.'+ii) + '</div>';
+    });
+    h += '</div>' + addBtn('menu.hotpot.steps.'+si+'.items','hotpotItem','+ option');
+    h += '</div>';
+  });
+  h += '<h3>Add-ons</h3>' + addonRows(hp.addons, 'menu.hotpot.addons');
+  h += '</div>';
+
+  /* BBQ */
+  const b = m.bbq;
+  h += '<div class="card"><h2>🥩 BBQ To Go — Protein Bowls</h2>';
+  h += '<h3>Sizes ' + addBtn('menu.bbq.sizes','bbqSize','+ size') + '</h3>';
+  b.sizes.forEach((s, i) => {
+    h += '<div class="row">' + inp('menu.bbq.sizes.'+i+'.n','Name') + inp('menu.bbq.sizes.'+i+'.price','Price','number')
+       + inp('menu.bbq.sizes.'+i+'.picks','Picks','number') + delBtn('menu.bbq.sizes.'+i) + '</div>';
+  });
+  h += '<h3>Proteins ' + addBtn('menu.bbq.proteins','protein','+ protein') + '</h3><div class="opts">';
+  b.proteins.forEach((p, i) => {
+    h += '<div class="opt">' + inp('menu.bbq.proteins.'+i+'.emoji','😀') + inp('menu.bbq.proteins.'+i+'.n','Protein')
+       + delBtn('menu.bbq.proteins.'+i) + '</div>';
+  });
+  h += '</div>';
+  h += '<h3>Comes with <span class="hint">comma-separated</span></h3><div class="row">' + inp('menu.bbq.comesWith','Rice, Kimchi, Veggies','list') + '</div>';
+  h += '<h3>Add-ons</h3>' + addonRows(b.addons, 'menu.bbq.addons');
+  h += '</div>';
+
+  /* Drinks */
+  const d = m.drinks;
+  h += '<div class="card"><h2>🥤 Drinks</h2>' + addBtn('menu.drinks.groups','drinkGroup','+ group');
+  d.groups.forEach((g, gi) => {
+    h += '<div class="box">';
+    h += '<div class="row"><b class="grow">Group '+(gi+1)+'</b>' + delBtn('menu.drinks.groups.'+gi,'remove group') + '</div>';
+    h += '<div class="row">' + inp('menu.drinks.groups.'+gi+'.n','Group name') + inp('menu.drinks.groups.'+gi+'.price','Price','number')
+       + inp('menu.drinks.groups.'+gi+'.note','Note (optional)') + '</div>';
+    h += '<div class="opts">';
+    (g.options||[]).forEach((o, oi) => {
+      h += '<div class="opt">' + inp('menu.drinks.groups.'+gi+'.options.'+oi,'Option') + delBtn('menu.drinks.groups.'+gi+'.options.'+oi) + '</div>';
+    });
+    h += '</div>' + addBtn('menu.drinks.groups.'+gi+'.options','drinkOption','+ option');
+    h += '</div>';
+  });
+  h += '</div>';
+
+  /* Sides */
+  const sd = m.sides;
+  h += '<div class="card"><h2>🍽️ A La Carte — Sides &amp; Snacks</h2>' + addBtn('menu.sides.groups','sideGroup','+ group');
+  sd.groups.forEach((g, gi) => {
+    h += '<div class="box">';
+    h += '<div class="row"><b class="grow">Group '+(gi+1)+'</b>' + delBtn('menu.sides.groups.'+gi,'remove group') + '</div>';
+    h += '<div class="row">' + inp('menu.sides.groups.'+gi+'.n','Group name') + '</div>';
+    h += '<div class="opts">';
+    (g.items||[]).forEach((it, ii) => {
+      h += '<div class="opt">' + inp('menu.sides.groups.'+gi+'.items.'+ii+'.emoji','😀')
+         + inp('menu.sides.groups.'+gi+'.items.'+ii+'.n','Item')
+         + inp('menu.sides.groups.'+gi+'.items.'+ii+'.price','Price','number')
+         + delBtn('menu.sides.groups.'+gi+'.items.'+ii) + '</div>';
+    });
+    h += '</div>' + addBtn('menu.sides.groups.'+gi+'.items','sideItem','+ item');
+    h += '</div>';
+  });
+  h += '</div>';
+
+  $('#editor').innerHTML = h;
+}
+
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-add]'); if (a) { addAt(a.dataset.add, a.dataset.kind); return; }
+  const d = e.target.closest('[data-del]'); if (d) { delAt(d.dataset.del); return; }
+});
+
+async function load() {
+  status(null, 'Loading…');
+  const r = await fetch('/api/menu', { headers: headers() });
+  const j = await r.json().catch(() => null);
+  if (!j || !j.menu) { status(false, 'Could not load the menu.'); return; }
+  state.menu = j.menu; state.categories = j.categories;
+  render();
+  status(true, j.custom ? 'Editing your saved menu — changes go live on Save.' : 'Editing the default menu (not customised yet).');
+}
+
+async function save() {
+  harvest();
+  const r = await fetch('/api/menu', { method:'PUT', headers: headers(), body: JSON.stringify({ menu: state.menu, categories: state.categories }) });
+  if (r.status === 401) { showAuth(true); status(false, 'Unauthorized — set the admin key.'); return; }
+  const j = await r.json().catch(() => ({}));
+  if (r.ok) { status(true, 'Saved ✓  Guests see the new menu immediately.'); toast('Menu saved'); }
+  else { status(false, 'Save failed: ' + (j.message || j.error || r.status)); }
+}
+
+async function reset() {
+  if (!confirm('Reset the menu back to the built-in defaults? Your saved changes will be lost.')) return;
+  const r = await fetch('/api/menu/reset', { method:'POST', headers: headers() });
+  if (r.status === 401) { showAuth(true); return; }
+  const j = await r.json().catch(() => ({}));
+  if (r.ok && j.menu) { state.menu = j.menu; state.categories = j.categories; render(); status(true, 'Menu reset to defaults.'); toast('Reset done'); }
+  else status(false, 'Reset failed.');
+}
+
+$('#save').onclick = save;
+$('#reload').onclick = load;
+$('#reset').onclick = reset;
+$('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorage.setItem('kpotAdminKey', KEY); toast('Key saved'); load(); };
+
+if (window.StaffPWA) {
+  StaffPWA.init({ installHost: document.getElementById('installHost') });
+}
+
+load();
+</script>
+</body>
+</html>

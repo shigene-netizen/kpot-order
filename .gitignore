@@ -1,0 +1,42 @@
+# --- Secrets -----------------------------------------------------------------
+# Contains your Stripe secret key and the back-office admin key.
+# NEVER commit this file. If it leaks, roll the Stripe key immediately.
+secrets.local.json
+secrets*.local.json
+# The kitchen print agent's own config. It holds the print key, which is the
+# admin key whenever no dedicated printKey is set — so treat it as a secret.
+# The template to copy from is print-agent/config.example.json.
+print-agent/config.json
+
+# --- Runtime state (written by the server) ------------------------------------
+# Anything the server writes while it runs. New files keep appearing as features
+# grow — customers.local.json (loyalty) and discounts.local.json (coupon codes)
+# were both missed by the hand-maintained list below, and a list like that goes
+# stale silently. So match the whole family: these hold customer names and phone
+# numbers and must never be committed.
+*.local.json
+# The live order board and the owner-edited menu. These are your shop's data,
+# not source code — back them up, but don't commit them.
+orders.local.json
+menu.local.json
+# The owner's manual switches: store open/closed and which order channels
+# (pickup / dine-in / delivery) are taking orders.
+store.local.json
+# Queued kitchen tickets. Ephemeral, and it holds the rendered ticket bytes.
+print.local.json
+
+# Dated CSV/JSON backups written by the server (startup / daily / periodic /
+# shutdown). Contains customer names and phone numbers — never commit.
+order-backups/
+
+# --- Dependencies / OS noise ---------------------------------------------------
+node_modules/
+npm-debug.log*
+*.log
+.DS_Store
+Thumbs.db
+
+# --- Dev scratch ---------------------------------------------------------------
+# Screenshots captured by the CDP browser tests. Handy locally, not worth
+# committing — they are regenerated on every run.
+_dev/screens/

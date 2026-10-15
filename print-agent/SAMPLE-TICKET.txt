@@ -1,0 +1,112 @@
+================================================
+ SAMPLE KITCHEN TICKETS — 80mm roll (48 columns)
+================================================
+
+### A. PAID ONLINE (stripe) — no money to collect
+------------------------------------------------
+                 K I T C H E N
+                   KPOT To Go
+               10/07/26, 12:42 PM
+------------------------------------------------
+           K P - 2 6 1 0 0 7 - 0 1 4
+TYPE                                      PICKUP
+NAME                                   Alex Chen
+PHONE                             (678) 335-5388
+WHEN                                        ASAP
+------------------------------------------------
+             PAID - DO NOT COLLECT
+------------------------------------------------
+1 x   B u i l d   Y o u r   O w n   B o w l
+   Broth: Japanese Miso
+   Protein: Thinly Sliced Beef
+   Spicy: Medium
+
+2 x   T h a i   M i l k   T e a
+   Ice: Less
+   Sweetness: 50%
+
+------------------------------------------------
+NOTE
+  No chopsticks, extra napkins please
+------------------------------------------------
+SUBTOTAL                                  $25.97
+TAX                                        $1.56
+TOTAL                                     $27.53
+
+                 KP-261007-014
+
+
+
+===================== cut ======================
+
+### B. PAY AT COUNTER — the loud unpaid warning
+------------------------------------------------
+                 K I T C H E N
+                   KPOT To Go
+               10/07/26, 12:42 PM
+------------------------------------------------
+           K P - 2 6 1 0 0 7 - 0 1 5
+TYPE                                      PICKUP
+NAME                                     Walk-in
+PHONE                             (678) 335-5388
+WHEN                                        ASAP
+------------------------------------------------
+          * * *   U N P A I D   * * *
+          C O L L E C T   $ 2 7 . 5 3
+------------------------------------------------
+1 x   B u i l d   Y o u r   O w n   B o w l
+   Broth: Japanese Miso
+   Protein: Thinly Sliced Beef
+   Spicy: Medium
+
+2 x   T h a i   M i l k   T e a
+   Ice: Less
+   Sweetness: 50%
+
+------------------------------------------------
+SUBTOTAL                                  $25.97
+TAX                                        $1.56
+TOTAL                                     $27.53
+
+                 KP-261007-015
+
+
+
+===================== cut ======================
+
+### C. same ticket on a 58mm roll (32 columns)
+--------------------------------
+         K I T C H E N
+           KPOT To Go
+       10/07/26, 12:42 PM
+--------------------------------
+   K P - 2 6 1 0 0 7 - 0 1 5
+TYPE                      PICKUP
+NAME                     Walk-in
+PHONE             (678) 335-5388
+WHEN                        ASAP
+--------------------------------
+  * * *   U N P A I D   * * *
+  C O L L E C T   $ 2 7 . 5 3
+--------------------------------
+1x Build Your Own Bowl
+   Broth: Japanese Miso
+   Protein: Thinly Sliced Beef
+   Spicy: Medium
+
+2 x   T h a i   M i l k   T e a
+   Ice: Less
+   Sweetness: 50%
+
+--------------------------------
+SUBTOTAL                  $25.97
+TAX                        $1.56
+TOTAL                     $27.53
+
+         KP-261007-015
+
+
+
+============= cut ==============
+
+bytes sent to the printer for ticket B: 887
