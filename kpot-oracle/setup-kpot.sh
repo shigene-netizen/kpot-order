@@ -161,12 +161,33 @@ systemctl enable caddy >/dev/null
 systemctl restart caddy
 
 say "7/7  Opening ports and starting"
-# Oracle's Ubuntu images ship with a tight iptables INPUT chain, so both the
-# console's Security List AND this firewall have to allow 80/443.
+# Oracle's Ubuntu images ship with a tight iptables INPUT chain that ends in a
+# catch-all REJECT, so both the console's Security List AND this firewall have
+# to allow 80/443.
+#
+# The REJECT's position depends on the image release — it is 5 on Ubuntu 24.04
+# but 6 on some others. Do NOT hardcode an index: inserting at a fixed number
+# silently lands the rules *below* the REJECT, where they match nothing. The
+# symptom is nasty because every local check looks healthy (the service is up,
+# Caddy is listening, the rules are "there") while the site is unreachable from
+# the internet. Find the REJECT and insert above it.
 for p in 80 443; do
-  iptables -I INPUT 6 -p tcp --dport "$p" -m state --state NEW -j ACCEPT 2>/dev/null || true
+  while iptables -D INPUT -p tcp --dport "$p" -m state --state NEW -j ACCEPT 2>/dev/null; do :; done
 done
-iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+reject_at="$(iptables -L INPUT -n --line-numbers | awk '$2 == "REJECT" { print $1; exit }')"
+[ -n "$reject_at" ] || reject_at=1
+for p in 80 443; do
+  iptables -I INPUT "$reject_at" -p tcp --dport "$p" -m state --state NEW -j ACCEPT
+done
+info "opened 80/443 (inserted above the REJECT rule at position $reject_at)"
+
+# Persist across reboots. netfilter-persistent replays this file at boot; the
+# older images ship it, newer ones may not.
+mkdir -p /etc/iptables
+iptables-save > /etc/iptables/rules.v4
+if ! command -v netfilter-persistent >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+fi
 systemctl restart "$SERVICE"
 sleep 2
 
