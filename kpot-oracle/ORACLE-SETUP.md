@@ -43,8 +43,24 @@ The installer pulls the app from GitHub, so it has to live there first.
      (Oracle cut this from 4/24 in June 2026; 2/12 is still far more than
      this app needs)
 4. **Image**: Ubuntu 22.04 (or 24.04). Keep the defaults.
-5. **Networking**: keep the defaults, and make sure **Assign a public IPv4
-   address** is on. **Write down that IP.**
+5. **Networking** — ⚠️ do NOT use the wizard's inline "Create new virtual cloud
+   network". With that path the **Assign a public IPv4 address** toggle comes up
+   **greyed out and cannot be clicked**, so the instance ends up with no public
+   IP and nothing can reach it. Build the network *first* instead:
+
+   1. Networking → **Virtual Cloud Networks** → **Create VCN**
+      Name `kpot-vcn`, IPv4 CIDR `10.0.0.0/16` → Create
+   2. **Gateways** tab → **Create Internet Gateway** → name `kpot-igw`
+   3. **Routing** tab → open **Default Route Table** → **Add Route Rules**
+      → Target Type **Internet Gateway**, Destination CIDR `0.0.0.0/0`,
+      Target `kpot-igw` → Add
+   4. **Subnets** tab → **Create Subnet** → name `kpot-public-subnet`,
+      Type **Regional**, CIDR `10.0.1.0/24`, Route Table **Default Route
+      Table**, Subnet Access **Public Subnet** → Create
+   5. Back in the instance wizard: **Select existing** VCN → `kpot-vcn`,
+      **Select existing** subnet → `kpot-public-subnet`.
+      The public-IPv4 toggle is now clickable — **turn it on.
+      Write down that IP.**
 6. **Add SSH keys**: choose "Generate a key pair" and **download both the
    public and the private key**. You cannot get the private key later.
 7. Create.
