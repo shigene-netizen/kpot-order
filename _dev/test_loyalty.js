@@ -141,15 +141,20 @@ const o1 = order('KP-1', 15.99);
 const first = L.awardForOrder(c1, o1, NOW);
 ok('the first order reports a change', first.changed === true);
 check('the first order earns 15 points', first.points, 15);
-/* The come-back coupon is switched OFF (see the header note in customers.js):
-   a reward that carries a date reads to a guest as "my points expire", and
-   that is not the deal we offer. Nothing handed out may have a countdown. */
-check('and NO come-back coupon — the expiring reward is off', first.coupons.length, 0);
+/* The come-back coupon is ON (see the header note in customers.js). It is the
+   ONE reward that carries a date — that is its whole job: pull the guest back
+   within a fortnight. The promise the owner actually cares about is that
+   POINTS and STAMP rewards never expire, so that difference is pinned down
+   here rather than blurred. */
+check('and a come-back coupon rides along with the first order', first.coupons.length, 1);
+check('of the kind that is meant to expire', first.coupons[0].kind, 'return');
+ok('and it does carry an end date', !!Date.parse(first.coupons[0].expiresAt));
 check('the balance is 15', c1.points, 15);
 check('the lifetime total is 15', c1.lifetimePoints, 15);
 check('settled orders is 1', c1.settledOrders, 1);
 check('no stamp yet (10 orders is the milestone)', c1.stampsIssued, 0);
-ok('nothing on the ledger carries an expiry date', c1.coupons.every((c) => !c.expiresAt));
+ok('and the POINTS BALANCE carries no expiry of its own to be forgotten',
+  c1.expiresAt === undefined && c1.pointsExpireAt === undefined);
 ok('the earn is logged', c1.log.some((e) => e.kind === 'earn' && e.delta === 15));
 
 /* ---- Idempotency is per-ORDER, not per-guest ----
@@ -160,7 +165,7 @@ const again = L.awardForOrder(c1, o1, NOW + 'x'.length && NOW); /* the same orde
 ok('a re-award of the SAME order is refused', again.changed === false);
 check('and says why', again.reason, 'already_awarded');
 check('the balance did not move', c1.points, 15);
-check('and no coupon appeared on the re-award', c1.coupons.length, 0);
+check('and no SECOND coupon appeared on the re-award', c1.coupons.length, 1);
 check('settled orders still 1', c1.settledOrders, 1);
 
 /* A SECOND, DIFFERENT order still pays — the guard is the order, not a
@@ -176,14 +181,15 @@ for (let i = 1; i <= 10; i++) L.awardForOrder(c10, order('KP-' + i, 10), NOW);
 check('after 10 orders the milestone is due once', c10.stampsIssued, 1);
 check('and one $10 stamp reward exists',
   c10.coupons.filter((c) => c.kind === 'stamp').length, 1);
-check('the stamp reward is worth $10',
-  c10.coupons.find((c) => c.kind === 'stamp').value, 10);
+check('the stamp reward is worth $7',
+  c10.coupons.find((c) => c.kind === 'stamp').value, 7);
 ok('a stamp reward does not rot',
   c10.coupons.find((c) => c.kind === 'stamp').expiresAt === null);
-check('and the guest holds NO come-back coupon (that reward is off)',
-  c10.coupons.filter((c) => c.kind === 'return').length, 0);
-ok('so the wallet is stamp rewards only, and every one of them keeps',
-  c10.coupons.every((c) => c.kind === 'stamp' && !c.expiresAt));
+check('and exactly one come-back coupon on the wallet',
+  c10.coupons.filter((c) => c.kind === 'return').length, 1);
+ok('and ONLY the come-back coupon expires — every stamp reward keeps',
+  c10.coupons.filter((c) => c.kind === 'stamp').every((c) => !c.expiresAt) &&
+  c10.coupons.filter((c) => c.kind === 'return').every((c) => !!c.expiresAt));
 
 /* 20 orders -> exactly 2 rewards, never a third. */
 const c20 = L.blankCustomer('6783355388');
@@ -213,12 +219,51 @@ check('a balance untouched for three years is still there',
   L.publicView(cDormant, 20, THREE_YEARS).points, 120);
 ok('and it still buys the reward it always did',
   !!L.pointsRedemption(cDormant, 20, THREE_YEARS));
-check('the shipped come-back rule is OFF', L.RETURN_VALUE, 0);
-check('and the storefront is told so', L.rules().returnValue, 0);
+check('the shipped come-back rule is ON', L.RETURN_VALUE, 3);
+check('and the storefront is told so', L.rules().returnValue, 3);
+check('the come-back coupon lives 7 days', L.RETURN_DAYS, 7);
+check('and only spawns from an order of $10 or more', L.RETURN_MIN_SUBTOTAL, 10);
 
-/* Switching the reward OFF must not confiscate a coupon a guest was already
-   given: 'return' stays a legal kind, so a legacy coupon keeps working inside
-   its window and still expires when its own date passes. */
+/* The threshold, proved rather than assumed. $9.99 of food is a drink and a
+   side, not a meal; $10.00 exactly is the deal. And the measurement is the
+   order's OWN subtotal before rewards — see the discount case below. */
+const cThresh = L.blankCustomer('6783355388');
+L.awardForOrder(cThresh, order('KP-9-99', 9.99), NOW);
+check('a $9.99 order earns no come-back coupon',
+  cThresh.coupons.filter((c) => c.kind === 'return').length, 0);
+L.awardForOrder(cThresh, order('KP-10-00', 10), NOW);
+check('a $10 order earns exactly one',
+  cThresh.coupons.filter((c) => c.kind === 'return').length, 1);
+check('and it is worth $3',
+  cThresh.coupons.find((c) => c.kind === 'return').value, 3);
+L.awardForOrder(cThresh, order('KP-25', 25), NOW);
+check('a bigger order still earns only one — the newest replaces the unused one',
+  cThresh.coupons.filter((c) => c.kind === 'return').length, 1);
+
+/* A guest who spends POINTS on the same order must not lose their coupon for
+   it: the order's subtotal is stored gross, so a $14 basket discounted down
+   to $4 still clears the threshold and still earns one. */
+const cDisc = L.blankCustomer('6783355388');
+const discounted = order('KP-D1', 14);
+discounted.discountAmount = 10;            /* points or a code took $10 off */
+L.awardForOrder(cDisc, discounted, NOW);
+check('an order discounted down to $4 still earns the coupon',
+  cDisc.coupons.filter((c) => c.kind === 'return').length, 1);
+
+/* An order under the line is not rescued by a big tip or a big tax bill: the
+   threshold is about the food, which is what the kitchen actually cooks. */
+const cSmall = L.blankCustomer('6783355388');
+const tiny = order('KP-T1', 4);
+tiny.tip = 20;
+tiny.tax = 3;
+L.awardForOrder(cSmall, tiny, NOW);
+check('a $4 order with a $20 tip earns no coupon',
+  cSmall.coupons.filter((c) => c.kind === 'return').length, 0);
+
+/* Whatever the rule is set to, a coupon a guest was ALREADY given keeps
+   working inside its own window and still expires when its own date passes —
+   changing a rule must never confiscate or resurrect a coupon in someone's
+   wallet. 'return' therefore stays a legal kind no matter what the rule says. */
 const cLegacy = L.blankCustomer('6783355388');
 const legacy = L.makeCoupon('return', 5, '$5 off — come back within 14 days', 'KP-L', NOW);
 cLegacy.coupons.push(legacy);
@@ -265,12 +310,20 @@ const wallet = (points, coupons) => {
   return c;
 };
 
-/* 250 points, $15.99 order: affordable = 2 blocks, allowed = 3. */
+/* 250 points, $15.99 order: affordable = 2 blocks, allowed = 1 — and ONE block
+   per order is the owner's rule, so the smaller of the three wins. */
 const pr = L.pointsRedemption(wallet(250), 15.99, NOW_MS);
-check('250 points on a $15.99 order -> 2 blocks', pr.steps, 2);
-check('costs 200 points', pr.points, 200);
+check('250 points on a $15.99 order -> 1 block only', pr.steps, 1);
+check('costs 100 points', pr.points, 100);
 check('worth $10', pr.value, 10);
-check('and says so', pr.label, '200 points');
+check('and says so', pr.label, '100 points');
+
+/* The cap is not about the balance or the bill: 900 points on a $500 order is
+   still ONE redemption, because "one reward per order" is a rule, not a
+   consequence of either number. */
+const big = L.pointsRedemption(wallet(900), 500, NOW_MS);
+check('900 points on a $500 order is still one block', big.steps, 1);
+check('and the other 800 points are still the guest\'s', big.points, 100);
 
 /* A guest with too FEW points cannot redeem at any order size. */
 check('99 points on a big order -> nothing', L.pointsRedemption(wallet(99), 500, NOW_MS), null);
@@ -278,27 +331,30 @@ check('150 points on a $3 order -> nothing (too small)', L.pointsRedemption(wall
 check('250 points on a $4.99 order -> nothing (too small)', L.pointsRedemption(wallet(250), 4.99, NOW_MS), null);
 check('a $0 order redeems nothing', L.pointsRedemption(wallet(5000), 0, NOW_MS), null);
 
-/* Exactly one block is allowed on a $5 order. */
+/* Exactly one block is allowed — but a $10 reward can only come off a bill of
+   $10 or more, so a $5 order redeems nothing at all rather than clamping. */
 const one = L.pointsRedemption(wallet(150), 5, NOW_MS);
-check('150 points on a $5 order -> exactly one block', one.steps, 1);
-check('worth $5', one.value, 5);
+check('150 points on a $5 order -> nothing (a $10 reward will not fit)', one, null);
+const exact = L.pointsRedemption(wallet(150), 10, NOW_MS);
+check('but on exactly $10 it fits, one block', exact.steps, 1);
+check('worth $10', exact.value, 10);
 check('a big balance cannot overshoot a small bill',
   L.pointsRedemption(wallet(5000), 12.99, NOW_MS).value, 10);
 check('no customer -> nothing', L.pointsRedemption(null, 100, NOW_MS), null);
 
 /* ---- Coupons ---- */
-const strike = L.makeCoupon('stamp', 10, '$10 reward — 10 orders', 'KP-1', NOW);
-const cb = L.makeCoupon('return', 5, '$5 off — come back within 14 days', 'KP-1', NOW);
+const strike = L.makeCoupon('stamp', 7, '$7 reward — 10 orders', 'KP-1', NOW);
+const cb = L.makeCoupon('return', 3, '$3 off — come back within 7 days', 'KP-1', NOW);
 const cw = wallet(0, [strike, cb]);
 
 const useStrike = L.couponRedemption(cw, strike.id, 15.99, NOW_MS);
-check('a $10 reward on a $15.99 order is worth $10', useStrike.value, 10);
-check('and carries its label', useStrike.label, '$10 reward — 10 orders');
+check('a $7 reward on a $15.99 order is worth $7', useStrike.value, 7);
+check('and carries its label', useStrike.label, '$7 reward — 10 orders');
 /* Clamped to the bill: a $10 reward on a $3 order takes off $3, not $10. */
-check('a $10 reward on a $3 order is clamped to $3',
+check('a $7 reward on a $3 order is clamped to $3',
   L.couponRedemption(cw, strike.id, 3, NOW_MS).value, 3);
-check('a $10 reward on a $10 order is worth exactly $10',
-  L.couponRedemption(cw, strike.id, 10, NOW_MS).value, 10);
+check('a $7 reward on a $10 order is worth exactly $7',
+  L.couponRedemption(cw, strike.id, 10, NOW_MS).value, 7);
 check('an unknown id redeems nothing', L.couponRedemption(cw, 'cp_nope', 20, NOW_MS), null);
 
 const spent = L.makeCoupon('return', 5, 'spent', 'KP-0', NOW);
@@ -325,7 +381,7 @@ check('a low balance is its own error', lowBal.error, 'points_unavailable');
 ok('and names the balance they DO have', /50/.test(lowBal.message), lowBal.message);
 const small = L.resolveRedemption(wallet(150), { redeemPoints: true }, 3, NOW_MS);
 check('a too-small order is its own error', small.error, 'order_too_small');
-ok('and explains the $5 floor', /\$5/.test(small.message), small.message);
+ok('and explains the $10 floor', /\$10/.test(small.message), small.message);
 
 const goodP = L.resolveRedemption(wallet(250), { redeemPoints: true }, 15.99, NOW_MS);
 check('a good points request resolves', goodP.redemption.kind, 'points');
@@ -341,9 +397,9 @@ const d1 = L.toDescriptor(goodP.redemption);
 check('a points redemption becomes an amount discount', d1.type, 'amount');
 check('worth the computed value', d1.value, 10);
 check('marked as loyalty, not a code', d1.source, 'loyalty');
-check('and labelled in points', d1.label, 'Points redeemed (200)');
+check('and labelled in points', d1.label, 'Points redeemed (100)');
 const d2 = L.toDescriptor(goodC.redemption);
-check('a coupon redemption keeps its own label', d2.label, '$5 off — come back within 14 days');
+check('a coupon redemption keeps its own label', d2.label, '$3 off — come back within 7 days');
 check('no descriptor for no redemption', L.toDescriptor(null), null);
 
 /* ========================================================================== */
@@ -523,10 +579,16 @@ const csv = L.toCsv([member], NOW_MS);
 ok('the CSV starts with a BOM so Excel reads it as UTF-8', csv.charCodeAt(0) === 0xFEFF);
 ok('uses CRLF line endings', csv.indexOf('\r\n') !== -1);
 check('and has one row per member plus a header', csv.split('\r\n').filter((x) => x).length, 2);
-ok('the header names the columns', csv.indexOf('phone,name,points,') !== -1);
+ok('the header names the columns', csv.indexOf('phone,name,email,points,') !== -1);
 ok('the phone is in the row', csv.indexOf('6783355388') !== -1);
+/* Column order is CSV_COLUMNS. It gained `email` and `devices` when the
+   rewards scheme grew a credential, so this index moved — a bare number here
+   is exactly the kind of thing that silently starts reading the wrong column. */
+const csvCols = csv.split('\r\n')[0].split(',');
 check('the unused-coupon column counts only usable ones',
-  csv.split('\r\n')[1].split(',')[6], '2');
+  csv.split('\r\n')[1].split(',')[csvCols.indexOf('unusedCoupons')], '2');
+check('and the address and device count are exported too',
+  csvCols.indexOf('email') + '|' + csvCols.indexOf('devices'), '2|8');
 
 /* A spreadsheet must not be talked into treating a name as a formula. */
 const evil = L.toCsv([Object.assign(L.blankCustomer('6783355388'), { name: '=SUM(1+1)' })], NOW_MS);
@@ -542,10 +604,11 @@ check('an empty ledger still exports a header', L.toCsv([], NOW_MS).split('\r\n'
 console.log('\n--- 13. rules ---');
 const R = L.rules();
 check('$1 of food = 1 point', R.pointsPerDollar, 1);
-check('100 points = $5 off', R.redeemStep + ' -> $' + R.redeemValue, '100 -> $5');
-check('every 10 orders = $10', R.stampEvery + ' -> $' + R.stampValue, '10 -> $10');
-check('the come-back coupon is switched OFF', R.returnValue, 0);
-check('valid 14 days', R.returnDays, 14);
+check('100 points = $10 off', R.redeemStep + ' -> $' + R.redeemValue, '100 -> $10');
+check('every 10 orders = $7', R.stampEvery + ' -> $' + R.stampValue, '10 -> $7');
+check('the come-back coupon is ON', R.returnValue, 3);
+check('valid 7 days', R.returnDays, 7);
+check('and needs a $10 order to spawn', R.returnMinSubtotal, 10);
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) {

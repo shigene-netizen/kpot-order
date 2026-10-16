@@ -223,6 +223,10 @@ img { max-width: 100%; display: block; }
 .btn-ghost:active { background: var(--line); }
 .btn-gold { background: var(--gold); color: #1A1206; }
 .btn[disabled] { opacity: .42; pointer-events: none; }
+/* A full-width action inside a panel rather than at the foot of a sheet — the
+   inline "verify this number" button, which has to sit with the sentence that
+   explains it. */
+.btn-sm { padding: 11px 14px; font-size: 13.5px; border-radius: var(--radius-sm); }
 .btn-sm { padding: 10px 14px; font-size: 13px; border-radius: 11px; width: auto; }
 
 /* ---------- Button feedback (guest-facing) ----------
@@ -463,6 +467,49 @@ img { max-width: 100%; display: block; }
 .loy-row .tx small { font-size: 11px; color: var(--muted); display: block; }
 .loy-row .amt { flex: none; font-size: 13px; font-weight: 800; color: var(--green); }
 .loy-note { margin: 2px 0 9px; }
+
+/* ---------- Stamp card progress ----------
+   The bar is the "how close am I" answer the owner asked for, so it sits
+   between the title and the sentence rather than replacing either. The fill
+   is the same green as a selected reward, because at 10/10 this row BECOMES
+   the reward — the colour is the promise that the two are the same thing. */
+.loy-bar {
+  display: block; height: 7px; border-radius: 999px; margin: 7px 0 5px;
+  background: var(--line); overflow: hidden;
+}
+.loy-bar i { display: block; height: 100%; border-radius: 999px; background: var(--green); transition: width .3s; }
+/* The stamp card before it is complete: same shape as a reward row so the
+   guest reads it as "a reward, in progress", but plainly not tappable. */
+.loy-row.is-info { background: transparent; border-style: dashed; cursor: default; }
+.loy-row.is-info .rd.stamp { border: none; font-size: 15px; }
+.loy-row.is-info .tx small { opacity: .85; }
+
+/* ---------- Verifying a phone number ---------- */
+.loy-lock {
+  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--black-3); padding: 13px;
+}
+.loy-lock b { display: block; font-size: 13px; margin-bottom: 4px; }
+.loy-lock small { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.loy-lock .btn-sm { margin-top: 11px; width: 100%; }
+.loy-lock .field { margin: 0; }
+.loy-lock .field label { font-size: 11.5px; }
+.loy-link {
+  display: block; width: 100%; margin-top: 9px; padding: 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 11.5px; text-decoration: underline;
+}
+.loy-lock .code-input {
+  text-align: center; letter-spacing: 7px; font-size: 21px; font-weight: 800;
+  padding-left: 12px; padding-right: 4px;
+}
+/* The "optional" chip next to a form label — the e-mail field is genuinely
+   optional, and saying so is the difference between a guest filling it in and
+   a guest abandoning checkout over one more demanded box. */
+.field label .opt {
+  font-weight: 500; font-size: 10.5px; letter-spacing: .3px; text-transform: uppercase;
+  color: var(--muted); opacity: .85; margin-left: 4px;
+}
 
 /* ---------- Cart drawer ---------- */
 .cart-list { padding: 4px 18px 0; }

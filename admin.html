@@ -262,6 +262,23 @@
             <input id="memNote" placeholder="Reason" style="flex:1">
           </div>
 
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input id="memEmail" type="email" placeholder="Recovery e-mail (blank = leave as is)" style="flex:1" autocomplete="off">
+            <button class="btn btn-ghost btn-sm" id="memEmailClear" type="button">Clear e-mail</button>
+          </div>
+
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+            <label style="display:flex;gap:6px;align-items:center;font-size:13px">
+              <input type="checkbox" id="memRevoke"> Sign out every phone
+            </label>
+            <button class="btn btn-ghost btn-sm" id="memIssue" type="button">🔑 Issue a counter code</button>
+          </div>
+          <div class="hint" style="margin-top:6px">
+            "Sign out every phone" kills every credential on this account — the guest then
+            unlocks again with a code. Nothing is lost: points and rewards stay put.
+          </div>
+          <div id="memCodeBox" style="margin-top:8px"></div>
+
           <button class="btn btn-primary btn-sm" id="memApply" style="margin-top:10px">Apply</button>
         </div>
 
@@ -770,15 +787,15 @@
   function renderLoyRules(r){
     var b = $('#loyRules');
     if(!b || !r) return;
-    /* The come-back coupon is switched off (returnValue 0). Quoting "a $0
-       coupon, valid 14 days" at the owner would be nonsense, so the clause
-       goes away with the rule — and the no-expiry promise takes its place,
-       because that is now the whole deal. */
+    /* The come-back coupon is configurable, so the clause follows the rule
+       rather than being written into the sentence: with returnValue at 0 the
+       owner would otherwise be reading "a $0 coupon, valid 14 days". */
     var comeback = r.returnValue > 0
-      ? ' · every settled order drops a $' + r.returnValue + ' coupon valid for ' + r.returnDays + ' days'
+      ? ' · orders of $' + r.returnMinSubtotal + ' or more drop a $' + r.returnValue +
+        ' coupon valid for ' + r.returnDays + ' days'
       : '';
     b.textContent = '$1 spent earns ' + r.pointsPerDollar + ' point' + (r.pointsPerDollar === 1 ? '' : 's') +
-      ' · ' + r.redeemStep + ' points = $' + r.redeemValue + ' off' +
+      ' · ' + r.redeemStep + ' points = $' + r.redeemValue + ' off, one per order' +
       ' · every ' + r.stampEvery + ' orders earns a $' + r.stampValue + ' reward' +
       comeback + ' · points and rewards never expire.';
   }
@@ -791,14 +808,25 @@
       return;
     }
     box.innerHTML = list.map(function(c){
+      /* Two questions the counter actually gets, answered on the row: "can this
+         guest recover on a new phone?" (an e-mail on file?) and "are they signed
+         in anywhere?" (how many phones?). Without them the owner has to guess
+         why a guest's rewards are not showing up on their new handset. */
+      var reach = (c.email ? '✉ ' + escD(c.email) : 'no recovery e-mail') +
+        (c.recoveryPending ? ' · a code is outstanding' : '');
+      var phones = c.devices
+        ? c.devices + ' phone' + (c.devices === 1 ? '' : 's') + ' signed in'
+        : 'no phone signed in';
       return '<div class="memrow">' +
         '<b>' + escD(c.phone) + '</b>' + (c.name ? ' · ' + escD(c.name) : '') +
         '<div class="hint" style="margin-top:2px">' +
           c.points + ' pts (' + c.lifetimePoints + ' lifetime) · ' +
           c.settledOrders + ' order' + (c.settledOrders === 1 ? '' : 's') + ' · ' +
           c.unusedCoupons + ' reward' + (c.unusedCoupons === 1 ? '' : 's') +
+          ' · ' + phones +
           (c.lastSeenAt ? ' · last seen ' + new Date(c.lastSeenAt).toLocaleDateString() : '') +
         '</div>' +
+        '<div class="hint" style="margin-top:2px">' + reach + '</div>' +
         '<button class="btn btn-ghost btn-sm" data-mempick="' + escD(c.phone) + '">Edit</button>' +
       '</div>';
     }).join('');
@@ -834,6 +862,10 @@
     var d = String($('#memDelta').value || '').trim();
     var rw = String($('#memReward').value || '').trim();
     var note = String($('#memNote').value || '').trim();
+    var emailEl = $('#memEmail');
+    var em = String((emailEl && emailEl.value) || '').trim();
+    var clearing = !!(emailEl && emailEl.dataset.clear === '1');
+    var revoke = !!($('#memRevoke') && $('#memRevoke').checked);
 
     if(d !== '') body.delta = Number(d);
     if(rw !== ''){
@@ -841,22 +873,71 @@
       var days = String($('#memDays').value || '').trim();
       if(days !== '') body.coupon.days = Number(days);
     }
+    /* An empty box means "leave the address alone" — it is the ONLY place an
+       address can be rewritten, and a stray blank field must not silently
+       delete the guest's only way back in. Clearing is its own button. */
+    if(clearing) body.email = '';
+    else if(em !== '') body.email = em;
+    if(revoke) body.revokeDevices = true;
     if(note) body.note = note;
-    if(!d && !rw) return memShow(false, 'Enter a points change, a reward, or both.');
+
+    if(d === '' && rw === '' && !body.email && !revoke){
+      return memShow(false, 'Enter a points change, a reward, an e-mail, or tick sign-out.');
+    }
 
     fetch('/api/customers/adjust', { method:'POST', headers: discHeaders(), body: JSON.stringify(body) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { r:r, j:j }; }); })
       .then(function(o){
         if(!o.r.ok) throw new Error((o.j && o.j.message) || 'Could not apply that.');
         memShow(true, 'Saved — ' + o.j.customer.points + ' points now.');
-        ['#memDelta','#memReward','#memDays','#memNote'].forEach(function(s){ $(s).value = ''; });
+        ['#memDelta','#memReward','#memDays','#memNote','#memEmail'].forEach(function(s){ $(s).value = ''; });
+        if(emailEl) delete emailEl.dataset.clear;
+        if($('#memRevoke')) $('#memRevoke').checked = false;
         loadMembers();
       })
       .catch(function(e){ memShow(false, e.message || 'Could not apply that.'); });
   }
 
+  /* The counter's own unlock. The code is shown here and NOWHERE else — the
+     server keeps only its hash, and it is deliberately kept out of the guest's
+     log, so this box is the one and only chance to read it out. */
+  function issueCounterCode(){
+    var phone = String($('#memPhone').value || '').trim();
+    if(!phone) return memShow(false, "Enter the guest's mobile number.");
+    fetch('/api/customers/adjust', {
+      method:'POST', headers: discHeaders(),
+      body: JSON.stringify({ phone: phone, issueCode: true, note: 'issued at the counter' })
+    })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { r:r, j:j }; }); })
+      .then(function(o){
+        if(!o.r.ok) throw new Error((o.j && o.j.message) || 'Could not issue a code.');
+        var box = $('#memCodeBox');
+        var code = o.j.recoveryCode;
+        if(box){
+          box.innerHTML = code
+            ? '<div style="font-size:20px;letter-spacing:2px"><b>' + escD(code) + '</b></div>' +
+              '<div class="hint">Read this out. It works once, for ' +
+              (o.j.recoveryMinutes || 10) + ' minutes, and replaces any code issued before it.</div>'
+            : '<div class="hint">No code came back — check the number.</div>';
+        }
+        memShow(true, code ? 'Code issued — read it to the guest.' : 'No code was issued.');
+        loadMembers();
+      })
+      .catch(function(e){ memShow(false, e.message || 'Could not issue a code.'); });
+  }
+
   $('#memLoad').onclick = loadMembers;
   $('#memApply').onclick = adjustMember;
+  $('#memIssue').onclick = issueCounterCode;
+  /* Clearing is a deliberate two-step: press this, then Apply. A blank box on
+     its own means "leave it alone", so nobody wipes a guest's only recovery
+     address by tabbing past a field. */
+  $('#memEmailClear').onclick = function(){
+    var el = $('#memEmail');
+    el.value = '';
+    el.dataset.clear = '1';
+    memShow(true, 'The e-mail will be cleared when you press Apply.');
+  };
   $('#memQ').onkeydown = function(e){ if(e.key === 'Enter'){ e.preventDefault(); loadMembers(); } };
 
   /* A plain <a download> cannot carry the admin key, so the bytes are fetched

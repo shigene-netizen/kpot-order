@@ -1,12 +1,24 @@
 /* ==========================================================================
    KPOT To Go — Loyalty: points, stamps and come-back coupons
    --------------------------------------------------------------------------
-   The member's identity is their MOBILE NUMBER. There is no account, no
+   The member's ACCOUNT is their MOBILE NUMBER. There is no account, no
    password and no sign-up: the checkout already demands a name and a mobile
    for order updates, so the phone number is the one identifier we already
    hold. normalizePhone() is therefore the foundation of this whole file —
    get it wrong and one guest silently becomes three accounts with their
    points scattered across all of them.
+
+   ⚠️ A phone number IDENTIFIES an account. It does not AUTHORISE anything.
+   Anybody can type anybody's number into a public web form, so a bare number
+   must never be enough to read a guest's balance or to spend it — otherwise
+   whoever knows a phone number can walk off with the $5 waiting on it. The
+   two things that do authorise are in this file and both are secrets:
+
+     * a DEVICE CREDENTIAL — a random token minted for one browser after that
+       browser's first successful payment, handed to the browser once and kept
+       as a sha256 hash here. Possession is the proof.
+     * a RECOVERY CODE — six digits mailed to the address on the account,
+       short-lived and single-use, for a guest who is on a new phone.
 
    Everything here is a pure-ish ledger operation on a plain object, plus
    file I/O with every path passed IN (never a constant) so a test run can
@@ -20,6 +32,9 @@
 'use strict';
 
 const fs = require('fs');
+/* Hashing and randomness for the two authorising secrets. Node built-in —
+   this project has no dependencies on purpose (see package.json). */
+const crypto = require('crypto');
 /* Only for the membership date normaliser above — member.js has no
    dependencies of its own, so this cannot become a cycle. */
 const MB = require('./member.js');
@@ -28,22 +43,32 @@ const MB = require('./member.js');
 
 const POINTS_PER_DOLLAR = 1;   // $1 of FOOD = 1 point (tax and tip excluded)
 const REDEEM_STEP = 100;       // …spent in whole blocks of 100 points…
-const REDEEM_VALUE = 5;        // …each worth $5 off
+const REDEEM_VALUE = 10;       // …each worth $10 off
+/* ONE block per order. A guest holding 900 points has nine redemptions in
+   them, but they are spent one order at a time — the owner's rule, and the
+   reason `steps` is capped here instead of being left to the subtotal. */
+const POINT_BLOCKS_PER_ORDER = 1;
 const STAMP_EVERY = 10;        // every 10 settled orders earns…
-const STAMP_VALUE = 10;        // …a $10 reward
-/* The come-back coupon. DISABLED (0) on the owner's instruction.
+const STAMP_VALUE = 7;         // …a $7 reward
+/* The come-back coupon. ON, on the owner's instruction.
 
-   A reward with an expiry date on it reads to a guest as "my points expire",
-   and that is not the deal we offer. Points and stamp rewards never expire:
-   a guest banks points for as long as it takes and takes $5 off at 100. So
-   nothing on the rewards panel may carry a countdown.
+   It was switched off for a day because a dated reward sitting next to a
+   points balance reads to a guest as "my points expire", and the owner's
+   promise is that they do not. The fix for that was the wording (every points
+   row now says "never expire"), not the mechanism — the owner has since said
+   plainly not to turn it off, so it is back on.
 
-   Set this back to 5 (and RETURN_DAYS to the window you want) to bring the
-   nudge back — the whole mechanism below is intact and only this guard
-   switches it on. Guests who already hold one keep it: COUPON_KINDS still
-   lists 'return', so a coupon already issued is not dropped from the ledger. */
-const RETURN_VALUE = 0;
-const RETURN_DAYS = 14;        // only meaningful when RETURN_VALUE > 0
+   Keep the two things visually distinct on the panel: POINTS and STAMP
+   REWARDS never carry a countdown, a COME-BACK COUPON always does. That
+   distinction is the whole reason this was confusing. */
+const RETURN_VALUE = 3;
+const RETURN_DAYS = 7;
+/* A single order must be at least this big to earn one. Measured on the
+   order's own subtotal BEFORE any reward was applied — the owner's choice —
+   so spending points or a code on the same order cannot cost the guest their
+   coupon. Tax and tip are not part of it: they are not what the kitchen
+   cooks. */
+const RETURN_MIN_SUBTOTAL = 10;
 
 /* Sanity ceilings. A ledger that grows without bound is a ledger that
    eventually fails to load. */
@@ -51,6 +76,16 @@ const MAX_CUSTOMERS = 20000;
 const MAX_COUPONS = 20;        // per guest; stamp rewards accumulate, returns do not
 const KEEP_ORDER_IDS = 200;    // recent settled order ids, for the audit trail
 const KEEP_LOG = 40;
+
+/* ---- Authorising secrets ------------------------------------------------
+   How many browsers may hold a credential for one account, and how long a
+   recovery code lives. Both are deliberately small/short: a credential is
+   minted on every successful payment, so a guest who orders weekly for a year
+   would otherwise pile up fifty of them, and a code that outlives a coffee
+   break is a code that leaks. */
+const MAX_DEVICES = 8;
+const RECOVERY_TTL_MS = 10 * 60 * 1000;
+const RECOVERY_MAX_ATTEMPTS = 5;
 
 const COUPON_KINDS = ['stamp', 'return'];
 
@@ -73,6 +108,165 @@ function normalizePhone(raw) {
   const local = digits.length === 11 && digits[0] === '1' ? digits.slice(1) : digits;
   if (local.length !== 10) return null;
   return local;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Device credentials and e-mail recovery — the two things that AUTHORISE      */
+/* -------------------------------------------------------------------------- */
+/* Read the header first: a phone number identifies, it never authorises.
+
+   A device credential is a 256-bit random token. The browser gets the token
+   exactly once — in the reply to the request that minted it — and we keep
+   only its sha256. There is no way to recover a lost token from this file,
+   which is the point: a copy of customers.local.json is not a set of keys.
+
+   The hash is unsalted and compared by plain equality, and that is fine here
+   in a way it would not be for a password: the input is 32 random bytes, so
+   there is no dictionary to run and no guess to make. Salting would buy
+   nothing (each token is already unique) and a constant-time compare would
+   protect a value an attacker cannot approach one byte at a time. */
+
+function hashSecret(secret) {
+  return crypto.createHash('sha256').update(String(secret == null ? '' : secret), 'utf8').digest('hex');
+}
+
+function randomToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function deviceId() {
+  return 'dv_' + crypto.randomBytes(6).toString('hex');
+}
+
+/* Deliberately narrow, like normalizePhone(). The address is only ever used
+   as a destination for a recovery code, so anything we cannot read
+   confidently is refused rather than guessed at: a typo that passes would
+   send somebody else's code to a stranger's inbox. */
+function normalizeEmail(raw) {
+  const s = String(raw == null ? '' : raw).trim().toLowerCase();
+  if (s.length < 6 || s.length > 120) return null;
+  if (!/^[^\s@,;]+@[^\s@,;.]+(\.[^\s@,;.]+)+$/.test(s)) return null;
+  return s;
+}
+
+/* Mint a credential for one browser. Returns the PLAINTEXT token — the only
+   time it exists outside the browser — or null. */
+function issueDevice(cust, label, now) {
+  if (!cust) return null;
+  const at = now || new Date().toISOString();
+  const token = randomToken();
+  if (!Array.isArray(cust.devices)) cust.devices = [];
+  cust.devices.push({
+    id: deviceId(),
+    hash: hashSecret(token),
+    label: String(label || '').slice(0, 40),
+    createdAt: at,
+    lastSeenAt: at
+  });
+  /* Oldest-by-use goes first. A guest who pays every week for a year would
+     otherwise accumulate fifty entries and eventually lock themselves out of
+     the ledger by filling it. */
+  if (cust.devices.length > MAX_DEVICES) {
+    cust.devices.sort((a, b) =>
+      String((a && a.lastSeenAt) || '').localeCompare(String((b && b.lastSeenAt) || '')));
+    cust.devices = cust.devices.slice(-MAX_DEVICES);
+  }
+  return token;
+}
+
+/* Does this browser hold a credential for this account? A yes also refreshes
+   lastSeenAt, so the trim above drops the devices nobody uses any more. */
+function verifyDevice(cust, token, now) {
+  if (!cust || !token) return false;
+  const h = hashSecret(token);
+  const d = (cust.devices || []).find((x) => x && x.hash === h);
+  if (!d) return false;
+  d.lastSeenAt = now || new Date().toISOString();
+  return true;
+}
+
+/* The owner's panic button: "my guest is standing here and their phone says
+   somebody else has it". Every credential dies, the guest recovers by e-mail
+   and gets a fresh one. */
+function revokeDevices(cust) {
+  if (!cust) return 0;
+  const n = (cust.devices || []).length;
+  cust.devices = [];
+  return n;
+}
+
+function deviceCount(cust) {
+  return (cust.devices || []).length;
+}
+
+/* Attach an address to an account.
+
+   ONLY EVER FROM NOTHING. An existing address is never overwritten from an
+   order payload — otherwise anyone who knows a guest's phone number could
+   place an order carrying their OWN e-mail, and then use the recovery flow to
+   take the account over. The owner can change an address from the console;
+   the storefront cannot. Returns 'set' | 'kept' | 'bad'. */
+function setEmail(cust, email) {
+  if (!cust) return 'bad';
+  const e = normalizeEmail(email);
+  if (!e) return 'bad';
+  if (cust.email) return 'kept';
+  cust.email = e;
+  return 'set';
+}
+
+/* ---- Recovery codes ------------------------------------------------------ */
+
+/* Six digits, from the CSPRNG — not Math.random(). A recovery code is a
+   credential: it is worth whatever is in the account, and a predictable one
+   is worse than none because it looks like protection. */
+function makeRecoveryCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+
+/* Issue a code for this account and return the plaintext (the caller mails
+   it). Only the hash is kept, so the ledger is not a list of live codes. */
+function startRecovery(cust, now) {
+  if (!cust) return null;
+  const atMs = now == null ? Date.now() : Number(now);
+  const code = makeRecoveryCode();
+  cust.recovery = {
+    hash: hashSecret(code),
+    issuedAt: new Date(atMs).toISOString(),
+    expiresAt: new Date(atMs + RECOVERY_TTL_MS).toISOString(),
+    attempts: 0
+  };
+  return code;
+}
+
+/* Burn a code. One success per code, and a code that is guessed at dies after
+   RECOVERY_MAX_ATTEMPTS — six digits is only a million possibilities and an
+   unbounded retry loop would walk it in minutes. */
+function checkRecovery(cust, code, now) {
+  if (!cust || !cust.recovery) return { error: 'recovery_none' };
+  const r = cust.recovery;
+  const atMs = now == null ? Date.now() : Number(now);
+
+  const expires = Date.parse(r.expiresAt);
+  if (!isFinite(expires) || atMs > expires) {
+    cust.recovery = null;
+    return { error: 'recovery_expired' };
+  }
+  if ((Number(r.attempts) || 0) >= RECOVERY_MAX_ATTEMPTS) {
+    cust.recovery = null;
+    return { error: 'recovery_locked' };
+  }
+
+  r.attempts = (Number(r.attempts) || 0) + 1;
+  const given = String(code == null ? '' : code).replace(/\D/g, '');
+  if (!given || hashSecret(given) !== r.hash) {
+    /* The last wrong guess kills the code rather than leaving a spent one
+       lying around for the next ten minutes. */
+    if (r.attempts >= RECOVERY_MAX_ATTEMPTS) cust.recovery = null;
+    return { error: 'recovery_bad_code' };
+  }
+  cust.recovery = null;
+  return { ok: true };
 }
 
 /* Enough for a guest to recognise themselves without turning the lookup into
@@ -130,11 +324,19 @@ function blankCustomer(phone) {
   return {
     phone,
     name: '',
+    /* The recovery address. Optional — a guest with none can still order and
+       earn, they just have to ask at the counter to move an account to a new
+       phone. */
+    email: '',
     points: 0,
     lifetimePoints: 0,
     settledOrders: 0,
     stampsIssued: 0,
     coupons: [],
+    /* Browsers this account is signed in on. Hashes only — see issueDevice(). */
+    devices: [],
+    /* An outstanding recovery code, if one was just requested. */
+    recovery: null,
     settledOrderIds: [],
     log: [],
     firstSeenAt: null,
@@ -188,6 +390,35 @@ function normalizeCustomer(raw) {
   }));
   c.firstSeenAt = raw.firstSeenAt ? String(raw.firstSeenAt) : null;
   c.lastSeenAt = raw.lastSeenAt ? String(raw.lastSeenAt) : null;
+
+  /* The authorising secrets. ⚠️ Same whitelist trap as membership below: a
+     field not named here is dropped on the next flush, and a dropped device
+     credential means every guest on the site is signed out at the next save
+     with no error anywhere. */
+  c.email = normalizeEmail(raw.email) || '';
+  c.devices = (Array.isArray(raw.devices) ? raw.devices : [])
+    .map((d) => (d && typeof d === 'object' && /^[0-9a-f]{64}$/.test(String(d.hash || '')))
+      ? {
+        id: d.id ? String(d.id).slice(0, 40) : deviceId(),
+        hash: String(d.hash),
+        label: String(d.label || '').slice(0, 40),
+        createdAt: d.createdAt ? String(d.createdAt) : null,
+        lastSeenAt: d.lastSeenAt ? String(d.lastSeenAt) : null
+      }
+      : null)
+    .filter(Boolean).slice(-MAX_DEVICES);
+  /* A code only survives a restart if it is still inside its own window —
+     otherwise a reboot would resurrect an expired one. */
+  const rec = raw.recovery;
+  c.recovery = (rec && typeof rec === 'object' && /^[0-9a-f]{64}$/.test(String(rec.hash || '')) &&
+    isFinite(Date.parse(rec.expiresAt)) && Date.parse(rec.expiresAt) > Date.now())
+    ? {
+      hash: String(rec.hash),
+      issuedAt: rec.issuedAt ? String(rec.issuedAt) : null,
+      expiresAt: String(rec.expiresAt),
+      attempts: Number(rec.attempts) || 0
+    }
+    : null;
 
   /* Membership. ⚠️ This function is a WHITELIST: it builds a fresh record and
      copies field by field, so anything not named here is silently dropped the
@@ -282,6 +513,17 @@ function pointsFor(order) {
   return Math.floor(base * POINTS_PER_DOLLAR);
 }
 
+/* Does this order earn a come-back coupon?
+
+   The threshold is a plain subtotal test, on the order's own food total before
+   any reward was applied. Deliberately NOT the amount the guest handed over:
+   a $14 basket discounted to $6 by points would then fail a $10 test, which
+   would punish exactly the guest the coupon is meant to bring back. Tax and
+   tip are excluded — they are not what earns points either. */
+function comebackEarns(order) {
+  return Math.max(0, Number(order && order.subtotal) || 0) >= RETURN_MIN_SUBTOTAL;
+}
+
 /* The two moments money is genuinely confirmed. Kept here (not in server.js)
    so the rule has exactly one definition and can be unit-tested. */
 function isPaidStatus(ps) {
@@ -345,7 +587,7 @@ function awardForOrder(cust, order, now, opts) {
      turn a nudge into a standing discount. The newest replaces the oldest
      UNUSED one — a coupon already spent is left alone, so the audit trail
      still shows what was given and taken. */
-  if (RETURN_VALUE > 0) {
+  if (RETURN_VALUE > 0 && comebackEarns(order)) {
     const stale = cust.coupons.filter((c) => c.kind === 'return' && !c.usedAt);
     if (stale.length) {
       cust.coupons = cust.coupons.filter((c) => !(c.kind === 'return' && !c.usedAt));
@@ -376,14 +618,16 @@ function awardForOrder(cust, order, now, opts) {
 /* -------------------------------------------------------------------------- */
 
 /* How many whole blocks of 100 points may come off a bill of this size?
-   Capped by the subtotal so a $5 reward can never exceed what there is to
-   discount — the same clamp pricing.js applies to a dollar code. */
+   Capped by the subtotal so a $10 reward can never exceed what there is to
+   discount — the same clamp pricing.js applies to a dollar code — and by
+   POINT_BLOCKS_PER_ORDER, which is the owner's "one redemption per order".
+   A guest with 900 points spends them across nine visits, not nine at once. */
 function pointsRedemption(cust, subtotal, now) {
   if (!cust) return null;
   const balance = Math.max(0, Math.floor(Number(cust.points) || 0));
   const affordable = Math.floor(balance / REDEEM_STEP);
   const allowed = Math.floor(round2(Math.max(0, Number(subtotal) || 0)) / REDEEM_VALUE);
-  const steps = Math.min(affordable, allowed);
+  const steps = Math.min(affordable, allowed, POINT_BLOCKS_PER_ORDER);
   if (steps <= 0) return null;
   return {
     kind: 'points',
@@ -401,6 +645,23 @@ function couponRedemption(cust, id, subtotal, now) {
   const value = Math.min(Number(c.value) || 0, round2(Math.max(0, Number(subtotal) || 0)));
   if (value <= 0) return null;
   return { kind: 'coupon', coupon: c, couponId: c.id, value: round2(value), label: c.label || 'Reward' };
+}
+
+/* Why the points row is offering nothing, in the guest's terms.
+
+   The panel needs this because the obvious note — "N more points for $10 off"
+   — is a LIE the moment the reward is a $10 block and the basket is a $7 side:
+   the guest already has the points, and what is missing is an order big enough
+   to absorb the discount. Telling them to earn more points would send them off
+   to fix the wrong thing. resolveRedemption() already draws exactly this
+   distinction when it refuses a spend; this is the same logic, phrased for the
+   panel. */
+function pointsHoldReason(cust, subtotal) {
+  const balance = Math.max(0, Math.floor(Number(cust && cust.points) || 0));
+  if (balance < REDEEM_STEP) return 'low_balance';
+  if (subtotal == null) return 'no_basket';
+  if (round2(Math.max(0, Number(subtotal) || 0)) < REDEEM_VALUE) return 'order_too_small';
+  return 'none';
 }
 
 /* A guest may take ONE thing off a bill. Resolving two would silently pick a
@@ -516,7 +777,7 @@ function releaseRedemption(cust, order, now) {
 /* What a guest may see about themselves. Never the full name, never the
    ledger, never other people's anything.
 
-   `rules` rides along so the storefront can phrase "100 points = $5" and
+   `rules` rides along so the storefront can phrase "100 points = $10" and
    "every 10 orders" without hard-coding a second copy of the numbers — one
    place to change them, one place they can disagree. */
 function rules() {
@@ -524,17 +785,19 @@ function rules() {
     pointsPerDollar: POINTS_PER_DOLLAR,
     redeemStep: REDEEM_STEP,
     redeemValue: REDEEM_VALUE,
+    pointBlocksPerOrder: POINT_BLOCKS_PER_ORDER,
     stampEvery: STAMP_EVERY,
     stampValue: STAMP_VALUE,
     returnValue: RETURN_VALUE,
-    returnDays: RETURN_DAYS
+    returnDays: RETURN_DAYS,
+    returnMinSubtotal: RETURN_MIN_SUBTOTAL
   };
 }
 
 function publicView(cust, subtotal, now) {
   if (!cust) {
     return {
-      found: false, points: 0, coupons: [], rules: rules(),
+      found: false, identified: false, points: 0, coupons: [], rules: rules(),
       member: { is: false, daysLeft: 0, until: null },
       pointsRedemption: null, stamps: { settled: 0, into: 0, every: STAMP_EVERY, toNext: STAMP_EVERY }
     };
@@ -546,10 +809,18 @@ function publicView(cust, subtotal, now) {
   const isMem = isFinite(memberUntil) && memberUntil > now;
   return {
     found: true,
+    /* ⚠️ This view is the UNLOCKED one and says so. It is only ever sent to a
+       caller who presented a verified device credential (or to the owner).
+       The storefront's public lookup goes through lockedView() instead. */
+    identified: true,
     name: maskName(cust.name),
+    /* The guest's own address, so the panel can say which inbox a recovery
+       code would go to. It is their own; nobody else can reach this view. */
+    email: cust.email || '',
     rules: rules(),
     points: Math.max(0, Math.floor(Number(cust.points) || 0)),
     pointsRedemption: subtotal == null ? null : pointsRedemption(cust, subtotal, now),
+    pointsHold: pointsHoldReason(cust, subtotal),
     coupons: usable.map((c) => ({
       id: c.id, value: c.value, label: c.label,
       kind: c.kind, expiresAt: c.expiresAt
@@ -572,6 +843,42 @@ function publicView(cust, subtotal, now) {
   };
 }
 
+/* What a caller who has NOT proved they own the account gets.
+
+   This is the answer to "anyone who knows a phone number can walk off with
+   the $5 on it". The account may well exist — the guest typed their own
+   number, so pretending it does not would just be a lie that makes the panel
+   useless — but not one point, not one coupon, not one order, and not even
+   the name comes back. What does come back is the two facts the guest needs
+   to get themselves unlocked: that there ARE rewards waiting, and whether
+   there is an address we could mail a code to.
+
+   Those two are a deliberate, small disclosure: they confirm "this number
+   shops here" to someone who guessed it. The alternative — a panel that says
+   "no rewards" to the guest who has $40 banked — is worse, and the owner
+   needs the guest to be able to self-serve. Points, coupons, spend history
+   and the name stay behind the credential. */
+function lockedView(cust, now) {
+  const base = {
+    found: !!cust,
+    identified: false,
+    rules: rules(),
+    points: 0,
+    pointsRedemption: null,
+    coupons: [],
+    member: { is: false, daysLeft: 0, until: null },
+    stamps: { settled: 0, every: STAMP_EVERY, into: 0, toNext: STAMP_EVERY }
+  };
+  if (!cust) return base;
+  const settled = Math.floor(Number(cust.settledOrders) || 0);
+  const into = settled % STAMP_EVERY;
+  return Object.assign(base, {
+    hasRewards: Math.max(0, Math.floor(Number(cust.points) || 0)) > 0 ||
+      (cust.coupons || []).some((c) => isUsable(c, now)),
+    hasEmail: !!cust.email
+  });
+}
+
 /* Is this expiry still in force? Kept here, next to the field it reads, so
    there is exactly one answer to "is this guest a member" — the board, the
    console and the price endpoint must not each derive their own. */
@@ -588,13 +895,18 @@ function adminView(cust) {
   const now = Date.now();
   return Object.assign({}, cust, {
     member: isMemberDate(cust.memberUntil, now),
-    coupons: (cust.coupons || []).slice(-MAX_COUPONS)
+    coupons: (cust.coupons || []).slice(-MAX_COUPONS),
+    /* The hashes are useless to the console and a liability in a payload it
+       writes to a CSV or a screen recording. The COUNT is what the owner
+       actually needs: "this guest is signed in on 2 phones", "nobody is". */
+    devices: deviceCount(cust),
+    recoveryPending: !!(cust.recovery && Date.parse(cust.recovery.expiresAt) > now)
   });
 }
 
 const CSV_COLUMNS = [
-  'phone', 'name', 'points', 'lifetimePoints', 'settledOrders',
-  'stampsIssued', 'unusedCoupons', 'memberUntil', 'member', 'lastSeenAt'
+  'phone', 'name', 'email', 'points', 'lifetimePoints', 'settledOrders',
+  'stampsIssued', 'unusedCoupons', 'devices', 'memberUntil', 'member', 'lastSeenAt'
 ];
 
 function csvCell(v) {
@@ -611,8 +923,9 @@ function toCsv(customers, now) {
     const until = c.memberUntil ? Date.parse(c.memberUntil) : NaN;
     const isMem = isFinite(until) && until > now;
     rows.push([
-      c.phone, c.name, c.points, c.lifetimePoints, c.settledOrders, c.stampsIssued,
+      c.phone, c.name, c.email || '', c.points, c.lifetimePoints, c.settledOrders, c.stampsIssued,
       (c.coupons || []).filter((x) => isUsable(x, now)).length,
+      deviceCount(c),
       isMem ? String(c.memberUntil).slice(0, 10) : '',
       isMem ? 'yes' : '',
       c.lastSeenAt || ''
@@ -622,15 +935,18 @@ function toCsv(customers, now) {
 }
 
 module.exports = {
-  POINTS_PER_DOLLAR, REDEEM_STEP, REDEEM_VALUE,
-  STAMP_EVERY, STAMP_VALUE, RETURN_VALUE, RETURN_DAYS,
+  POINTS_PER_DOLLAR, REDEEM_STEP, REDEEM_VALUE, POINT_BLOCKS_PER_ORDER,
+  STAMP_EVERY, STAMP_VALUE, RETURN_VALUE, RETURN_DAYS, RETURN_MIN_SUBTOTAL,
   MAX_CUSTOMERS, MAX_COUPONS, COUPON_KINDS, CSV_COLUMNS,
+  MAX_DEVICES, RECOVERY_TTL_MS, RECOVERY_MAX_ATTEMPTS,
   round2, normalizePhone, maskName, rules,
   couponId, makeCoupon, isExpired, isUsable,
   blankCustomer, normalizeCoupon, normalizeCustomer,
   loadCustomers, saveCustomers, ensure, find, touch, pushLog,
-  pointsBaseFor, pointsFor, isPaidStatus,
-  awardForOrder, pointsRedemption, couponRedemption, resolveRedemption,
+  pointsBaseFor, pointsFor, isPaidStatus, comebackEarns,
+  awardForOrder, pointsRedemption, pointsHoldReason, couponRedemption, resolveRedemption,
   toDescriptor, commitRedemption, releaseRedemption,
-  publicView, adminView, toCsv
+  publicView, lockedView, adminView, toCsv,
+  hashSecret, randomToken, normalizeEmail, issueDevice, verifyDevice,
+  revokeDevices, deviceCount, setEmail, makeRecoveryCode, startRecovery, checkRecovery
 };

@@ -134,10 +134,26 @@ async function main() {
     srv.kill('SIGKILL');
     await sleep(700);
 
-    const onDisk = JSON.parse(fs.readFileSync(ORDERS, 'utf8'));
+    /* A TRUNCATED board is the failure this section is really about. A plain
+       writeFileSync interrupted by the SIGKILL leaves a half-written
+       orders.local.json behind, and the next start then finds unparseable JSON
+       and drops every order on it — the exact loss the backups exist to
+       prevent. Atomic writes (temp file + rename) make that impossible, so the
+       file is read defensively here and its validity is asserted outright
+       rather than arriving as "the probe threw". */
+    let onDisk = null;
+    let parseErr = '';
+    try {
+      onDisk = JSON.parse(fs.readFileSync(ORDERS, 'utf8'));
+    } catch (e) {
+      parseErr = e.message;
+      try { parseErr += ' (' + fs.statSync(ORDERS).size + ' bytes on disk)'; } catch (e2) {}
+    }
+    check('the board on disk is complete JSON, not a truncated fragment',
+      !parseErr && Array.isArray(onDisk), parseErr || 'ok');
     check('the order is on disk despite the hard kill',
-      onDisk.some((o) => o.clientToken === token),
-      'orders on disk=' + onDisk.length);
+      !!onDisk && onDisk.some((o) => o.clientToken === token),
+      parseErr || 'orders on disk=' + (onDisk ? onDisk.length : 'no file'));
 
     const final = latestBackup();
     check('the backup file survives the kill', !!final, final && final.name);

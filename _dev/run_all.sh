@@ -107,6 +107,23 @@ run test_member             _dev/test_member.js
 run test_schedule           _dev/test_schedule.js
 
 echo
+echo "--- page syntax (the inline scripts in the owner's own pages) ---"
+# node --check cannot read HTML, and one typo in admin.html takes the entire
+# owner console down with nothing in the server log to explain it. The checker
+# existed for a while without ever being run; it is cheap, so it runs here.
+for page in admin.html admin-orders.html admin-menu.html; do
+  printf '  %-26s ' "$page"
+  if out=$("$ENV_BIN" node _dev/check_html_syntax.js "$page" 2>&1) && [ -n "$out" ]; then
+    printf '%s\n' "$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)"
+    pass=$((pass + 1))
+  else
+    printf 'FAILED\n'
+    printf '%s\n' "$out" | grep -E 'FAIL|Error' | head -6 | sed 's/^/        /'
+    fail=$((fail + 1)); failed_names+=("$page")
+  fi
+done
+
+echo
 echo "--- server integration ---"
 run test_print_auth        _dev/test_print_auth.js
 run test_recheck_payment   _dev/test_recheck_payment.js
@@ -116,7 +133,9 @@ run test_flush_survives_kill _dev/test_flush_survives_kill.js
 run probe_counter_cap_http _dev/probe_counter_cap_http.js
 run probe_discount_http    _dev/probe_discount_http.js
 run probe_loyalty          _dev/probe_loyalty.js
+run probe_throttle_isolate _dev/probe_throttle_isolate.js
 run probe_member            _dev/probe_member.js
+run probe_device_auth      _dev/probe_device_auth.js
 run probe_schedule          _dev/probe_schedule.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js

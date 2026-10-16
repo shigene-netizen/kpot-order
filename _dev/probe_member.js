@@ -61,7 +61,11 @@ const patch = (route, body) => req('PATCH', route, body, adminH());
 
 const priceBody = (items, loyalty, couponCode, orderType) => {
   const b = { orderType: orderType || 'pickup', items: items, tipAmount: 0 };
-  if (loyalty) b.loyalty = loyalty;
+  /* Every loyalty request carries this device's credential, exactly as the
+     guest page does. Until one has been collected it is the empty string and
+     the server refuses the spend — a boundary probe_device_auth.js pins in
+     full, so this probe does not assert it twice. */
+  if (loyalty) b.loyalty = Object.assign({ device: DEVICE }, loyalty);
   if (couponCode) b.couponCode = couponCode;
   return b;
 };
@@ -83,7 +87,36 @@ const orderFor = (no, total, extra) => Object.assign({
   paid: false,
   source: 'probe'
 }, extra || {});
-const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE));
+/* ---- The membership credential -----------------------------------------
+   A phone number no longer reads or spends an account on its own
+   (probe_device_auth.js pins that boundary in full). This probe is about the
+   EARNING rules, so it has to hold a credential, just as a real guest's
+   browser does.
+
+   It cannot claim one off an order the way probe_loyalty.js does: membership
+   is enrolled at the counter through `adjust`, so there is no order to claim.
+   It uses the counter's OWN recovery path instead — the owner mints a code
+   with `issueCode: true`, the guest trades it at /api/recovery/verify — which
+   is exactly the door a real guest with no e-mail on file walks through. */
+let DEVICE = '';
+const dev = () => (DEVICE ? '&device=' + encodeURIComponent(DEVICE) : '');
+function unlockWithCode() {
+  /* Deliberately returns false rather than throwing. A thrown harness hides
+     the blast radius — the whole point of red-verifying this is to see how
+     many later assertions a broken unlock drags down with it. */
+  return post('/api/customers/adjust', { phone: PHONE, issueCode: true, note: 'probe unlock' }, adminH())
+    .then((r) => {
+      const code = r.j && r.j.recoveryCode;
+      if (!code) return false;
+      return post('/api/recovery/verify', { phone: PHONE, code: code });
+    })
+    .then((r) => {
+      if (r && r.status === 200 && r.j && r.j.device) { DEVICE = r.j.device; return true; }
+      return false;
+    });
+}
+
+const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE) + dev());
 const membersAdmin = () => get('/api/customers', adminH());
 
 const server = spawn(process.execPath, ['server.js'], {
@@ -136,7 +169,13 @@ waitForHealth(80).then(() => {
   check('with the fee the owner set', r.j && r.j.memberRules.fee === 9.99);
   check('and the 2x multiplier', r.j && r.j.memberRules.pointsMultiplier === 2);
 
-  return post('/api/customers/adjust', { phone: PHONE, member: 'confirm', note: 'probe enrolment' }, adminH());
+  /* ---- earn the credential the way a guest with no e-mail must ----
+     Everything past this point presents it, so if the unlock breaks every
+     later assertion goes red together — which is exactly what should happen. */
+  return unlockWithCode().then((ok) => {
+    check('a guest with no e-mail unlocks with a counter-issued code', ok === true);
+    return post('/api/customers/adjust', { phone: PHONE, member: 'confirm', note: 'probe enrolment' }, adminH());
+  });
 }).then((r) => {
   check('enrolling a member needs no prior ledger entry',
     r.status === 200 && r.j && r.j.customer.memberUntil, 'status=' + r.status + ' ' + JSON.stringify(r.j));
@@ -164,6 +203,20 @@ waitForHealth(80).then(() => {
   check('and mints NO second coupon',
     r.j && r.j.customer.coupons.length === 1,
     'coupons=' + (r.j && r.j.customer.coupons.length));
+
+  /* ---- the bare number must NOT be enough ----
+     Paired with the unlocked read immediately below. This is the exact
+     vulnerability the owner found, pinned at the HTTP layer: knowing a mobile
+     number buys you the fact that an account exists, and nothing else. */
+  return get('/api/customer?phone=' + encodeURIComponent(PHONE));
+}).then((r) => {
+  check('a bare phone number does not identify the account',
+    r.j && r.j.identified === false && r.j.found === true, JSON.stringify(r.j));
+  check('and hands back no points, no rewards and not even the name',
+    r.j && r.j.points === 0 && (r.j.coupons || []).length === 0 && r.j.name === undefined,
+    JSON.stringify(r.j));
+  check('but does confirm rewards are waiting, so the guest can self-serve',
+    r.j && r.j.hasRewards === true, JSON.stringify(r.j));
   return member();
 }).then((r) => {
   check('the guest sees they are a member', r.j && r.j.member.is === true, JSON.stringify(r.j && r.j.member));

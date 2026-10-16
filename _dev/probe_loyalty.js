@@ -59,7 +59,11 @@ const patch = (route, body) => req('PATCH', route, body, adminH());
 
 const priceBody = (items, loyalty, couponCode) => {
   const b = { orderType: 'pickup', items: items, tipAmount: 0 };
-  if (loyalty) b.loyalty = loyalty;
+  /* Every loyalty request carries this device's credential, exactly as the
+     guest page does. Until one has been collected it is the empty string and
+     the server refuses the spend — which is the boundary probe_device_auth.js
+     exists to pin down, so this probe does not assert it twice. */
+  if (loyalty) b.loyalty = Object.assign({ device: DEVICE }, loyalty);
   if (couponCode) b.couponCode = couponCode;
   return b;
 };
@@ -67,6 +71,7 @@ const priceBody = (items, loyalty, couponCode) => {
 const orderFor = (no, total, loyalty, extra) => Object.assign({
   no: no,
   token: 'loy-' + no,
+  claim: newClaim(no),
   orderType: 'pickup',
   table: '',
   customer: { name: 'Bob Smith', phone: '(678) 335-5388' },
@@ -83,7 +88,38 @@ const orderFor = (no, total, loyalty, extra) => Object.assign({
   source: 'probe'
 }, extra || {}, loyalty ? { loyalty: loyalty } : {});
 
-const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE));
+const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE) + dev());
+
+
+/* ---- The membership credential -----------------------------------------
+   A phone number alone no longer reads or spends an account (see
+   probe_device_auth.js for that boundary in full). This probe is about the
+   EARNING rules, so it does what a real guest's browser does: it generates a
+   claim secret at checkout, collects the credential once the order is paid,
+   and presents it from then on. */
+let DEVICE = '';
+let couponsBefore = 0;
+/* The id of the coupon the last section spends, carried between the steps of
+   the promise chain. */
+let couponId = '';
+const dev = () => (DEVICE ? '&device=' + encodeURIComponent(DEVICE) : '');
+const CLAIMS = {};
+function newClaim(no) {
+  CLAIMS[no] = require('crypto').randomBytes(32).toString('hex');
+  return CLAIMS[no];
+}
+function claimDevice(id, suggestedNo) {
+  /* Keyed by the id the SERVER assigned, falling back to the number we
+     suggested — the server may re-number an order if another guest got there
+     first, and the secret was minted against our suggestion. */
+  const secret = CLAIMS[id] || CLAIMS[suggestedNo];
+  if (!secret) return Promise.resolve(false);
+  return post('/api/orders/' + encodeURIComponent(id) + '/claim', { claim: secret })
+    .then((r) => {
+      if (r.status === 200 && r.j && r.j.device) { DEVICE = r.j.device; return true; }
+      return false;
+    });
+}
 
 const server = spawn(process.execPath, ['server.js'], {
   cwd: ROOT,
@@ -221,24 +257,83 @@ waitForHealth(80).then(() => {
   return patch('/api/orders/' + encodeURIComponent(id), { paymentStatus: 'paid' }).then((r) => {
     check('staff marking the order collected succeeds',
       r.status === 200 && r.j && r.j.ok === true, 'status=' + r.status + ' ' + JSON.stringify(r.j));
-    return member();
+    /* The money is confirmed, so the browser that placed the order can now
+       collect its membership credential — the same handshake the guest page
+       performs. Everything below depends on it, because a bare phone number
+       deliberately no longer reads a balance. */
+    return claimDevice(id, 'KP-LOY-1').then((got) => {
+      check('a paid order hands this device a membership credential', got === true);
+      return member();
+    });
   });
 }).then((r) => {
   check('points ARE earned once payment is confirmed', r.j && r.j.points === 15,
     'points=' + (r.j && r.j.points));
   check('the name comes back masked', r.j && r.j.name === 'Bob S.', 'name=' + (r.j && r.j.name));
-  /* The expiring come-back coupon is switched OFF: a reward carrying a date
-     reads to a guest as "my points expire", which is not the deal we offer. */
-  check('NO come-back coupon is issued', r.j && r.j.coupons && r.j.coupons.length === 0,
+  /* The come-back coupon is ON: it is the one reward that carries a date, and
+     the owner asked for it not to be switched off. What must stay true is that
+     the POINTS do not expire — see the "never expire" block below. */
+  check('a come-back coupon is issued', r.j && r.j.coupons && r.j.coupons.length === 1,
     JSON.stringify(r.j && r.j.coupons));
-  check('and the storefront is told the reward is off',
-    r.j && r.j.rules && r.j.rules.returnValue === 0, JSON.stringify(r.j && r.j.rules));
+  check('and it is the expiring kind', r.j && r.j.coupons[0] && r.j.coupons[0].kind === 'return',
+    JSON.stringify(r.j && r.j.coupons[0]));
+  check('and the storefront is told the reward is on',
+    r.j && r.j.rules && r.j.rules.returnValue === 3, JSON.stringify(r.j && r.j.rules));
+  check('and what an order must be worth to earn one',
+    r.j && r.j.rules && r.j.rules.returnMinSubtotal === 10, JSON.stringify(r.j && r.j.rules));
   check('the stamp card shows 1 settled order', r.j && r.j.stamps && r.j.stamps.settled === 1);
-  check('with 9 to go to the $10 reward', r.j && r.j.stamps && r.j.stamps.toNext === 9);
+  check('with 9 to go to the $7 reward', r.j && r.j.stamps && r.j.stamps.toNext === 9);
+  /* The promise the owner actually made, pinned where a regression would show
+     up: the points balance has no date on it anywhere in the payload. */
+  check('and the points balance carries no expiry at all',
+    r.j && r.j.pointsExpireAt === undefined && r.j.expiresAt === undefined,
+    JSON.stringify(Object.keys(r.j || {})));
 
   /* The server's own log line is the audit trail the owner will read. */
   check('the server logged the payout', /loyalty: .* earned 15 point/.test(serverLog),
     serverLog.split('\n').filter((l) => /loyalty/.test(l)).slice(-3).join(' | '));
+
+  /* ---- The $10 threshold, over HTTP -------------------------------------
+     The unit proves the rule; this proves the SERVER applies it, on a number
+     nobody has ever transacted with, so no other assertion can be disturbed
+     by what happens to their wallet. */
+  return post('/api/price', priceBody([RICE]));
+}).then((r) => {
+  /* $1.50 of rice: well under the line. */
+  const total = r.j && r.j.total;
+  return post('/api/orders', orderFor('KP-LOY-THRESH', total, null, {
+    customer: { name: 'Small Order', phone: '4045550666' },
+    items: [RICE],
+    subtotal: 1.5,
+    tax: Math.round((total - 1.5) * 100) / 100
+  }));
+}).then((r) => {
+  check('a small order is accepted', r.status === 200 && r.j && r.j.ok === true,
+    'status=' + r.status + ' ' + JSON.stringify(r.j));
+  return patch('/api/orders/' + encodeURIComponent('KP-LOY-THRESH'), { paymentStatus: 'paid' });
+}).then((r) => {
+  check('and can be marked collected', r.status === 200 && r.j && r.j.ok === true);
+
+  /* Collect the credential first. A bare phone number now returns the LOCKED
+     view, which zeroes the balance — reading it without one would make every
+     assertion below pass for the wrong reason, which is worse than failing.
+     The token is kept in its OWN variable: claimDevice() overwrites the shared
+     one, and this probe still has Bob's wallet to read for the rest of its
+     run. */
+  return post('/api/orders/' + encodeURIComponent('KP-LOY-THRESH') + '/claim',
+    { claim: CLAIMS['KP-LOY-THRESH'] });
+}).then((r) => {
+  check('a paid order hands out a credential even on a small basket',
+    r.status === 200 && !!r.j.device, 'status=' + r.status + ' ' + JSON.stringify(r.j));
+
+  return get('/api/customer?phone=4045550666&device=' + encodeURIComponent(r.j.device));
+}).then((r) => {
+  check('and the wallet really was opened, not merely found',
+    r.j && r.j.identified === true, JSON.stringify(r.j && r.j.identified));
+  check('a $1.50 paid order earns NO come-back coupon',
+    r.j && r.j.found === true && r.j.coupons.length === 0,
+    JSON.stringify(r.j && r.j.coupons));
+  check('though it still earns its point', r.j && r.j.points === 1, 'points=' + (r.j && r.j.points));
 
   /* Hand one out by hand. Redemption has to stay live for a reward the shop
      chooses to give, and this is the counter's own "make it right" tool. */
@@ -247,7 +342,7 @@ waitForHealth(80).then(() => {
     adminH());
 }).then((r) => {
   check('staff can hand a guest a reward by hand',
-    r.status === 200 && r.j && r.j.customer.coupons.length === 1,
+    r.status === 200 && r.j && r.j.customer.coupons.length === 2,
     'status=' + r.status + ' ' + JSON.stringify(r.j));
   return member();
 }).then((r) => {
@@ -266,12 +361,12 @@ waitForHealth(80).then(() => {
     });
 }).then(() => {
   /* A different format of the SAME number must hit the SAME ledger. */
-  return get('/api/customer?phone=' + encodeURIComponent('+1 678-335-5388'));
+  return get('/api/customer?phone=' + encodeURIComponent('+1 678-335-5388') + dev());
 }).then((r) => {
   check('"+1 678-335-5388" resolves to the same member',
     r.j && r.j.found === true && r.j.points === 15, JSON.stringify(r.j));
 
-  return get('/api/customer?phone=' + encodeURIComponent('1 (678) 335.5388'));
+  return get('/api/customer?phone=' + encodeURIComponent('1 (678) 335.5388') + dev());
 }).then((r) => {
   check('dotted and bracketed forms resolve too', r.j && r.j.points === 15, JSON.stringify(r.j));
 
@@ -285,7 +380,7 @@ waitForHealth(80).then(() => {
   check('with the member\'s name for the board',
     r.j && r.j.members[PHONE].name === 'Bob Smith');
   check('and the unused coupons',
-    r.j && r.j.members[PHONE].unusedCoupons.length === 1);
+    r.j && r.j.members[PHONE].unusedCoupons.length === 2);
   console.log('');
 
   /* ======================================================================
@@ -298,11 +393,11 @@ waitForHealth(80).then(() => {
 
   return post('/api/price', priceBody([HOTPOT], { phone: PHONE, couponId: couponId }));
 }).then((r) => {
-  check('the coupon takes $5 off the hot pot',
-    r.j && r.j.discount === 5, JSON.stringify(r.j));
-  check('and tax is recalculated on the discounted amount ($0.66)',
-    r.j && r.j.tax === 0.66, 'tax=' + (r.j && r.j.tax));
-  check('so the total is $11.65', r.j && r.j.total === 11.65, 'total=' + (r.j && r.j.total));
+  check('the coupon takes $3 off the hot pot',
+    r.j && r.j.discount === 3, JSON.stringify(r.j));
+  check('and tax is recalculated on the discounted amount ($0.78)',
+    r.j && r.j.tax === 0.78, 'tax=' + (r.j && r.j.tax));
+  check('so the total is $13.77', r.j && r.j.total === 13.77, 'total=' + (r.j && r.j.total));
   check('the label says "come back", not a code name',
     /come back/i.test(r.j && r.j.discountLabel), 'label=' + (r.j && r.j.discountLabel));
   check('and the source is loyalty', r.j && r.j.discountSource === 'loyalty');
@@ -332,12 +427,12 @@ waitForHealth(80).then(() => {
   check('150 points on a $1.50 order is refused as too small, NOT as "not enough points"',
     r.status === 409 && r.j && r.j.error === 'order_too_small',
     'status=' + r.status + ' ' + JSON.stringify(r.j));
-  check('and explains the $5 floor', /\$5/.test(r.j && r.j.message), 'message=' + (r.j && r.j.message));
+  check('and explains the $10 floor', /\$10/.test(r.j && r.j.message), 'message=' + (r.j && r.j.message));
 
   return post('/api/price', priceBody([HOTPOT], { phone: PHONE, redeemPoints: true }));
 }).then((r) => {
-  check('the same 150 points on a $15.99 order redeem for $5',
-    r.j && r.j.discount === 5, JSON.stringify(r.j));
+  check('the same 150 points on a $15.99 order redeem for $10',
+    r.j && r.j.discount === 10, JSON.stringify(r.j));
   check('and are labelled in points', /points/i.test(r.j && r.j.discountLabel),
     'label=' + (r.j && r.j.discountLabel));
 
@@ -368,9 +463,9 @@ waitForHealth(80).then(() => {
   return post('/api/price', priceBody([HOTPOT], { phone: PHONE, redeemPoints: true }));
 }).then((r) => {
   const total = r.j && r.j.total;
-  check('the points price is $11.65', total === 11.65, 'total=' + total);
+  check('the points price is $6.35', total === 6.35, 'total=' + total);
 
-  return post('/api/orders', orderFor('KP-LOY-2', total, { phone: PHONE, redeemPoints: true }));
+  return post('/api/orders', orderFor('KP-LOY-2', total, { phone: PHONE, redeemPoints: true, device: DEVICE }));
 }).then((r) => {
   check('an order priced with points is accepted',
     r.status === 200 && r.j && r.j.ok === true, 'status=' + r.status + ' ' + JSON.stringify(r.j));
@@ -407,11 +502,16 @@ waitForHealth(80).then(() => {
   check('the member list needs the admin key', r.status === 401, 'status=' + r.status);
   return get('/api/customers', adminH());
 }).then((r) => {
+  /* Two members now: Bob and the $1.50 small-order guest from the threshold
+     section above. The assertion pins BOTH rather than a single row, so an
+     extra guest can never quietly pass as the right one. */
   check('the member list works with the key',
-    r.status === 200 && r.j && r.j.count === 1, 'status=' + r.status + ' count=' + (r.j && r.j.count));
-  check('with the raw phone number for the counter',
-    r.j && r.j.customers[0].phone === PHONE, JSON.stringify(r.j && r.j.customers[0]));
-  check('and the balance', r.j && r.j.customers[0].points === 150);
+    r.status === 200 && r.j && r.j.count === 2, 'status=' + r.status + ' count=' + (r.j && r.j.count));
+  const bob = (r.j && r.j.customers || []).find((c) => c.phone === PHONE);
+  const small = (r.j && r.j.customers || []).find((c) => c.phone === '4045550666');
+  check('with the raw phone number for the counter', !!bob && !!small,
+    JSON.stringify((r.j && r.j.customers || []).map((c) => c.phone)));
+  check('and the balance', bob && bob.points === 150, 'points=' + (bob && bob.points));
 
   return get('/api/customers?q=678335', adminH());
 }).then((r) => {
@@ -432,9 +532,12 @@ waitForHealth(80).then(() => {
   return req('GET', '/api/customers/export.csv', null, adminH());
 }).then((r) => {
   check('the member export works with the key', r.status === 200, 'status=' + r.status);
-  check('and is served as CSV', typeof r.j === 'string' && r.j.indexOf('phone,name,points,') !== -1,
+  check('and is served as CSV', typeof r.j === 'string' && r.j.indexOf('phone,name,email,points,') !== -1,
     String(r.j).slice(0, 80));
   check('with the member in it', typeof r.j === 'string' && r.j.indexOf(PHONE) !== -1);
+  check('and the address and device count exported alongside',
+    typeof r.j === 'string' && r.j.indexOf('devices') !== -1 && r.j.split('\r\n')[0].indexOf('email') !== -1,
+    String(r.j).split('\r\n')[0]);
 
   /* The BOM has to be checked in the BYTES: fetch's text() decodes UTF-8 with
      a TextDecoder, which strips a leading U+FEFF by design — so asserting on
@@ -475,18 +578,72 @@ waitForHealth(80).then(() => {
   check('an adjust with nothing to do is refused',
     r.status === 400 && r.j && r.j.error === 'nothing_to_do', 'status=' + r.status);
 
+  /* How many rewards the wallet already holds, so the next assertion is about
+     the HAND-OUT and not about whatever the earning rules happen to be today. */
+  return member();
+}).then((r) => {
+  couponsBefore = (r.j && r.j.coupons && r.j.coupons.length) || 0;
+  check('the wallet has rewards on it to compare against', couponsBefore > 0,
+    'coupons=' + couponsBefore);
+
   return post('/api/customers/adjust',
     { phone: PHONE, coupon: { value: 8, label: 'Goodwill', days: 30 }, note: 'probe' }, adminH());
 }).then((r) => {
+  /* Counted relative to what was already on the wallet, not against a number
+     typed here: the come-back coupon now arrives with every settled order, so
+     an absolute count would break the moment that rule is tuned. */
   check('staff can hand a guest a one-off reward',
-    r.status === 200 && r.j && r.j.customer.coupons.length === 2,
+    r.status === 200 && r.j && r.j.customer.coupons.length === couponsBefore + 1,
     'status=' + r.status + ' coupons=' + (r.j && r.j.customer && r.j.customer.coupons.length));
 
   return member();
 }).then((r) => {
   check('the one-off reward shows up for the guest',
-    r.j && r.j.coupons.length === 2 && r.j.coupons.some((c) => c.value === 8),
+    r.j && r.j.coupons.length === couponsBefore + 1 && r.j.coupons.some((c) => c.value === 8),
     JSON.stringify(r.j && r.j.coupons));
+
+  /* ======================================================================
+     ONE COUPON, ONE ORDER. The owner asked for it explicitly — "每张只能使用
+     一次". test_loyalty.js pins the commit rule in the unit; what this adds is
+     the whole chain through the HTTP layer: the coupon LEAVES the wallet the
+     moment an order is placed against it, and that same id is refused on the
+     next one.
+
+     Placed here rather than at the end because the throttle burst further down
+     burns this probe's own public-lookup allowance — and a throttled lookup
+     looks exactly like a wallet with nothing on it.
+     ====================================================================== */
+  const held = (r.j.coupons || [])[0];
+  couponId = held && held.id;
+  check('the guest is holding a reward to spend', !!couponId, JSON.stringify(r.j.coupons));
+
+  return post('/api/price', priceBody([HOTPOT], { phone: PHONE, couponId: couponId }));
+}).then((p) => {
+  const total = p.j && p.j.total;
+  check('the reward prices the order down to $13.77', total === 13.77, 'total=' + total);
+
+  return post('/api/orders', orderFor('KP-LOY-7', total, { phone: PHONE, couponId: couponId, device: DEVICE }));
+}).then((r) => {
+  check('an order may be placed against it',
+    r.status === 200 && r.j && r.j.ok === true, 'status=' + r.status + ' ' + JSON.stringify(r.j));
+
+  return member();
+}).then((r) => {
+  check('the coupon LEFT the wallet the moment the order was placed',
+    !(r.j && r.j.coupons || []).some((c) => c.id === couponId),
+    JSON.stringify(r.j && r.j.coupons));
+
+  return post('/api/price', priceBody([HOTPOT], { phone: PHONE, couponId: couponId }));
+}).then((r) => {
+  check('and the SAME coupon cannot price a second order',
+    r.status === 409 && r.j && r.j.error === 'coupon_unavailable',
+    'status=' + r.status + ' ' + JSON.stringify(r.j));
+
+  return post('/api/orders', orderFor('KP-LOY-8', 13.77, { phone: PHONE, couponId: couponId, device: DEVICE }));
+}).then((r) => {
+  check('and no ORDER may be placed against it either',
+    r.status === 409 && r.j && r.j.error === 'coupon_unavailable',
+    'status=' + r.status + ' ' + JSON.stringify(r.j));
   console.log('');
   console.log('');
 
@@ -508,7 +665,7 @@ waitForHealth(80).then(() => {
     const jsonName = files.find((f) => /^members-\d{4}-\d{2}-\d{2}\.json$/.test(f));
     if (jsonName) {
       const snap = JSON.parse(fs.readFileSync(path.join(dir, jsonName), 'utf8'));
-      check('and the backup copy holds the member', snap.customers.length === 1,
+      check('and the backup copy holds every member', snap.customers.length === 2,
         'customers=' + (snap.customers && snap.customers.length));
     }
   });

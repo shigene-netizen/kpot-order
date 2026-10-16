@@ -30,6 +30,7 @@ const D = require('./discounts.js');
 const L = require('./customers.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
+const MAIL = require('./mailer.js');
 
 const ROOT = __dirname;
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -615,6 +616,17 @@ function throttled(ip, max, windowMs) {
   return rec.n > max;
 }
 
+/* The same counter, keyed by something other than the caller's address.
+
+   The recovery endpoints need a second limit that an attacker cannot reset by
+   changing IP: "mail at most N codes to THIS phone number per hour". Without
+   it, a rotating-IP script could use the recovery form to flood one guest's
+   inbox, and the guest would rightly blame us for it. Namespaced so a phone
+   number can never collide with an IP in the same map. */
+function throttleKey(kind, key, max, windowMs) {
+  return throttled(kind + ':' + String(key || '?'), max, windowMs);
+}
+
 /* POST /api/price — what would this order cost, with this code?
 
    Exists because the guest has to SEE the discount before they pay, and
@@ -623,7 +635,12 @@ function throttled(ip, max, windowMs) {
    starts no payment, creates no order, and does not spend the code. */
 async function handlePrice(req, res) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  if (throttled(ip, 40, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
+  /* Namespaced. Every one of these endpoints used to key the counter by the
+     bare IP, and throttled() keeps ONE counter per key — so a guest re-pricing
+     their basket (which happens on every reward choice) spent the allowance
+     that handleCreateOrder needed, and the shop's wifi hands every table the
+     same address. Same reasoning as the claim/recovery keys below. */
+  if (throttled('price:' + ip, 40, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
 
   let raw;
   try { raw = await readBody(req, 64 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
@@ -652,7 +669,9 @@ async function handlePrice(req, res) {
 
 async function handleCheckout(req, res) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  if (throttled(ip, 20, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
+  /* Namespaced for the same reason as the others: this one creates Stripe
+     sessions, and it must not be starved by re-pricing, nor starve ordering. */
+  if (throttled('checkout:' + ip, 20, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
 
   if (!SECRET_KEY) {
     return sendJSON(res, 503, {
@@ -754,7 +773,9 @@ async function handleCheckout(req, res) {
    may retry. */
 async function handleVerifySession(req, res, url) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  if (throttled(ip, 60, 60000)) {
+  /* Namespaced: the guest arrives here once per payment, and must not be
+     turned away because their own re-pricing used up a shared counter. */
+  if (throttled('verify:' + ip, 60, 60000)) {
     return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many checks. Please wait a moment.' });
   }
 
@@ -860,6 +881,30 @@ if (!PRINT_KEY && ADMIN_KEY) {
   console.warn('[kpot] PRINT_KEY not set — the print agent endpoint is OPEN (dev mode).');
 }
 
+/* ---- Outgoing mail ------------------------------------------------------
+   Used for one thing: the six-digit code that lets a guest move their rewards
+   to a new phone. Without it the whole "new device" half of the rewards
+   scheme has no self-service path, so say so at boot rather than letting the
+   first guest discover it.
+
+   KPOT_SMTP_PLAIN is a test seam and gets the same treatment as
+   KPOT_STRIPE_API_BASE: a loud line in the log, because on a real mailbox it
+   would put the Gmail app password on the wire in clear text. */
+{
+  const ms = MAIL.status();
+  if (ms.plain) {
+    console.warn('[kpot] ⚠️  KPOT_SMTP_PLAIN=1 — outgoing mail is NOT encrypted.');
+    console.warn('       This is for tests only. Unset it before running a real shop.');
+  }
+  if (ms.configured) {
+    console.log('[kpot] mail: sending as ' + ms.user + ' via ' + ms.host + ':' + ms.port + ' (' + ms.tls + ')');
+  } else {
+    console.warn('[kpot] mail not configured (GMAIL_USER / GMAIL_APP_PASSWORD unset) —');
+    console.warn('       guests on a NEW phone cannot unlock their rewards themselves;');
+    console.warn('       they will be told to ask at the counter.');
+  }
+}
+
 /* ---- The shop's clock ---------------------------------------------------
    Every date this server computes is LOCAL-time arithmetic: dateKeyOf() decides
    what "today" is, selectableDates() decides what "tomorrow" is, and
@@ -944,10 +989,18 @@ let saveTimer = null;
 
 /* Write the board to disk right now. Used by the debounced saver and, more
    importantly, on shutdown — without this a restart landing inside the 800ms
-   debounce window would silently drop the orders created in that window. */
+   debounce window would silently drop the orders created in that window.
+
+   ATOMICALLY. This is not tidiness: writeFileSync is not atomic, so a process
+   killed part-way through one leaves the file TRUNCATED, and the next start
+   then finds an unparseable board and drops every order on it. That is not
+   hypothetical — it is exactly what test_backups.js caught: a SIGKILL landing
+   inside a periodic flush left "Unexpected end of JSON input" on disk. Windows
+   has no SIGTERM to give us a clean pause, so the only safe moment is one that
+   cannot be interrupted half-done: temp file, then rename. */
 function saveOrdersNow() {
   try {
-    fs.writeFileSync(ORDERS_FILE, JSON.stringify(Array.from(orders.values()), null, 2));
+    writeFileAtomic(ORDERS_FILE, JSON.stringify(Array.from(orders.values()), null, 2));
   } catch (e) { console.error('[kpot] could not save orders:', e.message); }
 }
 
@@ -1535,7 +1588,11 @@ function counterMaxTotal() {
 
 async function handleCreateOrder(req, res) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  if (throttled(ip, 30, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many orders. Please wait a moment.' });
+  /* Namespaced for the same reason as handlePrice, and this is the endpoint
+     where it matters most: the guest has already chosen everything and is
+     about to spend money. Re-pricing a basket must never be the thing that
+     stops an order going through. */
+  if (throttled('orders:' + ip, 30, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many orders. Please wait a moment.' });
 
   let raw;
   try { raw = await readBody(req, 64 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
@@ -1647,6 +1704,27 @@ async function handleCreateOrder(req, res) {
   const suggested = String(body.no || body.orderNo || '').slice(0, 60);
   const id = (suggested && !orders.has(suggested)) ? suggested : nextServerOrderNo();
 
+  /* The guest's own contact block, rebuilt rather than copied: the e-mail is
+     normalised here so a typo that only fails later fails now, and the raw
+     payload never lands in the ledger as-is. */
+  const guestEmail = L.normalizeEmail((body.customer || {}).email);
+  const customer = {
+    name: String((body.customer || {}).name || '').slice(0, 80),
+    phone: String((body.customer || {}).phone || '').slice(0, 40),
+    email: guestEmail || '',
+    when: String((body.customer || {}).when || '').slice(0, 200),
+    notes: String((body.customer || {}).notes || '').slice(0, 500)
+  };
+
+  /* The browser's proof that it is the one that placed this order, stored as
+     a hash. It is the second half of the device-credential handshake: the
+     guest may only collect a credential for THIS order from the browser that
+     created it, and the browser generated this secret itself (32 bytes from
+     crypto.getRandomValues) so there is nothing for us to hand back or
+     re-issue. A payload without one simply cannot be claimed — fail closed. */
+  const claim = String(body.claim || '');
+  const claimHash = /^[0-9a-f]{32,128}$/i.test(claim) ? L.hashSecret(claim.toLowerCase()) : '';
+
   const now = new Date().toISOString();
   const order = {
     id,
@@ -1680,7 +1758,11 @@ async function handleCreateOrder(req, res) {
     deliverySlotLabel: schedule ? schedule.slotLabel : '',
     scheduledFor: schedule ? schedule.scheduledFor : '',
     table: body.table || '',
-    customer: body.customer || {},
+    customer,
+    /* Never leaves the server except as this hash, and never appears in any
+       outward view of the order. */
+    claimHash,
+    claimUsedAt: '',
     /* The guest's raw payload is kept for reference (mods, notes, addons), but
        the PRICES we show the kitchen come from `lines` — the server's own
        recomputation. Never render a line price from `items`: that number came
@@ -2010,7 +2092,9 @@ function loadPrintJobs() {
 let printSaveTimer = null;
 function savePrintNow() {
   try {
-    fs.writeFileSync(PRINT_FILE, JSON.stringify(Array.from(printJobs.values()), null, 2));
+    /* Atomic for the same reason the order board is: a queue cannot afford a
+       half-written snapshot — it is the tickets the kitchen has not printed. */
+    writeFileAtomic(PRINT_FILE, JSON.stringify(Array.from(printJobs.values()), null, 2));
   } catch (e) { console.error('[kpot] could not save print jobs:', e.message); }
 }
 function savePrintSoon() {
@@ -2379,7 +2463,9 @@ function loadMenuStore() {
 function saveMenuStore() {
   menuMeta = { custom: true, updatedAt: new Date().toISOString() };
   try {
-    fs.writeFileSync(MENU_FILE, JSON.stringify({ menu: ASSETS.MENU, categories: ASSETS.CATEGORIES, updatedAt: menuMeta.updatedAt }, null, 2));
+    /* Atomic: the owner's whole menu, corrupted by a partial write, would take
+       the shop offline with a page that renders nothing. */
+    writeFileAtomic(MENU_FILE, JSON.stringify({ menu: ASSETS.MENU, categories: ASSETS.CATEGORIES, updatedAt: menuMeta.updatedAt }, null, 2));
   } catch (e) { console.error('[kpot] could not save menu:', e.message); }
 }
 
@@ -2624,6 +2710,24 @@ function resolveLoyalty(req, priced, orderType) {
     return { error: 'unknown_customer', message: 'We have no rewards on that mobile number yet.' };
   }
 
+  /* ⚠️ THE GATE. A phone number identifies an account; it does not authorise
+     spending from it. Anyone can type anyone's number into this public form,
+     so without a credential the request below would happily take $5 off the
+     bill of whoever the number happens to belong to.
+
+     `req.device` is the token this browser was handed when it first paid. It
+     is verified against the account's own hashed credentials — a token for a
+     DIFFERENT guest fails here just as a made-up one does.
+
+     Fail closed and say why: the guest page turns `device_required` into the
+     "confirm this phone" prompt rather than a dead end. */
+  if (!L.verifyDevice(cust, req.device, Date.now())) {
+    return {
+      error: 'device_required',
+      message: 'Confirm this mobile number before using its rewards.'
+    };
+  }
+
   /* ---- the member perk ---- */
   if (memberChoice) {
     const benefits = MB.benefitsFor(cust, memberCfg(), Date.now());
@@ -2706,6 +2810,30 @@ function commitLoyalty(order, reward) {
   return true;
 }
 
+/* Attach the address the guest typed at checkout to their account — but only
+   when the account has none, and only once the money is confirmed.
+
+   Both halves of that matter.
+
+   ONLY WHEN EMPTY: if an order payload could overwrite an address, anyone who
+   knows a guest's mobile number could place an order carrying their OWN
+   e-mail and then walk the recovery flow straight into the account. The
+   storefront may fill a blank; it may never rewrite one.
+
+   ONLY ONCE PAID: otherwise the same trick works on an account that has not
+   been claimed yet — seed a stranger's brand-new record with your address and
+   wait for them to start earning. Requiring a settled order means the attacker
+   has to pay for a real order first, which is the same bar the owner already
+   accepted for issuing a device credential at all. */
+function captureEmailFor(order, cust, at) {
+  if (!order || !cust) return false;
+  const typed = (order.customer || {}).email;
+  if (!typed) return false;
+  if (L.setEmail(cust, typed) !== 'set') return false;
+  L.pushLog(cust, 'email_set', 0, 'from order ' + order.id, at);
+  return true;
+}
+
 /* Money is confirmed — pay out the points, the stamps and the come-back
    coupon. Called from exactly the two places that can confirm money: Stripe's
    own answer, and an admin PATCH that sets a paid status. Idempotent by the
@@ -2720,6 +2848,10 @@ function awardLoyaltyFor(order, why) {
   const cust = L.ensure(customers, phone, at);
   if (!cust) return null;
 
+  /* Before the award, so a guest whose order is being settled right now can
+     immediately recover on another phone if they need to. */
+  const emailSet = captureEmailFor(order, cust, at);
+
   /* The points multiplier comes from the LEDGER, never from the order payload.
      A guest who POSTs {loyalty:{pointsMultiplier:50}} must not be listened to —
      the same rule that says a browser cannot claim it has paid. Membership is
@@ -2729,7 +2861,13 @@ function awardLoyaltyFor(order, why) {
   const r = L.awardForOrder(cust, order, at, {
     pointsMultiplier: benefits.pointsMultiplier
   });
-  if (!r.changed) return null;
+  /* Nothing to award (already awarded, or a zero-dollar order) — but the
+     address we just attached still has to reach the disk, or the guest's
+     recovery path silently disappears at the next restart. */
+  if (!r.changed) {
+    if (emailSet) saveCustomersStore();
+    return null;
+  }
 
   L.touch(cust, (order.customer || {}).name, at);
   order.loyalty = Object.assign({}, order.loyalty, {
@@ -2767,16 +2905,33 @@ function releaseLoyaltyFor(order, why) {
   return true;
 }
 
-/* GET /api/customer?phone=…&subtotal=…
+/* GET /api/customer?phone=…&subtotal=…&device=…
 
-   Public, because a guest has no admin key. It is a lookup by an EXACT mobile
-   number and returns only what that guest already knows about themselves: a
-   masked name, their points balance, and their own unused rewards. Never the
-   full name, never the ledger, never another guest's row. Throttled, so the
-   endpoint cannot be used to walk the phone-number space. */
+   Public, because a guest has no admin key. The phone number is still the
+   LOOKUP KEY — it is what the guest typed, and it is what the account is
+   named after — but it is no longer the thing that unlocks it.
+
+   ⚠️ Two different answers come out of here and the difference is the whole
+   point of this endpoint's design:
+
+     with a verified device credential → publicView(): the guest's own points,
+       coupons, stamp progress and masked name.
+     without one → lockedView(): that the account exists and whether anything
+       is waiting on it, and nothing else. No balance, no coupons, no history,
+       not even the name.
+
+   A bare phone number gets the second answer. Otherwise anyone who knew a
+   guest's number could read their balance — and, worse, spend it, since
+   /api/price resolves rewards through the same identity.
+
+   Throttled, so the endpoint cannot be used to walk the phone-number space. */
 function handleGetCustomer(req, res, url) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  if (throttled(ip, 60, 60000)) {
+  /* Namespaced. This endpoint is now called by the guest page to prove the
+     phone number, which is a second lookup alongside the re-pricing that
+     follows it — sharing one bare-IP counter with /api/price would have made
+     the second call the thing that ran out. */
+  if (throttled('customer:' + ip, 60, 60000)) {
     return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many lookups. Please wait a moment.' });
   }
   const phone = L.normalizePhone(url.searchParams.get('phone'));
@@ -2785,7 +2940,223 @@ function handleGetCustomer(req, res, url) {
   }
   const raw = Number(url.searchParams.get('subtotal'));
   const subtotal = isFinite(raw) && raw >= 0 ? raw : null;
-  return sendJSON(res, 200, L.publicView(L.find(customers, phone), subtotal, Date.now()));
+
+  const cust = L.find(customers, phone);
+  const token = url.searchParams.get('device') || '';
+  const identified = !!cust && L.verifyDevice(cust, token, Date.now());
+
+  if (!identified) {
+    return sendJSON(res, 200, L.lockedView(cust, Date.now()));
+  }
+  return sendJSON(res, 200, L.publicView(cust, subtotal, Date.now()));
+}
+
+/* -------------------------------------------------------------------------- */
+/* Membership credentials — the two ways a browser earns the right to spend    */
+/* -------------------------------------------------------------------------- */
+
+/* POST /api/orders/:id/claim  { claim }
+
+   "I am the browser that placed this order, and it has been paid for — mint me
+   a membership credential for the number on it."
+
+   This is the moment a device becomes trusted, and it is deliberately tied to
+   a PAID ORDER rather than to the phone number:
+
+     * the caller must hold `claim`, the secret the browser generated when it
+       created the order (we keep only its hash), so knowing a phone number
+       buys nothing here; and
+     * the order must be settled, so the cheapest way to take over somebody
+       else's account is to buy a real order first — the bar the owner chose.
+
+   The credential is the only thing that lets /api/price spend that guest's
+   points, and it is why the guest page can identify them silently on this
+   phone from now on. */
+async function handleClaimOrder(req, res, id) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  /* Namespaced. throttled() keeps ONE counter per key, so a plain ip here
+     would share a bucket with /api/customer, /api/price and /api/orders —
+     and a guest browsing the menu would spend this endpoint's allowance
+     before they ever placed an order. */
+  if (throttled('claim:' + ip, 30, 60000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
+  }
+  const o = orders.get(id);
+  if (!o) return sendJSON(res, 404, { error: 'not_found' });
+
+  /* An order placed before this feature existed has no claim secret, and one
+     placed by a cached older page has none either. Both are told to ask at the
+     counter rather than being handed an account. */
+  if (!o.claimHash) {
+    return sendJSON(res, 409, {
+      error: 'claim_unavailable',
+      message: 'We cannot set up rewards on this phone automatically. Please ask at the counter.'
+    });
+  }
+
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const claim = String(body.claim || '').toLowerCase();
+  if (!claim || L.hashSecret(claim) !== o.claimHash) {
+    return sendJSON(res, 403, { error: 'bad_claim' });
+  }
+  /* Money first. An unpaid order proves nothing — it is the order the guest
+     is about to walk away from. */
+  if (!L.isPaidStatus(o.paymentStatus)) {
+    return sendJSON(res, 409, {
+      error: 'not_paid',
+      message: 'We have not confirmed the payment on this order yet.'
+    });
+  }
+  const phone = L.normalizePhone((o.customer || {}).phone);
+  if (!phone) return sendJSON(res, 409, { error: 'no_phone' });
+
+  const at = new Date().toISOString();
+  const cust = L.ensure(customers, phone, at);
+  if (!cust) return sendJSON(res, 400, { error: 'too_many_customers' });
+
+  const token = L.issueDevice(cust, 'checkout', at);
+  captureEmailFor(o, cust, at);
+  L.touch(cust, (o.customer || {}).name, at);
+  if (!o.claimUsedAt) { o.claimUsedAt = at; orders.set(o.id, o); saveOrdersSoon(); }
+  saveCustomersStore();
+
+  console.log('[kpot] device credential issued for ' + phone.slice(-4).padStart(10, '*') +
+    ' via paid order ' + o.id);
+  return sendJSON(res, 200, { ok: true, device: token, phone, name: L.maskName(cust.name) });
+}
+
+/* What a failed recovery means, in words a guest can act on. The three
+   dead-code cases are deliberately separate from the wrong-code case: "that
+   expired" and "that did not match" send the guest to different buttons. */
+const RECOVERY_ERRORS = {
+  recovery_none: 'That code has expired or was already used. Ask for a new one.',
+  recovery_expired: 'That code has expired. Ask for a new one.',
+  recovery_locked: 'Too many wrong codes on that one — ask for a new one.',
+  recovery_bad_code: 'That code did not match. Check the six digits and try again.'
+};
+
+/* POST /api/recovery/start  { phone, email }
+
+   "I am on a new phone. Mail a code to the address on my account."
+
+   THE ANSWER IS ALWAYS THE SAME, whether the number is unknown, the account
+   has no address, or the address given is not the one we hold. A recovery
+   endpoint that says "no such account" or "wrong e-mail" is an oracle that
+   turns a phone number into a confirmed identity — and /api/customer already
+   reveals more than enough. The wording tells the guest what to expect without
+   telling an attacker whether they guessed right. */
+async function handleRecoveryStart(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  /* Generous per-IP, because a restaurant's wifi puts every guest behind one
+     address and the real limit is the per-NUMBER one below. Too tight here
+     and a family of four tapping "send me a code" locks itself out.
+     Namespaced so it does not share a bucket with the rest of the API. */
+  if (throttled('recovery-start:' + ip, 20, 15 * 60 * 1000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many requests. Please wait a few minutes.' });
+  }
+
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const phone = L.normalizePhone(body.phone);
+  if (!phone) {
+    return sendJSON(res, 400, { error: 'bad_phone', message: 'Enter the 10-digit mobile number on the account.' });
+  }
+  /* Checked BEFORE the account, so the answer depends on the server's setup
+     rather than on whose number was typed. */
+  if (!MAIL.configured()) {
+    return sendJSON(res, 503, {
+      error: 'mail_not_configured',
+      message: 'We cannot e-mail codes at the moment. Please ask at the counter and we will sort it out.'
+    });
+  }
+
+  /* A second limit the attacker cannot dodge by changing IP: at most three
+     codes to any one number per hour. Otherwise a rotating-IP script turns the
+     recovery form into a way to flood a guest's inbox. */
+  if (throttleKey('rec', phone, 3, 60 * 60 * 1000)) {
+    return sendJSON(res, 429, {
+      error: 'rate_limited',
+      message: 'We have already sent a code to that number. Check the inbox, or try again in an hour.'
+    });
+  }
+
+  const cust = L.find(customers, phone);
+  const want = L.normalizeEmail(body.email);
+  const same = !!(cust && cust.email && want && cust.email === want);
+
+  if (same) {
+    const code = L.startRecovery(cust, Date.now());
+    const msg = MAIL.recoveryMessage(code, (ASSETS.CONFIG.store || {}).name,
+      Math.round(L.RECOVERY_TTL_MS / 60000));
+    const out = await MAIL.send({ to: cust.email, subject: msg.subject, text: msg.text });
+    if (!out.ok) {
+      /* Do not leave a live code behind for a mail that never left. */
+      cust.recovery = null;
+      saveCustomersStore();
+      console.error('[kpot] recovery mail failed:', out.error);
+      return sendJSON(res, 502, {
+        error: 'mail_failed',
+        message: 'We could not send that e-mail. Please ask at the counter.'
+      });
+    }
+    saveCustomersStore();
+  }
+
+  return sendJSON(res, 200, {
+    ok: true,
+    sent: true,
+    message: 'If that mobile number and e-mail match our records, a code is on its way.'
+  });
+}
+
+/* POST /api/recovery/verify  { phone, code }
+
+   Trade the mailed code for a credential on THIS browser. The code is burned
+   by checkRecovery(), so it cannot be replayed — including by someone who
+   watched the guest's inbox over their shoulder and tries again later. */
+async function handleRecoveryVerify(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  /* Namespaced for the same reason as the other two: guessing at a code must
+     not eat the allowance the guest needs for ordinary lookups. */
+  if (throttled('recovery-verify:' + ip, 20, 15 * 60 * 1000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a few minutes.' });
+  }
+
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  const phone = L.normalizePhone(body.phone);
+  if (!phone) {
+    return sendJSON(res, 400, { error: 'bad_phone', message: 'Enter the 10-digit mobile number on the account.' });
+  }
+  const cust = L.find(customers, phone);
+  if (!cust) {
+    return sendJSON(res, 400, { error: 'recovery_none', message: RECOVERY_ERRORS.recovery_none });
+  }
+
+  const r = L.checkRecovery(cust, body.code, Date.now());
+  if (r.error) {
+    /* The attempt counter (or the lockout) moved — that has to reach the disk
+       or a restart would hand an attacker five more guesses. */
+    saveCustomersStore();
+    return sendJSON(res, 400, { error: r.error, message: RECOVERY_ERRORS[r.error] || 'That code did not work.' });
+  }
+
+  const at = new Date().toISOString();
+  const token = L.issueDevice(cust, 'recovery', at);
+  L.touch(cust, cust.name, at);
+  saveCustomersStore();
+  console.log('[kpot] rewards unlocked by e-mail code for ' + phone.slice(-4).padStart(10, '*'));
+  return sendJSON(res, 200, { ok: true, device: token, phone, name: L.maskName(cust.name) });
 }
 
 /* GET /api/schedule?date=YYYY-MM-DD — which days a guest may book, and how
@@ -2849,12 +3220,21 @@ function handleListCustomers(req, res, url) {
       return {
         phone: c.phone,
         name: c.name,
+        /* Enough for the console to answer the two questions a counter gets:
+           "can this guest recover on a new phone?" (email set?) and "are they
+           signed in anywhere?" (devices > 0). The hashes stay here. */
+        email: c.email || '',
+        devices: L.deviceCount(c),
         points: c.points,
         lifetimePoints: c.lifetimePoints,
         settledOrders: c.settledOrders,
         stampsIssued: c.stampsIssued,
         unusedCoupons: (c.coupons || []).filter((x) => L.isUsable(x, now)).length,
         lastSeenAt: c.lastSeenAt,
+        /* Is a recovery code already sitting on this account? Worth knowing at
+           the counter: the owner should read out the code they just issued
+           rather than mint a second one that invalidates the first. */
+        recoveryPending: !!(c.recovery && Date.parse(c.recovery.expiresAt) > now),
         /* Membership, so the console can show "member until …" and offer the
            renew/cancel buttons without a second round trip. */
         member: b.member,
@@ -2950,6 +3330,43 @@ async function handleAdjustCustomer(req, res) {
     changed = true;
   }
 
+  /* ---- the recovery address, and the credentials -------------------------
+     Both are counter actions, because both are about the guest's phone rather
+     than about their money.
+
+     `email` is the ONE place an address may be rewritten. The storefront can
+     only ever fill a blank (see captureEmailFor) precisely so that a typed
+     phone number cannot be turned into a takeover; the owner, standing in
+     front of the guest with their ID in hand, obviously can. An empty string
+     clears it. */
+  if (body.email != null) {
+    const e = String(body.email).trim();
+    if (!e) {
+      if (cust.email) { L.pushLog(cust, 'email_cleared', 0, note || 'cleared by staff', at); cust.email = ''; changed = true; }
+    } else {
+      const norm = L.normalizeEmail(e);
+      if (!norm) {
+        return sendJSON(res, 400, { error: 'bad_email', message: 'That does not look like an e-mail address.' });
+      }
+      if (norm !== cust.email) {
+        cust.email = norm;
+        L.pushLog(cust, 'email_set', 0, (note ? note + ' — ' : '') + 'set by staff', at);
+        changed = true;
+      }
+    }
+  }
+
+  /* "Their old phone is in someone else's hands." Kills every credential on
+     the account; the guest then recovers with an e-mail code and gets a fresh
+     one. Nothing is lost — points and rewards are untouched. */
+  if (body.revokeDevices) {
+    const n = L.revokeDevices(cust);
+    if (n) {
+      L.pushLog(cust, 'devices_revoked', 0, n + ' device(s) signed out' + (note ? ' — ' + note : ''), at);
+      changed = true;
+    }
+  }
+
   /* ---- membership: confirm / cancel -----------------------------------
      `body.member` is a string, not a number, because the only two things an
      owner can do to a membership are roll it forward and end it. Anything
@@ -2999,13 +3416,38 @@ async function handleAdjustCustomer(req, res) {
     }
   }
 
+  /* ---- a code the owner can read out --------------------------------------
+     The counter's own recovery path. A guest standing at the till on a new
+     phone, with no e-mail on the account (or a wrong one), has no way to
+     unlock their rewards by themselves — and "sorry, we cannot help" is not
+     an answer the shop can give someone with $40 banked.
+
+     So the owner mints a code and reads it out; the guest types it into the
+     very same box the mailed code goes in. Admin-gated, logged, short-lived
+     and single-use, exactly like the mailed one — the only difference is the
+     delivery channel. */
+  let issuedCode = null;
+  if (body.issueCode) {
+    issuedCode = L.startRecovery(cust, Date.parse(at));
+    L.pushLog(cust, 'recovery_code_issued', 0, note || 'issued at the counter', at);
+    changed = true;
+  }
+
   if (!changed) {
     return sendJSON(res, 400, { error: 'nothing_to_do', message: 'Send a points change, a reward, a name, or a member action.' });
   }
 
   saveCustomersStore();
-  console.log('[kpot] loyalty: staff adjusted ' + phone + (note ? ' — ' + note : ''));
-  return sendJSON(res, 200, { ok: true, customer: L.adminView(cust) });
+  console.log('[kpot] loyalty: staff adjusted ' + phone + (note ? ' — ' + note : '') +
+    (issuedCode ? ' [recovery code issued]' : ''));
+  /* The code is in the response and deliberately NOT in the log — a log line
+     is the last place a live credential should sit. */
+  return sendJSON(res, 200, {
+    ok: true,
+    customer: L.adminView(cust),
+    recoveryCode: issuedCode,
+    recoveryMinutes: issuedCode ? Math.round(L.RECOVERY_TTL_MS / 60000) : 0
+  });
 }
 
 /* GET /api/customers/export.csv|.json — the owner's own copy of the ledger.
@@ -3226,6 +3668,32 @@ const server = http.createServer((req, res) => {
       return sendJSON(res, 405, { error: 'method_not_allowed' });
     }
     return handleGetCustomer(req, res, url);
+  }
+
+  /* The two public halves of the rewards handshake. Both are throttled, and
+     both hand out a credential only in exchange for something the caller has
+     to PROVE they hold: a paid order's claim secret, or a code we mailed. */
+  if (pathname === '/api/recovery/start') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleRecoveryStart(req, res).catch((e) => {
+      console.error('[kpot] recovery-start unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+  if (pathname === '/api/recovery/verify') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleRecoveryVerify(req, res).catch((e) => {
+      console.error('[kpot] recovery-verify unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+  const claimMatch = pathname.match(/^\/api\/orders\/([^/]+)\/claim$/);
+  if (claimMatch) {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleClaimOrder(req, res, decodeURIComponent(claimMatch[1])).catch((e) => {
+      console.error('[kpot] claim unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
   }
 
   /* ---- Delivery schedule ----

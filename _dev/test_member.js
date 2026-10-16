@@ -322,11 +322,16 @@ const csv = L.toCsv([mem], NOW);
 const head = csv.split('\r\n')[0];
 ok('the CSV header carries memberUntil', head.indexOf('memberUntil') !== -1, head);
 ok('and a member flag column', head.indexOf(',member,') !== -1, head);
-check('the member flag is yes', csv.split('\r\n')[1].split(',')[8], 'yes');
+/* Looked up by NAME, not by position. CSV_COLUMNS grows — it gained `email`
+   and `devices` when the rewards scheme grew a credential — and a bare index
+   here silently starts asserting on the wrong column the moment it does. */
+const csvIdx = (col) => head.split(',').indexOf(col);
+check('the member flag column is where the header says it is', csvIdx('member') > 0, true);
+check('the member flag is yes', csv.split('\r\n')[1].split(',')[csvIdx('member')], 'yes');
 ok('the expiry date is in the row',
   csv.indexOf(String(mem.memberUntil).slice(0, 10)) !== -1, csv);
 const csv2 = L.toCsv([L.blankCustomer('4045551234')], NOW);
-check('a non-member has an empty flag', csv2.split('\r\n')[1].split(',')[8], '');
+check('a non-member has an empty flag', csv2.split('\r\n')[1].split(',')[csvIdx('member')], '');
 
 const av = L.adminView(mem);
 check('the owner view keeps the expiry', av.memberUntil, mem.memberUntil);
