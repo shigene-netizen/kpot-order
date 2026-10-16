@@ -62,9 +62,10 @@ const patch = (route, body) => req('PATCH', route, body, adminH());
 const priceBody = (items, loyalty, couponCode, orderType) => {
   const b = { orderType: orderType || 'pickup', items: items, tipAmount: 0 };
   /* Every loyalty request carries this device's credential, exactly as the
-     guest page does. Until one has been collected it is the empty string and
-     the server refuses the spend — a boundary probe_device_auth.js pins in
-     full, so this probe does not assert it twice. */
+     guest page does. Since 2026-10-16 the server does not need it — a phone
+     number is the credential — but sending it is what a real browser does.
+     probe_phone_rewards.js pins the boundary, so this probe does not assert it
+     twice. */
   if (loyalty) b.loyalty = Object.assign({ device: DEVICE }, loyalty);
   if (couponCode) b.couponCode = couponCode;
   return b;

@@ -60,9 +60,10 @@ const patch = (route, body) => req('PATCH', route, body, adminH());
 const priceBody = (items, loyalty, couponCode) => {
   const b = { orderType: 'pickup', items: items, tipAmount: 0 };
   /* Every loyalty request carries this device's credential, exactly as the
-     guest page does. Until one has been collected it is the empty string and
-     the server refuses the spend — which is the boundary probe_device_auth.js
-     exists to pin down, so this probe does not assert it twice. */
+     guest page does. It is no longer required for anything — since 2026-10-16
+     a phone number is the credential — but sending it is what a real browser
+     does, so the probe keeps doing it. probe_phone_rewards.js is the one that
+     pins the boundary, so this probe does not assert it twice. */
   if (loyalty) b.loyalty = Object.assign({ device: DEVICE }, loyalty);
   if (couponCode) b.couponCode = couponCode;
   return b;
@@ -91,12 +92,11 @@ const orderFor = (no, total, loyalty, extra) => Object.assign({
 const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE) + dev());
 
 
-/* ---- The membership credential -----------------------------------------
-   A phone number alone no longer reads or spends an account (see
-   probe_device_auth.js for that boundary in full). This probe is about the
-   EARNING rules, so it does what a real guest's browser does: it generates a
-   claim secret at checkout, collects the credential once the order is paid,
-   and presents it from then on. */
+/* ---- The device credential ---------------------------------------------
+   A phone number alone reads AND spends an account now (probe_phone_rewards.js
+   pins that boundary in full). This probe is about the EARNING rules, and it
+   collects a credential anyway — exactly what a real browser does, because a
+   phone that has paid gets recognised without the guest retyping the number. */
 let DEVICE = '';
 let couponsBefore = 0;
 /* The id of the coupon the last section spends, carried between the steps of
