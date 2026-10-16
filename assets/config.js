@@ -29,7 +29,25 @@ const CONFIG = {
       closeSunThu: 1290,      // 9:30 PM (Sun, Mon, Tue, Wed, Thu)
       closeFriSat: 1350,      // 10:30 PM (Fri, Sat)
       lastSeatingNote: 'Last seating is one hour before closing'
-    }
+    },
+
+    /* The shop's own timezone, as an IANA name. This is NOT decoration.
+
+       Every date the server computes — "today", "tomorrow", and the exact
+       moment the kitchen starts a scheduled delivery — is local-time
+       arithmetic, so it is only correct if the HOST's clock is set to this
+       zone. The server started life on a box running Etc/UTC and nothing
+       noticed: a 12:00 PM–1:00 PM Atlanta window was handed a kitchen-start
+       timestamp of 11:30 UTC, which is 7:30 AM in Atlanta — the kitchen
+       would have started cooking a lunch delivery four hours early, and
+       every night between 8 PM and midnight the server believed it was
+       already tomorrow.
+
+       server.js compares the host zone against this value at startup and
+       warns loudly on a mismatch (see timezoneWarning). Fixing the host is
+       one command — `sudo timedatectl set-timezone America/New_York` — and
+       kpot-oracle/setup-kpot.sh now does it. */
+    timezone: 'America/New_York'
   },
 
   /* ---- Money ----------------------------------------------------------- */

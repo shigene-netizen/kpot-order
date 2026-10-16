@@ -860,6 +860,36 @@ if (!PRINT_KEY && ADMIN_KEY) {
   console.warn('[kpot] PRINT_KEY not set — the print agent endpoint is OPEN (dev mode).');
 }
 
+/* ---- The shop's clock ---------------------------------------------------
+   Every date this server computes is LOCAL-time arithmetic: dateKeyOf() decides
+   what "today" is, selectableDates() decides what "tomorrow" is, and
+   scheduledForMs() decides the exact moment the kitchen starts a scheduled
+   delivery. All three are only correct if the host's clock sits in the shop's
+   own timezone.
+
+   This is not theoretical. The server first went live on a box running
+   Etc/UTC and nothing complained: a 12:00 PM–1:00 PM Atlanta window was given
+   a kitchen-start timestamp of 11:30 UTC — 7:30 AM in Atlanta — and between
+   8 PM and midnight every night the server believed it was already tomorrow.
+   Silently. So the mismatch is checked at boot and said out loud, because the
+   symptom (food started four hours early) looks nothing like the cause.
+
+   Pure, so _dev/test_schedule.js can exercise it without spawning anything. */
+function timezoneWarning(hostTz, expectedTz) {
+  if (!expectedTz) return null;                 // nothing declared, nothing to check
+  if (!hostTz) return null;                     // host will not say — cannot judge
+  if (hostTz === expectedTz) return null;
+  return '[kpot] host timezone is ' + hostTz + ' but the shop is in ' + expectedTz +
+    ' — every scheduled delivery will be computed against the wrong clock. Fix with: ' +
+    'sudo timedatectl set-timezone ' + expectedTz;
+}
+{
+  let hostTz = '';
+  try { hostTz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+  const tzWarning = timezoneWarning(hostTz, ((ASSETS.CONFIG || {}).store || {}).timezone);
+  if (tzWarning) { console.warn(tzWarning); console.warn('       (TZ env var or the host clock)'); }
+}
+
 const STATUS_LABELS = {
   received: 'Order received',
   preparing: 'Being prepared',

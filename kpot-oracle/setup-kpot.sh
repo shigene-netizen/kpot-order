@@ -43,6 +43,27 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq curl ca-certificates gnupg git >/dev/null
 
+# ---------------------------------------------------------------------------
+#  THE SHOP'S CLOCK. Do not skip this, and do not "optimise" it away.
+#
+#  Fresh cloud images boot on Etc/UTC. Every date this app computes is
+#  LOCAL-time arithmetic — what "today" is, what "tomorrow" is, and the exact
+#  moment the kitchen starts a scheduled delivery — so on a UTC box a
+#  12:00 PM–1:00 PM Atlanta window is handed a kitchen-start timestamp of
+#  11:30 UTC, which is 7:30 AM in Atlanta. The kitchen starts cooking a lunch
+#  delivery four hours early, and between 8 PM and midnight the server thinks
+#  it is already tomorrow.
+#
+#  Nothing else in the stack complains, which is exactly why this lives here:
+#  the symptom looks nothing like the cause. server.js also warns at boot if
+#  the host zone does not match store.timezone in config.js.
+# ---------------------------------------------------------------------------
+SHOP_TZ="${SHOP_TZ:-America/New_York}"
+if command -v timedatectl >/dev/null 2>&1; then
+  timedatectl set-timezone "$SHOP_TZ" 2>/dev/null || true
+fi
+info "timezone: $( (command -v timedatectl >/dev/null 2>&1 && timedatectl show -p Timezone --value) || date +%Z)  (shop is $SHOP_TZ)"
+
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d. -f1 | tr -d v)" -lt 18 ]; then
   info "adding the NodeSource repository (node 20)"
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null

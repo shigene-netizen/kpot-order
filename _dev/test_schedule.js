@@ -363,6 +363,63 @@ check('an empty-string fee reads as 0', P.deliverySettings({ delivery: { fee: ''
 check('a real 0 reads as 0 — free is a price, not an unreadable value',
   P.deliverySettings({ delivery: { fee: 0 } }, { deliveryEnabled: true }).fee, 0);
 
+/* ========================================================================== */
+console.log('\n--- 10. the shop\'s clock ---');
+/* ========================================================================== */
+/* Every date the server computes is LOCAL-time arithmetic — what "today" is,
+   what "tomorrow" is, and the exact moment the kitchen starts a scheduled
+   delivery. So it is only correct if the HOST's clock sits in the shop's zone.
+
+   This is not hypothetical. The server first went live on a box running
+   Etc/UTC and nothing complained: a 12:00 PM–1:00 PM Atlanta window was given
+   a kitchen-start timestamp of 11:30 UTC — 7:30 AM in Atlanta — and between
+   8 PM and midnight every night the server believed it was already tomorrow.
+   server.js now says so out loud at boot; these are the checks on that. */
+const vm = require('vm');
+const serverSrc = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+function grabFn(name) {
+  const start = serverSrc.indexOf('function ' + name + '(');
+  if (start < 0) throw new Error('could not find ' + name + '() in server.js');
+  const i = serverSrc.indexOf('{', start);
+  let depth = 0;
+  for (let j = i; j < serverSrc.length; j++) {
+    if (serverSrc[j] === '{') depth++;
+    else if (serverSrc[j] === '}' && --depth === 0) return serverSrc.slice(start, j + 1);
+  }
+  throw new Error('unterminated ' + name + '()');
+}
+const tzCtx = { console };
+vm.createContext(tzCtx);
+vm.runInContext(grabFn('timezoneWarning') + '\nthis.warn = (h, e) => timezoneWarning(h, e);', tzCtx);
+const tzWarn = (h, e) => tzCtx.warn(h, e);
+
+const tzDeclared = configCode.match(/timezone:\s*'([^']+)'/);
+const shippedTz = tzDeclared ? tzDeclared[1] : null;
+check('config.js declares the shop\'s timezone', shippedTz, 'America/New_York');
+/* It must be a zone the runtime actually knows, or the comparison below is
+   quietly comparing against a typo. */
+let tzValid = false;
+try { new Intl.DateTimeFormat('en-US', { timeZone: shippedTz }); tzValid = true; } catch (e) {}
+ok('and it is a real IANA zone this runtime recognises', tzValid, 'timezone=' + shippedTz);
+
+/* The dependency itself, stated so it cannot be forgotten: the kitchen-start
+   timestamp comes back in the HOST's local clock. 720 (12:00 PM) minus the
+   30-minute lead = 11:30, read on whatever clock the host keeps. */
+check('a 12:00 PM window starts at 11:30 by the HOST clock — which is the whole point',
+  new Date(S.scheduledForMs('2026-10-17', { id: 'x', start: 720, end: 780 }, { leadMinutes: 30 })).getHours(), 11);
+
+ok('a host clock in the shop\'s zone is silent',
+  tzWarn('America/New_York', 'America/New_York') === null);
+const tzW = tzWarn('Etc/UTC', 'America/New_York');
+ok('a UTC host is called out (this is the bug that actually shipped)',
+  typeof tzW === 'string' && /Etc\/UTC/.test(tzW) && /America\/New_York/.test(tzW), String(tzW));
+ok('and the warning names the exact command that fixes it',
+  typeof tzW === 'string' && /timedatectl set-timezone America\/New_York/.test(tzW), String(tzW));
+ok('no declared zone means nothing to check',
+  tzWarn('Etc/UTC', '') === null && tzWarn('Etc/UTC', null) === null);
+ok('a host that will not report a zone is not guessed at',
+  tzWarn('', 'America/New_York') === null);
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) {
   console.log('FAIL — the schedule rules do not match what the shop intends');
