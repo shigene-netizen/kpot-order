@@ -1,0 +1,7 @@
+# Shell scripts must keep Unix line endings.
+#
+# These get cloned onto a Linux cloud host and executed there. A CRLF in a .sh
+# file makes bash fail with "/bin/bash^M: bad interpreter" — an error that gives
+# no clue about the real cause. Forcing LF here means it cannot happen, even if
+# the file is edited on Windows.
+*.sh text eol=lf
