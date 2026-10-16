@@ -71,20 +71,35 @@ function dateKey(ms) {
 }
 
 const priceBody = (orderType) => ({ orderType: orderType, items: [HOTPOT], tipAmount: 0 });
-const orderFor = (no, total, extra) => Object.assign({
-  no: no,
-  token: 'sched-' + no,
-  orderType: 'delivery',
-  table: '',
-  customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
-  items: [HOTPOT],
-  subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,
-  total: total,
-  payMethod: 'counter',
-  paymentStatus: 'counter',
-  paid: false,
-  source: 'probe'
-}, extra || {});
+
+/* Pay-at-counter is REFUSED on delivery (counterDeliveryVerdict in server.js):
+   a delivery leaves the building, so there is no counter to collect at. Every
+   order here is a scheduled delivery, so they are all prepaid — the earlier
+   version of this probe paid them at the counter, which the server now
+   correctly refuses.
+
+   The one PICKUP case (SCH-ND, below) deliberately keeps the counter: it is
+   refused for a different reason — schedule_not_delivery — and that refusal
+   runs first, so leaving it on the counter is what proves the two rules do not
+   collide and hide each other. */
+const orderFor = (no, total, extra) => {
+  const o = Object.assign({
+    no: no,
+    token: 'sched-' + no,
+    orderType: 'delivery',
+    table: '',
+    customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
+    items: [HOTPOT],
+    subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,
+    total: total,
+    paid: false,
+    source: 'probe'
+  }, extra || {});
+  const atCounter = o.orderType !== 'delivery';
+  o.payMethod = atCounter ? 'counter' : 'stripe';
+  o.paymentStatus = atCounter ? 'counter' : 'unverified';
+  return o;
+};
 
 const server = spawn(process.execPath, ['server.js'], {
   cwd: ROOT,
@@ -184,12 +199,20 @@ async function main() {
     dPrice.status === 200 && typeof dPrice.j.total === 'number', JSON.stringify(dPrice.j));
   const dTotal = dPrice.j.total;
   const pTotal = pPrice.j.total;
-  /* The runtime channel switch, not the static config seed, decides the fee:
-     the board turns Delivery on, and the guest must be charged for it. Under
-     the old static-config read this equality held (fee priced $0) — so this
-     assertion is what pins deliveryPricingOpts() into the pricer. */
-  check('and charges the delivery fee while the channel is on (runtime switch, not the static seed)',
-    dTotal > pTotal, 'delivery=' + dTotal + ' pickup=' + pTotal);
+  /* DELIVERY IS FREE RIGHT NOW (config.delivery.fee = 0) — a promotion, not a
+     permanent price. So the two totals are equal BY DESIGN, and this equality
+     can no longer prove that the runtime channel switch reaches the pricer:
+     it held under the old static-config bug too, for the opposite reason
+     (fee priced $0 while the board said Delivery was on).
+
+     The seam is pinned by the deliverySettings() checks in
+     _dev/test_schedule.js instead, which pass a non-zero fee directly and so
+     stay meaningful whatever the shop is charging. What is worth asserting
+     HERE is the observable the guest actually sees: the delivery line is $0
+     and adds nothing to the bill. */
+  check('delivery is free as shipped: the line is $0 and the total is unchanged',
+    dPrice.j.delivery === 0 && dTotal === pTotal,
+    'deliveryLine=' + dPrice.j.delivery + ' delivery=' + dTotal + ' pickup=' + pTotal);
 
   /* ======================================================================
      THE FOUR CREATE-ORDER CHECKS

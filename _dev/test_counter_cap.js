@@ -1,19 +1,28 @@
-/* Test for the pay-at-counter ceiling.
+/* Test for the pay-at-counter rules.
  *
- * A pay-at-counter order reaches the kitchen BEFORE any money is collected,
- * so a guest who never shows up is a straight loss — and the loss scales with
- * the ticket. The config caps how large such an order may be; anything above
- * the cap must be prepaid online.
+ * TWO rules live side by side here, and they are deliberately different shapes:
  *
- * Getting this wrong is expensive in both directions:
- *   - too permissive → a large unpaid order is cooked and never collected;
- *   - too strict     → the store silently stops taking large orders at all,
- *                      which is worse than the risk the cap guards against.
+ *  1. THE CEILING (counterCapVerdict). A pay-at-counter order reaches the
+ *     kitchen BEFORE any money is collected, so a guest who never shows up is a
+ *     straight loss — and the loss scales with the ticket. The config caps how
+ *     large such an order may be; anything above the cap must be prepaid.
  *
- * The rule lives in server.js as counterCapVerdict(). This test LIFTS THAT
- * FUNCTION OUT of the source and exercises it directly, rather than
- * re-implementing the rule — a re-implementation would only prove the test
- * agrees with itself.
+ *     Getting this wrong is expensive in both directions:
+ *       - too permissive → a large unpaid order is cooked and never collected;
+ *       - too strict     → the store silently stops taking large orders at all,
+ *                          which is worse than the risk the cap guards against.
+ *
+ *  2. THE DELIVERY BAN (counterDeliveryVerdict). A delivery leaves the
+ *     building: there is no counter to walk up to when the food arrives and
+ *     nothing to collect afterwards. So a counter-paid delivery is not risky,
+ *     it is impossible — which makes this rule UNCONDITIONAL. Unlike the
+ *     ceiling it must NOT relax when no online method is configured; that
+ *     carve-out would quietly re-open counter-paid delivery on a shop that has
+ *     not wired up card payments yet.
+ *
+ * Both rules live in server.js. This test LIFTS THOSE FUNCTIONS OUT of the
+ * source and exercises them directly, rather than re-implementing the rules —
+ * a re-implementation would only prove the test agrees with itself.
  *
  * Run:  node _dev/test_counter_cap.js
  */
@@ -40,11 +49,14 @@ const ctx = { console };
 vm.createContext(ctx);
 vm.runInContext(
   grab('counterCapVerdict') + '\n' +
-  'this.verdict = (total, payMethod, cfg, online) => counterCapVerdict(total, payMethod, cfg, online);',
+  grab('counterDeliveryVerdict') + '\n' +
+  'this.verdict = (total, payMethod, cfg, online) => counterCapVerdict(total, payMethod, cfg, online);\n' +
+  'this.deliveryVerdict = (payMethod, orderType, cfg) => counterDeliveryVerdict(payMethod, orderType, cfg);',
   ctx
 );
 
 const verdict = (total, payMethod, cfg, online) => ctx.verdict(total, payMethod, cfg, online);
+const dv = (payMethod, orderType, cfg) => ctx.deliveryVerdict(payMethod, orderType, cfg);
 
 /* Config shapes used below. */
 const cap30 = { payment: { counter: { maxTotal: 30 } } };
@@ -118,6 +130,49 @@ check('empty method $150 → allowed by this rule',
 check('NaN total → not blocked (never refuse on a number we cannot read)',
   verdict(NaN, 'counter', cap30, true), false);
 
+/* ========================================================================== */
+console.log('\n--- pay at the counter on DELIVERY (counterDeliveryVerdict) ---');
+/* ========================================================================== */
+/* A delivery leaves the building: no counter to walk up to, nothing to
+   collect afterwards. So this is a BAN, not a ceiling — and the difference
+   matters, because a ban must hold even with no online method configured.
+   (The ceiling above deliberately does NOT hold in that case; copying that
+   carve-over would silently re-open counter-paid delivery on a shop that has
+   not wired up card payments yet.) */
+
+check('delivery + counter → BLOCKED',
+  dv('counter', 'delivery', cap30), true, 'counter_not_allowed_delivery');
+check('pickup + counter → allowed (this rule is about delivery only)',
+  dv('counter', 'pickup', cap30), false);
+check('dine-in + counter → allowed',
+  dv('counter', 'dinein', cap30), false);
+
+/* The rule is about HOW the delivery is paid, not about delivery itself. */
+check('delivery + stripe → allowed',
+  dv('stripe', 'delivery', cap30), false);
+check('delivery + venmo → allowed',
+  dv('venmo', 'delivery', cap30), false);
+check('delivery + zelle → allowed',
+  dv('zelle', 'delivery', cap30), false);
+
+/* No online fallback must NOT reopen it — this is the whole point. */
+check('delivery + counter with no online method → still BLOCKED',
+  dv('counter', 'delivery', { delivery: {} }), true, 'counter_not_allowed_delivery');
+check('delivery + counter, cfg has no delivery block at all → still BLOCKED',
+  dv('counter', 'delivery', {}), true, 'counter_not_allowed_delivery');
+check('delivery + counter, cfg null → still BLOCKED (fail closed)',
+  dv('counter', 'delivery', null), true, 'counter_not_allowed_delivery');
+
+/* Owner override — the one way back on, and only an explicit `true`. */
+check('allowCounter:true → allowed (owner collects on the doorstep)',
+  dv('counter', 'delivery', { delivery: { allowCounter: true } }), false);
+check('allowCounter:false → BLOCKED',
+  dv('counter', 'delivery', { delivery: { allowCounter: false } }), true, 'counter_not_allowed_delivery');
+check('allowCounter:"yes" is NOT true → BLOCKED (no truthy coercion)',
+  dv('counter', 'delivery', { delivery: { allowCounter: 'yes' } }), true, 'counter_not_allowed_delivery');
+check('allowCounter:1 is NOT true → BLOCKED',
+  dv('counter', 'delivery', { delivery: { allowCounter: 1 } }), true, 'counter_not_allowed_delivery');
+
 /* --- the shipped config really does set $30 ------------------------------ */
 /* Pins the owner's actual decision, so a stray edit to config.js is caught.
    Comments are stripped first: the config's own explanatory comment mentions
@@ -133,6 +188,18 @@ if (cfgOk) pass++; else fail++;
 console.log((cfgOk ? '  ok  ' : '  FAIL') +
   '  config.js ships maxTotal = 30 (owner decision)' +
   (cfgOk ? '' : '\n         parsed maxTotal = ' + shipped));
+
+/* The delivery ban is the same kind of owner decision and has the same trap:
+   the config's own comment names `allowCounter: false`, so a regex over the
+   RAW source would read the comment as the setting. `configCode` above is
+   already comment-stripped for exactly this reason. */
+const acMatch = configCode.match(/allowCounter:\s*(true|false)/);
+const allowCounter = acMatch ? acMatch[1] : '(absent)';
+const acOk = allowCounter === 'false';
+if (acOk) pass++; else fail++;
+console.log((acOk ? '  ok  ' : '  FAIL') +
+  '  config.js ships delivery.allowCounter = false (delivery is prepaid-only)' +
+  (acOk ? '' : '\n         parsed allowCounter = ' + allowCounter));
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

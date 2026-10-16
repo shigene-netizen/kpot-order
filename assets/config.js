@@ -68,10 +68,33 @@ const CONFIG = {
     // Set to false if you do not offer delivery yet (same as the old deliveryEnabled)
     enabled: false,
 
-    /* The windowed delivery fee. Cheap on purpose. It is part of the TAXABLE
-       base — the state taxes the delivery, not just the food — so changing it
-       changes the total twice (fee, then tax on the fee). */
-    fee: 1.99,
+    /* Delivery is FREE right now — a promotion, not a permanent price.
+
+       `fee` is the amount that is actually charged, and it is part of the
+       TAXABLE base (the state taxes the delivery, not just the food), so
+       changing it changes the total twice: once for the fee, once for the tax
+       on the fee.
+
+       `listFee` is display-only: the crossed-out "was" price the guest page
+       prints next to the FREE label so the saving is visible. It never reaches
+       the bill. Set it to 0 (or delete it) to stop showing a crossed-out price. */
+    fee: 0,
+    listFee: 1.99,
+
+    /* ---- Pay at the counter is NOT offered on delivery -------------------
+       A delivery leaves the building: there is no counter to walk up to when
+       the food arrives, and nothing to collect afterwards. So a delivery must
+       be prepaid, and a guest who picked "Pay at Counter" is refused rather
+       than quietly downgraded.
+
+       Unlike the counter ceiling this rule is unconditional — it does not
+       need an online fallback to be legitimate, because there is no version
+       of a counter-paid delivery that works. If delivery is sold with no
+       online method configured, delivery orders simply cannot be placed until
+       one is; the guest page says so instead of dead-ending.
+
+       Set this to true only if you really do collect on the doorstep. */
+    allowCounter: false,
 
     schedule: {
       /* Most orders per window per day. When a window is full the guest simply
@@ -87,13 +110,20 @@ const CONFIG = {
       leadMinutes: 30,
 
       /* Minutes from midnight, same convention as store.hoursSpec
-         (720 = 12:00 PM, 1020 = 5:00 PM). Both default windows sit inside
-         12:00 PM – 9:30 PM opening hours, and schedule.js REFUSES a window
-         that does not — a delivery the shop cannot fulfil is worse than a
-         missing one. */
+         (720 = 12:00 PM, 1020 = 5:00 PM). These five one-hour windows cover
+         12:00 PM – 5:00 PM, which sits inside the 12:00 PM opening hours, and
+         schedule.js REFUSES a window that does not — a delivery the shop
+         cannot fulfil is worse than a missing one.
+
+         The id travels in the order payload and shows up on the board and in
+         the logs, so it is deliberately readable. Changing an id does NOT
+         re-map orders already placed; those keep whatever they were given. */
       slots: [
-        { id: 'lunch',  label: '12:00 PM – 2:00 PM', start: 720,  end: 840 },
-        { id: 'dinner', label: '5:00 PM – 8:00 PM',  start: 1020, end: 1200 }
+        { id: '12pm', label: '12:00 PM – 1:00 PM', start: 720, end: 780 },
+        { id: '1pm',  label: '1:00 PM – 2:00 PM',  start: 780, end: 840 },
+        { id: '2pm',  label: '2:00 PM – 3:00 PM',  start: 840, end: 900 },
+        { id: '3pm',  label: '3:00 PM – 4:00 PM',  start: 900, end: 960 },
+        { id: '4pm',  label: '4:00 PM – 5:00 PM',  start: 960, end: 1020 }
       ]
     }
   },

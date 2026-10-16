@@ -480,6 +480,12 @@ img { max-width: 100%; display: block; }
 .trow.grand { font-size: 18px; padding-top: 12px; margin-top: 8px; border-top: 1.5px dashed var(--line); color: var(--cream); font-weight: 800; }
 .trow.grand b { font-size: 22px; color: var(--gold); font-weight: 900; }
 .trow.disc b { color: var(--green); }
+/* A FREE delivery line. The saving IS the message, so the row is tinted like
+   the discount rows instead of reading as one more charge — and the old price
+   is struck through so the guest sees what they are NOT paying. The <s> is
+   muted on purpose: it is the comparison, not the price. */
+.trow b.free { color: var(--green); }
+.trow b.free s { color: var(--cream-dim); font-weight: 600; opacity: .7; }
 
 /* Tip selector */
 .tip-row { display: flex; gap: 7px; margin-top: 8px; }

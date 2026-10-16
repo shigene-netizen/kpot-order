@@ -1462,6 +1462,33 @@ function counterCapVerdict(total, payMethod, cfg, onlineAvailable) {
   return { blocked: true, code: 'counter_over_cap', cap: cap };
 }
 
+/* ---- Pay at the counter is NOT offered on delivery ----------------------
+   A delivery leaves the building. There is no counter for the guest to walk
+   up to when the food arrives, and nothing to collect afterwards, so a
+   counter-paid delivery is not a risky order — it is an impossible one.
+
+   That is what makes this rule different from the ceiling above: it is
+   UNCONDITIONAL. It does not need an online fallback to be legitimate,
+   because there is no version of a counter-paid delivery that works. If
+   delivery is sold with no online method configured, delivery orders simply
+   cannot be placed until one is — the honest outcome, and better than the
+   alternative the ceiling guards against (blocking orders the store could
+   actually have taken).
+
+   `delivery.allowCounter` is the escape hatch for an owner who really does
+   collect on the doorstep. It defaults off; only an explicit `true` — the
+   same value the guest page checks — turns the rule off.
+
+   Pure, like counterCapVerdict, so _dev/test_counter_cap.js can lift the real
+   rule out of this file instead of re-implementing it. */
+function counterDeliveryVerdict(payMethod, orderType, cfg) {
+  if (payMethod !== 'counter') return { blocked: false };
+  if (orderType !== 'delivery') return { blocked: false };
+  const d = (cfg && cfg.delivery) || {};
+  if (d.allowCounter === true) return { blocked: false };
+  return { blocked: true, code: 'counter_not_allowed_delivery' };
+}
+
 /* Is there a real online payment path on this server? Mirrors the guest
    page's own check (stripe enabled + a way to actually charge). */
 function onlinePaymentAvailable() {
@@ -1551,6 +1578,21 @@ async function handleCreateOrder(req, res) {
       });
     }
     schedule = verdict;
+  }
+  /* Delivery must be prepaid — see counterDeliveryVerdict(). Checked against
+     the EFFECTIVE type, so a tampered payload cannot dodge the rule by sending
+     an orderType we do not recognise (that is coerced to pickup, and pickup is
+     allowed to pay at the counter). Deliberately BEFORE the ceiling below: a
+     delivery that is also over the cap should be reported for the reason that
+     actually applies to it, not for its size. */
+  const counterVerdict = counterDeliveryVerdict(body.payMethod, effectiveType, ASSETS.CONFIG);
+  if (counterVerdict.blocked) {
+    console.warn('[kpot] refused pay-at-counter order for a delivery');
+    return sendJSON(res, 400, {
+      error: 'counter_not_allowed_delivery',
+      message: 'Delivery orders must be paid online. Please choose ' +
+        ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
+    });
   }
   /* Pay-at-counter ceiling. Checked HERE, on the server, because a greyed-out
      button in the browser is only a hint — the rule has to hold where the

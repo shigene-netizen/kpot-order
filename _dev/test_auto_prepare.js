@@ -384,8 +384,13 @@ async function main() {
 
     const dl1 = 'KP-AO-DELIV-WAIT-' + TOKEN;
     const dlPrice = await jpost(BASE, '/api/price', mkOrder(dl1, { orderType: 'delivery' }));
-    check('the server prices the delivery fee into the bill',
-      dlPrice.status === 200 && dlPrice.j && dlPrice.j.delivery === 1.99, JSON.stringify(dlPrice.j));
+    /* Delivery is FREE as shipped (config.delivery.fee = 0) — a promotion.
+       This used to assert $1.99. What matters to this probe is not the amount
+       but that the SERVER prices the order and its numbers are what we then
+       echo back into the create payload (total_mismatch would refuse anything
+       else), so the assertion follows the server rather than a price list. */
+    check('the server prices the delivery line into the bill (free as shipped)',
+      dlPrice.status === 200 && dlPrice.j && dlPrice.j.delivery === 0, JSON.stringify(dlPrice.j));
 
     const r6 = await jpost(BASE, '/api/orders', mkOrder(dl1, {
       orderType: 'delivery',

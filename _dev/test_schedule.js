@@ -124,19 +124,26 @@ ok('a shop open only on Fri/Sat offers only Fri/Sat',
 console.log('\n--- 4. the windows themselves ---');
 /* ========================================================================== */
 
+/* scheduleConfig() called with nothing returns schedule.js's own LAST-RESORT
+   defaults. These are NOT the windows the shop sells — those live in
+   assets/config.js and are pinned in section 8 below. What is checked here is
+   that the fallback is well-formed and harmless, because it is what a guest
+   gets if the config block is ever deleted or mis-typed. */
 const cfg = S.scheduleConfig();
-check('two windows by default', cfg.slots.length, 2);
-check('the lunch one is 12:00-14:00', cfg.slots[0].start + '-' + cfg.slots[0].end, '720-840');
-check('and the dinner one 17:00-20:00', cfg.slots[1].start + '-' + cfg.slots[1].end, '1020-1200');
-check('$1.99 by default', cfg.fee, 1.99);
+check('the built-in fallback offers two windows', cfg.slots.length, 2);
+check('its first window is 12:00-14:00', cfg.slots[0].start + '-' + cfg.slots[0].end, '720-840');
+check('and its second 17:00-20:00', cfg.slots[1].start + '-' + cfg.slots[1].end, '1020-1200');
+/* The fallback fee stays the PAID price on purpose: a config we cannot read
+   must not be the thing that gives delivery away for free. */
+check('the fallback fee is the paid $1.99, not $0', cfg.fee, 1.99);
 check('10 orders per window per day', cfg.perDayPerSlot, 10);
 check('30 minutes of lead time', cfg.leadMinutes, 30);
 check('a week ahead', cfg.maxDaysAhead, 7);
 check('on by default', cfg.enabled, true);
 check('enabled:false switches it off', S.scheduleConfig({ enabled: false }).enabled, false);
 
-check('lunch is found by id', S.slotById('lunch', cfg).label, cfg.slots[0].label);
-check('dinner is found by id', S.slotById('dinner', cfg).label, cfg.slots[1].label);
+check('the fallback finds its first window by id', S.slotById('lunch', cfg).label, cfg.slots[0].label);
+check('and its second by id', S.slotById('dinner', cfg).label, cfg.slots[1].label);
 check('an unknown id is null', S.slotById('brunch', cfg), null);
 check('an empty id is null', S.slotById('', cfg), null);
 check('null is null', S.slotById(null, cfg), null);
@@ -283,6 +290,78 @@ check('a dinner booking starts 16:30 the same day',
 check('a 90-minute lead starts at 10:30',
   new Date(S.scheduledForMs('2026-10-15', cfg.slots[0], { leadMinutes: 90 })).getMinutes(), 30);
 check('a nonsense date has no start time', S.scheduledForMs('nope', cfg.slots[0], {}), null);
+
+/* ========================================================================== */
+console.log('\n--- 8. the SHIPPED config (assets/config.js) ---');
+/* ========================================================================== */
+/* Everything above tests schedule.js in isolation. What the shop actually
+   sells lives in assets/config.js, and the server hands it to schedule.js via
+   scheduleCfg() — so nothing above this line would notice if that block were
+   edited wrongly. These pins are what would.
+
+   Comments are stripped first, and that is not paranoia: the config's own
+   explanatory text quotes the values being asserted here (window times, the
+   $1.99), so a regex over the raw source reads a comment as the setting. */
+const fs = require('fs');
+const path = require('path');
+const configSrc = fs.readFileSync(path.join(__dirname, '..', 'assets', 'config.js'), 'utf8');
+const configCode = configSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+const slotBlock = configCode.match(/slots:\s*\[([\s\S]*?)\]/);
+const nums = (re) => slotBlock ? (slotBlock[1].match(re) || []).map((s) => Number(s.replace(/\D/g, ''))) : [];
+const ids = slotBlock ? (slotBlock[1].match(/id:\s*'[^']+'/g) || []).map((s) => s.replace(/^id:\s*'/, '').replace(/'$/, '')) : [];
+const starts = nums(/start:\s*\d+/g);
+const ends = nums(/end:\s*\d+/g);
+
+check('the shop sells five windows', ids.join(','), '12pm,1pm,2pm,3pm,4pm');
+check('running 12:00 PM to 5:00 PM', starts.join('-') + '|' + ends.join('-'),
+  '720-780-840-900-960|780-840-900-960-1020');
+ok('each window is exactly one hour',
+  starts.length === 5 && ends.length === 5 && starts.every((s, i) => ends[i] - s === 60),
+  JSON.stringify({ starts: starts, ends: ends }));
+ok('and each starts where the previous ended — no gaps, no overlaps',
+  starts.every((s, i) => i === 0 || s === ends[i - 1]),
+  JSON.stringify({ starts: starts, ends: ends }));
+ok('every window falls inside opening hours (12:00 PM – 9:30 PM)',
+  starts.length === 5 && starts[0] >= 720 && ends[ends.length - 1] <= 1290,
+  'first=' + starts[0] + ' last=' + ends[ends.length - 1]);
+
+/* The money. `fee` is what is charged and is part of the taxable base;
+   `listFee` is display-only — the crossed-out "was" price. */
+const feeMatch = configCode.match(/delivery:\s*\{[\s\S]*?\bfee:\s*([0-9.]+)/);
+const shippedFee = feeMatch ? Number(feeMatch[1]) : null;
+const listMatch = configCode.match(/listFee:\s*([0-9.]+)/);
+const shippedList = listMatch ? Number(listMatch[1]) : null;
+check('delivery ships FREE (fee 0)', shippedFee, 0);
+check('with $1.99 kept as the crossed-out "was" price', shippedList, 1.99);
+
+/* ========================================================================== */
+console.log('\n--- 9. the fee seam: static seed vs the owner\'s runtime switch ---');
+/* ========================================================================== */
+/* deliverySettings() in pricing.js is the ONE place where the board's runtime
+   channel switch is allowed to override the static config seed. It is
+   invisible at a $0 fee — both answers are "free" — so it is pinned with a
+   NON-ZERO fee, which keeps these assertions meaningful whatever the shop
+   happens to be charging this month. */
+const P = require('../pricing.js');
+const seedOff = { delivery: { enabled: false, fee: 1.99 } };   // the shipped shape
+
+check('the static seed alone leaves the channel off',
+  P.deliverySettings(seedOff, null).enabled, false);
+check('but the board switching it ON wins over the seed',
+  P.deliverySettings(seedOff, { deliveryEnabled: true }).enabled, true);
+check('and the fee survives that switch — it is not silently dropped to $0',
+  P.deliverySettings(seedOff, { deliveryEnabled: true }).fee, 1.99);
+check('switching it OFF on the board suppresses the fee downstream',
+  P.deliverySettings(seedOff, { deliveryEnabled: false }).enabled, false);
+check('a missing opts argument falls back to the seed, not to "on"',
+  P.deliverySettings(seedOff, undefined).enabled, false);
+check('a garbage fee reads as 0, never NaN (NaN would poison the tax)',
+  P.deliverySettings({ delivery: { fee: 'abc' } }, { deliveryEnabled: true }).fee, 0);
+check('a negative fee reads as 0', P.deliverySettings({ delivery: { fee: -5 } }, { deliveryEnabled: true }).fee, 0);
+check('an empty-string fee reads as 0', P.deliverySettings({ delivery: { fee: '' } }, { deliveryEnabled: true }).fee, 0);
+check('a real 0 reads as 0 — free is a price, not an unreadable value',
+  P.deliverySettings({ delivery: { fee: 0 } }, { deliveryEnabled: true }).fee, 0);
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) {

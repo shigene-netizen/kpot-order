@@ -134,6 +134,28 @@
     const d = CONFIG.delivery || {};
     return Number(d.fee) || 0;
   }
+  /* The crossed-out "was" price shown next to a FREE delivery. Display only —
+     the bill uses deliveryFee(), which is the real charge. */
+  function deliveryFeeWas() {
+    if (state.orderType !== 'delivery' || !deliveryOn()) return 0;
+    const n = Number((CONFIG.delivery || {}).listFee);
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  /* ONE renderer for the delivery line. The cart and the checkout used to
+     build this row separately and drifted; a free delivery is exactly the
+     case where the two would disagree about whether to show the row at all. */
+  function deliveryRowHTML() {
+    if (state.orderType !== 'delivery' || !deliveryOn()) return '';
+    const fee = deliveryFee();
+    if (fee > 0) {
+      return '<div class="trow"><span>Delivery</span><b>' + money(fee) + '</b></div>';
+    }
+    /* Free — and the row STAYS, because the saving is the message. The old
+       price is struck through when one is configured. */
+    const was = deliveryFeeWas();
+    return '<div class="trow"><span>Delivery</span><b class="free">' +
+      (was > 0 ? '<s>' + money(was) + '</s> ' : '') + 'FREE</b></div>';
+  }
 
   /* ---- Windowed delivery picker ----------------------------------------
      The server owns the vocabulary: selectable dates, per-slot capacity,
@@ -1463,7 +1485,7 @@
   function cartTotalsHTML() {
     return '' +
       '<div class="trow mt16"><span>Subtotal</span><b>' + money(cartSubtotal()) + '</b></div>' +
-      (deliveryFee() ? '<div class="trow"><span>Delivery</span><b>' + money(deliveryFee()) + '</b></div>' : '') +
+      deliveryRowHTML() +
       discountRowHTML() +
       '<div class="trow"><span>Tax (' + (CONFIG.taxRate * 100).toFixed(2).replace(/\.00$/, '') + '%)</span><b>' + money(taxAmount()) + '</b></div>' +
       (tipAmount() ? '<div class="trow"><span>Tip</span><b>' + money(tipAmount()) + '</b></div>' : '') +
@@ -1625,6 +1647,32 @@
     return !!onlinePayMethod();
   }
 
+  /* ---- Pay at the counter is NOT offered on delivery --------------------
+     A delivery leaves the building: there is no counter to walk up to when
+     the food arrives, and nothing to collect afterwards. So a counter-paid
+     delivery is not a risky order, it is an impossible one — which makes this
+     rule unconditional, unlike the ceiling above. It does not need an online
+     fallback to be legitimate; if the owner sells delivery with no online
+     method configured, delivery simply cannot be ordered until one is, and
+     that is the honest outcome rather than a doorstep debt.
+
+     Mirrors counterDeliveryVerdict() in server.js — that is the copy that
+     actually enforces it. This one exists so the guest sees the reason
+     instead of a button that dead-ends. */
+  function counterBlockedByDelivery() {
+    if (state.orderType !== 'delivery' || !deliveryOn()) return false;
+    const d = CONFIG.delivery || {};
+    return d.allowCounter !== true;
+  }
+
+  /* The single question the checkout asks before letting the counter card be
+     picked: is pay-at-counter allowed for THIS order? Two separate reasons,
+     one answer — so a new reason can never be added to one place and
+     forgotten in the other. */
+  function counterBlocked() {
+    return counterBlockedByTotal() || counterBlockedByDelivery();
+  }
+
   /* Ask the server whether online payment is actually wired up. On a plain
      static host this 404s and everything falls back to the Payment Link path. */
   function probeBackend() {
@@ -1699,21 +1747,25 @@
        has chosen for themselves, respect that instead of overriding it —
        and always recover if their choice is no longer available. */
     if (!state.payChosen || !payReady(state.payMethod)) state.payMethod = defaultPayMethod();
-    /* A cart that has grown past the ceiling can no longer be paid at the
-       counter — move the guest to an online method rather than leaving them
-       selected on an option that will be refused. */
-    if (state.payMethod === 'counter' && counterBlockedByTotal()) {
+    /* A cart that has grown past the ceiling — or a Delivery order, which is
+       prepaid-only — can no longer be paid at the counter. Move the guest to
+       an online method rather than leaving them selected on an option the
+       server will refuse. */
+    if (state.payMethod === 'counter' && counterBlocked()) {
       state.payMethod = onlinePayMethod() || 'counter';
     }
 
     const payOpts = readyPayMethods()
       .map((k) => {
-        /* Over the ceiling the counter card stays visible but disabled, with
-           the reason in place of its usual blurb — hiding it entirely would
-           leave the guest wondering where the option went. */
-        const overCap = k === 'counter' && counterBlockedByTotal();
+        /* A blocked counter card stays visible but disabled, with the reason
+           in place of its usual blurb — hiding it entirely would leave the
+           guest wondering where the option went. Which reason depends on why
+           it is blocked, so the text names the thing the guest can act on. */
+        const overCap = k === 'counter' && counterBlocked();
         const desc = overCap
-          ? 'Orders over ' + money(counterCap()) + ' must be paid online'
+          ? (counterBlockedByDelivery()
+              ? 'Delivery orders must be paid online'
+              : 'Orders over ' + money(counterCap()) + ' must be paid online')
           : CONFIG.payment[k].d;
         return '<button class="pay-opt ' + (state.payMethod === k ? 'on' : '') + '" data-pay="' + k + '"' +
             (overCap ? ' disabled aria-disabled="true"' : '') + '>' +
@@ -1747,7 +1799,7 @@
          missing. Two sheets, one class, one id. */
       '<div class="totals" id="checkoutTotals" style="padding-left:0;padding-right:0">' +
         '<div class="trow"><span>Subtotal</span><b>' + money(cartSubtotal()) + '</b></div>' +
-        (deliveryFee() ? '<div class="trow"><span>Delivery</span><b>' + money(deliveryFee()) + '</b></div>' : '') +
+        deliveryRowHTML() +
         discountRowHTML() +
         '<div class="trow"><span>Tax</span><b>' + money(taxAmount()) + '</b></div>' +
         (tipAmount() ? '<div class="trow"><span>Tip</span><b>' + money(tipAmount()) + '</b></div>' : '') +
@@ -1868,7 +1920,7 @@
     if (!box) return;
     box.innerHTML =
       '<div class="trow"><span>Subtotal</span><b>' + money(cartSubtotal()) + '</b></div>' +
-      (deliveryFee() ? '<div class="trow"><span>Delivery</span><b>' + money(deliveryFee()) + '</b></div>' : '') +
+      deliveryRowHTML() +
       discountRowHTML() +
       '<div class="trow"><span>Tax</span><b>' + money(taxAmount()) + '</b></div>' +
       (tipAmount() ? '<div class="trow"><span>Tip</span><b>' + money(tipAmount()) + '</b></div>' : '') +
@@ -1889,7 +1941,17 @@
       if (stripeMode() === 'none') return '⚠️ Online payment is not configured yet — see CONFIG.payment.stripe in assets/config.js.';
       return 'Card, Apple Pay and Google Pay accepted.';
     }
-    if (state.payMethod === 'counter') return 'Your order goes straight to the kitchen. Pay when you pick up.';
+    if (state.payMethod === 'counter') {
+      if (counterBlockedByDelivery()) {
+        /* Reachable only when delivery is on, the counter is refused, and no
+           online method is configured to fall back to. The guest must not be
+           left believing a counter-paid delivery went through. */
+        return onlinePayMethod()
+          ? 'Delivery orders must be paid online. Choose a method above to continue.'
+          : '⚠️ Delivery must be paid online, but no online payment is set up yet. Please call ' + CONFIG.store.phone + '.';
+      }
+      return 'Your order goes straight to the kitchen. Pay when you pick up.';
+    }
     if (state.payMethod === 'venmo') return 'You\'ll be sent to @' + p.handle + ' on Venmo to pay ' + money(grandTotal()) + '.';
     if (state.payMethod === 'zelle') return 'Send ' + money(grandTotal()) + ' to ' + p.recipient + ' via Zelle, then show the confirmation.';
     return '';
@@ -2113,7 +2175,7 @@
     if (order.__rejected) {
       btnRestore($('#placeOrder'));
       const rej = order.__rejected;
-      if (rej.error === 'counter_over_cap') {
+      if (rej.error === 'counter_over_cap' || rej.error === 'counter_not_allowed_delivery') {
         const alt = onlinePayMethod();
         if (alt) state.payMethod = alt;
         openCheckout();

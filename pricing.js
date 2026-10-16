@@ -305,5 +305,10 @@ function toStripeLineItems(priced, currency) {
 
 module.exports = {
   round2, loadAssets, unitPrice, priceOrder, toStripeLineItems,
-  discountAmountFor, applyDiscount, MAX_DISCOUNT_PERCENT
+  discountAmountFor, applyDiscount, MAX_DISCOUNT_PERCENT,
+  /* Exported so _dev/test_schedule.js can exercise the one seam where the
+     board's runtime channel switch overrides the static config seed. It is
+     invisible at a $0 fee (both answers are "free"), so it has to be tested
+     with a non-zero one. */
+  deliverySettings
 };
