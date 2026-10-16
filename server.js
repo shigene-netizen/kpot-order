@@ -30,7 +30,6 @@ const D = require('./discounts.js');
 const L = require('./customers.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
-const MAIL = require('./mailer.js');
 
 const ROOT = __dirname;
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -616,17 +615,6 @@ function throttled(ip, max, windowMs) {
   return rec.n > max;
 }
 
-/* The same counter, keyed by something other than the caller's address.
-
-   The recovery endpoints need a second limit that an attacker cannot reset by
-   changing IP: "mail at most N codes to THIS phone number per hour". Without
-   it, a rotating-IP script could use the recovery form to flood one guest's
-   inbox, and the guest would rightly blame us for it. Namespaced so a phone
-   number can never collide with an IP in the same map. */
-function throttleKey(kind, key, max, windowMs) {
-  return throttled(kind + ':' + String(key || '?'), max, windowMs);
-}
-
 /* POST /api/price — what would this order cost, with this code?
 
    Exists because the guest has to SEE the discount before they pay, and
@@ -639,7 +627,7 @@ async function handlePrice(req, res) {
      bare IP, and throttled() keeps ONE counter per key — so a guest re-pricing
      their basket (which happens on every reward choice) spent the allowance
      that handleCreateOrder needed, and the shop's wifi hands every table the
-     same address. Same reasoning as the claim/recovery keys below. */
+     same address. Same reasoning as the claim key below. */
   if (throttled('price:' + ip, 40, 60000)) return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a moment.' });
 
   let raw;
@@ -882,28 +870,13 @@ if (!PRINT_KEY && ADMIN_KEY) {
 }
 
 /* ---- Outgoing mail ------------------------------------------------------
-   Used for one thing: the six-digit code that lets a guest move their rewards
-   to a new phone. Without it the whole "new device" half of the rewards
-   scheme has no self-service path, so say so at boot rather than letting the
-   first guest discover it.
-
-   KPOT_SMTP_PLAIN is a test seam and gets the same treatment as
-   KPOT_STRIPE_API_BASE: a loud line in the log, because on a real mailbox it
-   would put the Gmail app password on the wire in clear text. */
-{
-  const ms = MAIL.status();
-  if (ms.plain) {
-    console.warn('[kpot] ⚠️  KPOT_SMTP_PLAIN=1 — outgoing mail is NOT encrypted.');
-    console.warn('       This is for tests only. Unset it before running a real shop.');
-  }
-  if (ms.configured) {
-    console.log('[kpot] mail: sending as ' + ms.user + ' via ' + ms.host + ':' + ms.port + ' (' + ms.tls + ')');
-  } else {
-    console.warn('[kpot] mail not configured (GMAIL_USER / GMAIL_APP_PASSWORD unset) —');
-    console.warn('       guests on a NEW phone cannot unlock their rewards themselves;');
-    console.warn('       they will be told to ask at the counter.');
-  }
-}
+   GONE on 2026-10-16, with the e-mail recovery path it served. The owner's
+   decision ("不需要EMAIL验证了，凭手机号码就可以领奖励了") removed the only thing
+   this server ever sent, so the mailer, the /api/recovery/* endpoints and the
+   Gmail app-password dependency all went with it. Nothing here talks SMTP any
+   more — see `mailer.js` in git history if it is ever wanted back, and note it
+   was removed because the owner did not want the dependency, not because it
+   did not work. */
 
 /* ---- The shop's clock ---------------------------------------------------
    Every date this server computes is LOCAL-time arithmetic: dateKeyOf() decides
@@ -2710,23 +2683,21 @@ function resolveLoyalty(req, priced, orderType) {
     return { error: 'unknown_customer', message: 'We have no rewards on that mobile number yet.' };
   }
 
-  /* ⚠️ THE GATE. A phone number identifies an account; it does not authorise
-     spending from it. Anyone can type anyone's number into this public form,
-     so without a credential the request below would happily take $5 off the
-     bill of whoever the number happens to belong to.
+  /* ⚠️ THERE USED TO BE A GATE HERE, and it is gone on purpose.
 
-     `req.device` is the token this browser was handed when it first paid. It
-     is verified against the account's own hashed credentials — a token for a
-     DIFFERENT guest fails here just as a made-up one does.
+     A phone number now IS the credential — the owner's explicit reversal of
+     their own earlier instruction ("不需要EMAIL验证了，凭手机号码就可以领奖励了").
+     They were shown that the number is printed on every order ticket
+     (printer.js:153) and chose convenience over the lock.
 
-     Fail closed and say why: the guest page turns `device_required` into the
-     "confirm this phone" prompt rather than a dead end. */
-  if (!L.verifyDevice(cust, req.device, Date.now())) {
-    return {
-      error: 'device_required',
-      message: 'Confirm this mobile number before using its rewards.'
-    };
-  }
+     `req.device` is still sent by the guest page and still verified below, but
+     only so a phone that has paid before can be recognised SILENTLY. It is
+     never a condition of spending anything.
+
+     If you are re-adding a `device_required` branch: that is a product
+     decision the owner has already made once, in the other direction. Ask
+     them; do not reintroduce it quietly. */
+  L.verifyDevice(cust, req.device, Date.now());
 
   /* ---- the member perk ---- */
   if (memberChoice) {
@@ -2810,26 +2781,17 @@ function commitLoyalty(order, reward) {
   return true;
 }
 
-/* Attach the address the guest typed at checkout to their account — but only
-   when the account has none, and only once the money is confirmed.
+/* Keep the address the guest typed at checkout, if the account has none.
 
-   Both halves of that matter.
-
-   ONLY WHEN EMPTY: if an order payload could overwrite an address, anyone who
-   knows a guest's mobile number could place an order carrying their OWN
-   e-mail and then walk the recovery flow straight into the account. The
-   storefront may fill a blank; it may never rewrite one.
-
-   ONLY ONCE PAID: otherwise the same trick works on an account that has not
-   been claimed yet — seed a stranger's brand-new record with your address and
-   wait for them to start earning. Requiring a settled order means the attacker
-   has to pay for a real order first, which is the same bar the owner already
-   accepted for issuing a device credential at all. */
+   Since 2026-10-16 an e-mail is contact data and nothing else — the phone
+   number is the credential, so there is no recovery flow to defend and no
+   overwrite to prevent. It stays fill-only so a guest's record does not churn
+   with every order they place, but the reason is tidiness now, not security. */
 function captureEmailFor(order, cust, at) {
-  if (!order || !cust) return false;
-  const typed = (order.customer || {}).email;
+  if (!order || !cust || cust.email) return false;
+  const typed = L.normalizeEmail((order.customer || {}).email);
   if (!typed) return false;
-  if (L.setEmail(cust, typed) !== 'set') return false;
+  cust.email = typed;
   L.pushLog(cust, 'email_set', 0, 'from order ' + order.id, at);
   return true;
 }
@@ -2862,8 +2824,7 @@ function awardLoyaltyFor(order, why) {
     pointsMultiplier: benefits.pointsMultiplier
   });
   /* Nothing to award (already awarded, or a zero-dollar order) — but the
-     address we just attached still has to reach the disk, or the guest's
-     recovery path silently disappears at the next restart. */
+     address we just attached still has to reach the disk. */
   if (!r.changed) {
     if (emailSet) saveCustomersStore();
     return null;
@@ -2907,22 +2868,15 @@ function releaseLoyaltyFor(order, why) {
 
 /* GET /api/customer?phone=…&subtotal=…&device=…
 
-   Public, because a guest has no admin key. The phone number is still the
-   LOOKUP KEY — it is what the guest typed, and it is what the account is
-   named after — but it is no longer the thing that unlocks it.
+   Public, because a guest has no admin key. The phone number is the LOOKUP KEY
+   and, since 2026-10-16, the CREDENTIAL: typing it is enough to see and spend
+   what is on the account. See the decision record in customers.js
+   (publicView) — the owner reversed their own earlier instruction after being
+   shown that the number is printed on every ticket.
 
-   ⚠️ Two different answers come out of here and the difference is the whole
-   point of this endpoint's design:
-
-     with a verified device credential → publicView(): the guest's own points,
-       coupons, stamp progress and masked name.
-     without one → lockedView(): that the account exists and whether anything
-       is waiting on it, and nothing else. No balance, no coupons, no history,
-       not even the name.
-
-   A bare phone number gets the second answer. Otherwise anyone who knew a
-   guest's number could read their balance — and, worse, spend it, since
-   /api/price resolves rewards through the same identity.
+   `device` is still accepted and still verified, but purely so a phone that
+   has already paid can be recognised without the guest retyping the number.
+   It is not a condition of anything.
 
    Throttled, so the endpoint cannot be used to walk the phone-number space. */
 function handleGetCustomer(req, res, url) {
@@ -2942,36 +2896,35 @@ function handleGetCustomer(req, res, url) {
   const subtotal = isFinite(raw) && raw >= 0 ? raw : null;
 
   const cust = L.find(customers, phone);
-  const token = url.searchParams.get('device') || '';
-  const identified = !!cust && L.verifyDevice(cust, token, Date.now());
-
-  if (!identified) {
-    return sendJSON(res, 200, L.lockedView(cust, Date.now()));
-  }
+  /* Refresh lastSeenAt on the credential if one was presented, so the trim in
+     issueDevice() drops the phones nobody uses any more. */
+  if (cust) L.verifyDevice(cust, url.searchParams.get('device') || '', Date.now());
   return sendJSON(res, 200, L.publicView(cust, subtotal, Date.now()));
 }
 
 /* -------------------------------------------------------------------------- */
-/* Membership credentials — the two ways a browser earns the right to spend    */
+/* Browser recognition — the one surviving half of the rewards handshake     */
 /* -------------------------------------------------------------------------- */
 
 /* POST /api/orders/:id/claim  { claim }
 
    "I am the browser that placed this order, and it has been paid for — mint me
-   a membership credential for the number on it."
+   a credential so I don't have to type my number again."
 
-   This is the moment a device becomes trusted, and it is deliberately tied to
-   a PAID ORDER rather than to the phone number:
+   ⚠️ SINCE 2026-10-16 THIS IS CONVENIENCE, NOT AUTHORITY. The phone number is
+   the credential, so /api/price resolves rewards with or without one. What is
+   left here is the silent-recognition the owner asked for in the first place:
+   pay once, and this phone is filled in on every later order.
 
-     * the caller must hold `claim`, the secret the browser generated when it
-       created the order (we keep only its hash), so knowing a phone number
-       buys nothing here; and
-     * the order must be settled, so the cheapest way to take over somebody
-       else's account is to buy a real order first — the bar the owner chose.
+   It is still deliberately tied to a PAID ORDER rather than to the phone
+   number, which now buys two things instead of one:
 
-   The credential is the only thing that lets /api/price spend that guest's
-   points, and it is why the guest page can identify them silently on this
-   phone from now on. */
+     * the credential on a browser is bound to an order the browser actually
+       placed, so a stranger poking at numbers cannot plant a token; and
+     * the cheapest way to occupy a slot in somebody's device list is still to
+       buy a real order first.
+
+   Deleting this endpoint would cost that convenience and nothing else. */
 async function handleClaimOrder(req, res, id) {
   const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
   /* Namespaced. throttled() keeps ONE counter per key, so a plain ip here
@@ -3026,136 +2979,6 @@ async function handleClaimOrder(req, res, id) {
 
   console.log('[kpot] device credential issued for ' + phone.slice(-4).padStart(10, '*') +
     ' via paid order ' + o.id);
-  return sendJSON(res, 200, { ok: true, device: token, phone, name: L.maskName(cust.name) });
-}
-
-/* What a failed recovery means, in words a guest can act on. The three
-   dead-code cases are deliberately separate from the wrong-code case: "that
-   expired" and "that did not match" send the guest to different buttons. */
-const RECOVERY_ERRORS = {
-  recovery_none: 'That code has expired or was already used. Ask for a new one.',
-  recovery_expired: 'That code has expired. Ask for a new one.',
-  recovery_locked: 'Too many wrong codes on that one — ask for a new one.',
-  recovery_bad_code: 'That code did not match. Check the six digits and try again.'
-};
-
-/* POST /api/recovery/start  { phone, email }
-
-   "I am on a new phone. Mail a code to the address on my account."
-
-   THE ANSWER IS ALWAYS THE SAME, whether the number is unknown, the account
-   has no address, or the address given is not the one we hold. A recovery
-   endpoint that says "no such account" or "wrong e-mail" is an oracle that
-   turns a phone number into a confirmed identity — and /api/customer already
-   reveals more than enough. The wording tells the guest what to expect without
-   telling an attacker whether they guessed right. */
-async function handleRecoveryStart(req, res) {
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  /* Generous per-IP, because a restaurant's wifi puts every guest behind one
-     address and the real limit is the per-NUMBER one below. Too tight here
-     and a family of four tapping "send me a code" locks itself out.
-     Namespaced so it does not share a bucket with the rest of the API. */
-  if (throttled('recovery-start:' + ip, 20, 15 * 60 * 1000)) {
-    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many requests. Please wait a few minutes.' });
-  }
-
-  let raw;
-  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
-  let body;
-  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
-
-  const phone = L.normalizePhone(body.phone);
-  if (!phone) {
-    return sendJSON(res, 400, { error: 'bad_phone', message: 'Enter the 10-digit mobile number on the account.' });
-  }
-  /* Checked BEFORE the account, so the answer depends on the server's setup
-     rather than on whose number was typed. */
-  if (!MAIL.configured()) {
-    return sendJSON(res, 503, {
-      error: 'mail_not_configured',
-      message: 'We cannot e-mail codes at the moment. Please ask at the counter and we will sort it out.'
-    });
-  }
-
-  /* A second limit the attacker cannot dodge by changing IP: at most three
-     codes to any one number per hour. Otherwise a rotating-IP script turns the
-     recovery form into a way to flood a guest's inbox. */
-  if (throttleKey('rec', phone, 3, 60 * 60 * 1000)) {
-    return sendJSON(res, 429, {
-      error: 'rate_limited',
-      message: 'We have already sent a code to that number. Check the inbox, or try again in an hour.'
-    });
-  }
-
-  const cust = L.find(customers, phone);
-  const want = L.normalizeEmail(body.email);
-  const same = !!(cust && cust.email && want && cust.email === want);
-
-  if (same) {
-    const code = L.startRecovery(cust, Date.now());
-    const msg = MAIL.recoveryMessage(code, (ASSETS.CONFIG.store || {}).name,
-      Math.round(L.RECOVERY_TTL_MS / 60000));
-    const out = await MAIL.send({ to: cust.email, subject: msg.subject, text: msg.text });
-    if (!out.ok) {
-      /* Do not leave a live code behind for a mail that never left. */
-      cust.recovery = null;
-      saveCustomersStore();
-      console.error('[kpot] recovery mail failed:', out.error);
-      return sendJSON(res, 502, {
-        error: 'mail_failed',
-        message: 'We could not send that e-mail. Please ask at the counter.'
-      });
-    }
-    saveCustomersStore();
-  }
-
-  return sendJSON(res, 200, {
-    ok: true,
-    sent: true,
-    message: 'If that mobile number and e-mail match our records, a code is on its way.'
-  });
-}
-
-/* POST /api/recovery/verify  { phone, code }
-
-   Trade the mailed code for a credential on THIS browser. The code is burned
-   by checkRecovery(), so it cannot be replayed — including by someone who
-   watched the guest's inbox over their shoulder and tries again later. */
-async function handleRecoveryVerify(req, res) {
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
-  /* Namespaced for the same reason as the other two: guessing at a code must
-     not eat the allowance the guest needs for ordinary lookups. */
-  if (throttled('recovery-verify:' + ip, 20, 15 * 60 * 1000)) {
-    return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many attempts. Please wait a few minutes.' });
-  }
-
-  let raw;
-  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
-  let body;
-  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
-
-  const phone = L.normalizePhone(body.phone);
-  if (!phone) {
-    return sendJSON(res, 400, { error: 'bad_phone', message: 'Enter the 10-digit mobile number on the account.' });
-  }
-  const cust = L.find(customers, phone);
-  if (!cust) {
-    return sendJSON(res, 400, { error: 'recovery_none', message: RECOVERY_ERRORS.recovery_none });
-  }
-
-  const r = L.checkRecovery(cust, body.code, Date.now());
-  if (r.error) {
-    /* The attempt counter (or the lockout) moved — that has to reach the disk
-       or a restart would hand an attacker five more guesses. */
-    saveCustomersStore();
-    return sendJSON(res, 400, { error: r.error, message: RECOVERY_ERRORS[r.error] || 'That code did not work.' });
-  }
-
-  const at = new Date().toISOString();
-  const token = L.issueDevice(cust, 'recovery', at);
-  L.touch(cust, cust.name, at);
-  saveCustomersStore();
-  console.log('[kpot] rewards unlocked by e-mail code for ' + phone.slice(-4).padStart(10, '*'));
   return sendJSON(res, 200, { ok: true, device: token, phone, name: L.maskName(cust.name) });
 }
 
@@ -3231,10 +3054,6 @@ function handleListCustomers(req, res, url) {
         stampsIssued: c.stampsIssued,
         unusedCoupons: (c.coupons || []).filter((x) => L.isUsable(x, now)).length,
         lastSeenAt: c.lastSeenAt,
-        /* Is a recovery code already sitting on this account? Worth knowing at
-           the counter: the owner should read out the code they just issued
-           rather than mint a second one that invalidates the first. */
-        recoveryPending: !!(c.recovery && Date.parse(c.recovery.expiresAt) > now),
         /* Membership, so the console can show "member until …" and offer the
            renew/cancel buttons without a second round trip. */
         member: b.member,
@@ -3330,15 +3149,11 @@ async function handleAdjustCustomer(req, res) {
     changed = true;
   }
 
-  /* ---- the recovery address, and the credentials -------------------------
-     Both are counter actions, because both are about the guest's phone rather
-     than about their money.
-
-     `email` is the ONE place an address may be rewritten. The storefront can
-     only ever fill a blank (see captureEmailFor) precisely so that a typed
-     phone number cannot be turned into a takeover; the owner, standing in
-     front of the guest with their ID in hand, obviously can. An empty string
-     clears it. */
+  /* ---- the contact address, and the credentials --------------------------
+     `email` is the ONE place an address may be rewritten. Since 2026-10-16 an
+     address is contact data and nothing more — it authorises nothing — so this
+     is the owner's phone book, not a takeover surface. An empty string clears
+     it. */
   if (body.email != null) {
     const e = String(body.email).trim();
     if (!e) {
@@ -3356,9 +3171,11 @@ async function handleAdjustCustomer(req, res) {
     }
   }
 
-  /* "Their old phone is in someone else's hands." Kills every credential on
-     the account; the guest then recovers with an e-mail code and gets a fresh
-     one. Nothing is lost — points and rewards are untouched. */
+  /* "Stop remembering this browser." Kills every credential on the account;
+     the guest goes back to typing their number. Nothing is lost — points and
+     rewards are untouched, and since 2026-10-16 a credential was never needed
+     to reach them in the first place, so this is tidiness rather than a
+     security action. Kept because the owner asked for it and it is harmless. */
   if (body.revokeDevices) {
     const n = L.revokeDevices(cust);
     if (n) {
@@ -3416,37 +3233,15 @@ async function handleAdjustCustomer(req, res) {
     }
   }
 
-  /* ---- a code the owner can read out --------------------------------------
-     The counter's own recovery path. A guest standing at the till on a new
-     phone, with no e-mail on the account (or a wrong one), has no way to
-     unlock their rewards by themselves — and "sorry, we cannot help" is not
-     an answer the shop can give someone with $40 banked.
-
-     So the owner mints a code and reads it out; the guest types it into the
-     very same box the mailed code goes in. Admin-gated, logged, short-lived
-     and single-use, exactly like the mailed one — the only difference is the
-     delivery channel. */
-  let issuedCode = null;
-  if (body.issueCode) {
-    issuedCode = L.startRecovery(cust, Date.parse(at));
-    L.pushLog(cust, 'recovery_code_issued', 0, note || 'issued at the counter', at);
-    changed = true;
-  }
-
   if (!changed) {
     return sendJSON(res, 400, { error: 'nothing_to_do', message: 'Send a points change, a reward, a name, or a member action.' });
   }
 
   saveCustomersStore();
-  console.log('[kpot] loyalty: staff adjusted ' + phone + (note ? ' — ' + note : '') +
-    (issuedCode ? ' [recovery code issued]' : ''));
-  /* The code is in the response and deliberately NOT in the log — a log line
-     is the last place a live credential should sit. */
+  console.log('[kpot] loyalty: staff adjusted ' + phone + (note ? ' — ' + note : ''));
   return sendJSON(res, 200, {
     ok: true,
-    customer: L.adminView(cust),
-    recoveryCode: issuedCode,
-    recoveryMinutes: issuedCode ? Math.round(L.RECOVERY_TTL_MS / 60000) : 0
+    customer: L.adminView(cust)
   });
 }
 
@@ -3670,23 +3465,14 @@ const server = http.createServer((req, res) => {
     return handleGetCustomer(req, res, url);
   }
 
-  /* The two public halves of the rewards handshake. Both are throttled, and
-     both hand out a credential only in exchange for something the caller has
-     to PROVE they hold: a paid order's claim secret, or a code we mailed. */
-  if (pathname === '/api/recovery/start') {
-    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
-    return handleRecoveryStart(req, res).catch((e) => {
-      console.error('[kpot] recovery-start unhandled:', e && e.message);
-      sendJSON(res, 500, { error: 'internal_error' });
-    });
-  }
-  if (pathname === '/api/recovery/verify') {
-    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
-    return handleRecoveryVerify(req, res).catch((e) => {
-      console.error('[kpot] recovery-verify unhandled:', e && e.message);
-      sendJSON(res, 500, { error: 'internal_error' });
-    });
-  }
+  /* Mint a browser credential from a PAID order, so the guest page can
+     recognise that phone next time without them retyping the number.
+
+     ⚠️ CONVENIENCE ONLY since 2026-10-16. It used to be one of the two things
+     that AUTHORISED spending. The phone number is the credential now, so
+     nothing downstream refuses a caller who cannot produce one — see
+     resolveLoyalty(). Deleting this endpoint would cost silent recognition and
+     nothing else. */
   const claimMatch = pathname.match(/^\/api\/orders\/([^/]+)\/claim$/);
   if (claimMatch) {
     if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });

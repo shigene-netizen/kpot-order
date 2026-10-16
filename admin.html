@@ -263,21 +263,20 @@
           </div>
 
           <div style="display:flex;gap:8px;margin-top:8px">
-            <input id="memEmail" type="email" placeholder="Recovery e-mail (blank = leave as is)" style="flex:1" autocomplete="off">
+            <input id="memEmail" type="email" placeholder="E-mail (blank = leave as is)" style="flex:1" autocomplete="off">
             <button class="btn btn-ghost btn-sm" id="memEmailClear" type="button">Clear e-mail</button>
           </div>
 
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
             <label style="display:flex;gap:6px;align-items:center;font-size:13px">
-              <input type="checkbox" id="memRevoke"> Sign out every phone
+              <input type="checkbox" id="memRevoke"> Stop remembering this browser
             </label>
-            <button class="btn btn-ghost btn-sm" id="memIssue" type="button">🔑 Issue a counter code</button>
           </div>
           <div class="hint" style="margin-top:6px">
-            "Sign out every phone" kills every credential on this account — the guest then
-            unlocks again with a code. Nothing is lost: points and rewards stay put.
+            Kills every stored credential on this account. The guest just types their
+            mobile number again — a number is all it has ever taken since 2026-10-16.
+            Nothing is lost: points and rewards stay put.
           </div>
-          <div id="memCodeBox" style="margin-top:8px"></div>
 
           <button class="btn btn-primary btn-sm" id="memApply" style="margin-top:10px">Apply</button>
         </div>
@@ -808,15 +807,15 @@
       return;
     }
     box.innerHTML = list.map(function(c){
-      /* Two questions the counter actually gets, answered on the row: "can this
-         guest recover on a new phone?" (an e-mail on file?) and "are they signed
-         in anywhere?" (how many phones?). Without them the owner has to guess
-         why a guest's rewards are not showing up on their new handset. */
-      var reach = (c.email ? '✉ ' + escD(c.email) : 'no recovery e-mail') +
-        (c.recoveryPending ? ' · a code is outstanding' : '');
+      /* What the counter actually gets asked, answered on the row: "how many
+         phones remember this number?" and "is there an address on file?"
+         Without them the owner has to guess why a guest's rewards are not
+         showing up on their new handset — the answer since 2026-10-16 being
+         that they only need to type the number. */
+      var reach = c.email ? ('✉ ' + escD(c.email)) : 'no e-mail on file';
       var phones = c.devices
-        ? c.devices + ' phone' + (c.devices === 1 ? '' : 's') + ' signed in'
-        : 'no phone signed in';
+        ? c.devices + ' phone' + (c.devices === 1 ? '' : 's') + ' remember' + (c.devices === 1 ? 's' : '') + ' this number'
+        : 'no phone remembers this number';
       return '<div class="memrow">' +
         '<b>' + escD(c.phone) + '</b>' + (c.name ? ' · ' + escD(c.name) : '') +
         '<div class="hint" style="margin-top:2px">' +
@@ -898,40 +897,11 @@
       .catch(function(e){ memShow(false, e.message || 'Could not apply that.'); });
   }
 
-  /* The counter's own unlock. The code is shown here and NOWHERE else — the
-     server keeps only its hash, and it is deliberately kept out of the guest's
-     log, so this box is the one and only chance to read it out. */
-  function issueCounterCode(){
-    var phone = String($('#memPhone').value || '').trim();
-    if(!phone) return memShow(false, "Enter the guest's mobile number.");
-    fetch('/api/customers/adjust', {
-      method:'POST', headers: discHeaders(),
-      body: JSON.stringify({ phone: phone, issueCode: true, note: 'issued at the counter' })
-    })
-      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { r:r, j:j }; }); })
-      .then(function(o){
-        if(!o.r.ok) throw new Error((o.j && o.j.message) || 'Could not issue a code.');
-        var box = $('#memCodeBox');
-        var code = o.j.recoveryCode;
-        if(box){
-          box.innerHTML = code
-            ? '<div style="font-size:20px;letter-spacing:2px"><b>' + escD(code) + '</b></div>' +
-              '<div class="hint">Read this out. It works once, for ' +
-              (o.j.recoveryMinutes || 10) + ' minutes, and replaces any code issued before it.</div>'
-            : '<div class="hint">No code came back — check the number.</div>';
-        }
-        memShow(true, code ? 'Code issued — read it to the guest.' : 'No code was issued.');
-        loadMembers();
-      })
-      .catch(function(e){ memShow(false, e.message || 'Could not issue a code.'); });
-  }
-
   $('#memLoad').onclick = loadMembers;
   $('#memApply').onclick = adjustMember;
-  $('#memIssue').onclick = issueCounterCode;
   /* Clearing is a deliberate two-step: press this, then Apply. A blank box on
-     its own means "leave it alone", so nobody wipes a guest's only recovery
-     address by tabbing past a field. */
+     its own means "leave it alone", so nobody wipes a guest's contact address
+     by tabbing past a field. */
   $('#memEmailClear').onclick = function(){
     var el = $('#memEmail');
     el.value = '';

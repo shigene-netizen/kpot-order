@@ -77,15 +77,21 @@ const MAX_COUPONS = 20;        // per guest; stamp rewards accumulate, returns d
 const KEEP_ORDER_IDS = 200;    // recent settled order ids, for the audit trail
 const KEEP_LOG = 40;
 
-/* ---- Authorising secrets ------------------------------------------------
-   How many browsers may hold a credential for one account, and how long a
-   recovery code lives. Both are deliberately small/short: a credential is
+/* ---- Browser recognition ---------------------------------------------------
+   How many browsers may hold a credential for one account. A credential is
    minted on every successful payment, so a guest who orders weekly for a year
-   would otherwise pile up fifty of them, and a code that outlives a coffee
-   break is a code that leaks. */
+   would otherwise pile up fifty of them.
+
+   ⚠️ WHAT THIS IS AND IS NOT. Since 2026-10-16 the phone number is the
+   credential, by the owner's explicit choice: typing the number is enough to
+   see and spend that account's rewards. So what is left here is CONVENIENCE,
+   not security — a credential lets a phone that has already paid be recognised
+   silently, so the guest does not retype their number on every order. It is
+   NOT a gate and MUST NOT be treated as one: see resolveLoyalty() in server.js.
+   If you are ever tempted to re-add a gate here, re-read the decision record:
+   the owner was shown that the number is printed on every order ticket
+   (printer.js:153) and chose convenience over the lock anyway. */
 const MAX_DEVICES = 8;
-const RECOVERY_TTL_MS = 10 * 60 * 1000;
-const RECOVERY_MAX_ATTEMPTS = 5;
 
 const COUPON_KINDS = ['stamp', 'return'];
 
@@ -111,14 +117,14 @@ function normalizePhone(raw) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Device credentials and e-mail recovery — the two things that AUTHORISE      */
+/* Browser credentials — a convenience, NOT a gate                              */
 /* -------------------------------------------------------------------------- */
-/* Read the header first: a phone number identifies, it never authorises.
+/* Read the header first: since 2026-10-16 a phone number IS the credential.
+   What follows only remembers a browser so a returning guest skips the typing.
 
    A device credential is a 256-bit random token. The browser gets the token
    exactly once — in the reply to the request that minted it — and we keep
-   only its sha256. There is no way to recover a lost token from this file,
-   which is the point: a copy of customers.local.json is not a set of keys.
+   only its sha256, so a copy of customers.local.json is not a set of keys.
 
    The hash is unsalted and compared by plain equality, and that is fine here
    in a way it would not be for a password: the input is 32 random bytes, so
@@ -138,10 +144,9 @@ function deviceId() {
   return 'dv_' + crypto.randomBytes(6).toString('hex');
 }
 
-/* Deliberately narrow, like normalizePhone(). The address is only ever used
-   as a destination for a recovery code, so anything we cannot read
-   confidently is refused rather than guessed at: a typo that passes would
-   send somebody else's code to a stranger's inbox. */
+/* Deliberately narrow, like normalizePhone(). The address is optional contact
+   data the owner can attach to an account — it authorises nothing, so a typo
+   that passes is a typo in a phone book, not a way into an account. */
 function normalizeEmail(raw) {
   const s = String(raw == null ? '' : raw).trim().toLowerCase();
   if (s.length < 6 || s.length > 120) return null;
@@ -199,75 +204,13 @@ function deviceCount(cust) {
   return (cust.devices || []).length;
 }
 
-/* Attach an address to an account.
-
-   ONLY EVER FROM NOTHING. An existing address is never overwritten from an
-   order payload — otherwise anyone who knows a guest's phone number could
-   place an order carrying their OWN e-mail, and then use the recovery flow to
-   take the account over. The owner can change an address from the console;
-   the storefront cannot. Returns 'set' | 'kept' | 'bad'. */
-function setEmail(cust, email) {
-  if (!cust) return 'bad';
-  const e = normalizeEmail(email);
-  if (!e) return 'bad';
-  if (cust.email) return 'kept';
-  cust.email = e;
-  return 'set';
-}
-
 /* ---- Recovery codes ------------------------------------------------------ */
-
-/* Six digits, from the CSPRNG — not Math.random(). A recovery code is a
-   credential: it is worth whatever is in the account, and a predictable one
-   is worse than none because it looks like protection. */
-function makeRecoveryCode() {
-  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-}
-
-/* Issue a code for this account and return the plaintext (the caller mails
-   it). Only the hash is kept, so the ledger is not a list of live codes. */
-function startRecovery(cust, now) {
-  if (!cust) return null;
-  const atMs = now == null ? Date.now() : Number(now);
-  const code = makeRecoveryCode();
-  cust.recovery = {
-    hash: hashSecret(code),
-    issuedAt: new Date(atMs).toISOString(),
-    expiresAt: new Date(atMs + RECOVERY_TTL_MS).toISOString(),
-    attempts: 0
-  };
-  return code;
-}
-
-/* Burn a code. One success per code, and a code that is guessed at dies after
-   RECOVERY_MAX_ATTEMPTS — six digits is only a million possibilities and an
-   unbounded retry loop would walk it in minutes. */
-function checkRecovery(cust, code, now) {
-  if (!cust || !cust.recovery) return { error: 'recovery_none' };
-  const r = cust.recovery;
-  const atMs = now == null ? Date.now() : Number(now);
-
-  const expires = Date.parse(r.expiresAt);
-  if (!isFinite(expires) || atMs > expires) {
-    cust.recovery = null;
-    return { error: 'recovery_expired' };
-  }
-  if ((Number(r.attempts) || 0) >= RECOVERY_MAX_ATTEMPTS) {
-    cust.recovery = null;
-    return { error: 'recovery_locked' };
-  }
-
-  r.attempts = (Number(r.attempts) || 0) + 1;
-  const given = String(code == null ? '' : code).replace(/\D/g, '');
-  if (!given || hashSecret(given) !== r.hash) {
-    /* The last wrong guess kills the code rather than leaving a spent one
-       lying around for the next ten minutes. */
-    if (r.attempts >= RECOVERY_MAX_ATTEMPTS) cust.recovery = null;
-    return { error: 'recovery_bad_code' };
-  }
-  cust.recovery = null;
-  return { ok: true };
-}
+/* GONE on 2026-10-16, by the owner's decision. There is nothing left to
+   recover: a phone number is the credential, so "prove you own this number"
+   no longer has a rung above it. The mailer went with it. If this feature is
+   ever wanted again, the design record is in the 2026-10-16 daily log — but
+   note it was switched off precisely because the owner did not want the
+   e-mail dependency, so do not silently reintroduce it. */
 
 /* Enough for a guest to recognise themselves without turning the lookup into
    a way to harvest full names by guessing numbers. */
@@ -324,19 +267,17 @@ function blankCustomer(phone) {
   return {
     phone,
     name: '',
-    /* The recovery address. Optional — a guest with none can still order and
-       earn, they just have to ask at the counter to move an account to a new
-       phone. */
+    /* Optional contact data. It authorises nothing — the phone number is the
+       credential — so it is a phone-book field, not a key. */
     email: '',
     points: 0,
     lifetimePoints: 0,
     settledOrders: 0,
     stampsIssued: 0,
     coupons: [],
-    /* Browsers this account is signed in on. Hashes only — see issueDevice(). */
+    /* Browsers this account is signed in on. Hashes only — see issueDevice().
+       Convenience for silent recognition, NOT a gate (see the header). */
     devices: [],
-    /* An outstanding recovery code, if one was just requested. */
-    recovery: null,
     settledOrderIds: [],
     log: [],
     firstSeenAt: null,
@@ -407,18 +348,6 @@ function normalizeCustomer(raw) {
       }
       : null)
     .filter(Boolean).slice(-MAX_DEVICES);
-  /* A code only survives a restart if it is still inside its own window —
-     otherwise a reboot would resurrect an expired one. */
-  const rec = raw.recovery;
-  c.recovery = (rec && typeof rec === 'object' && /^[0-9a-f]{64}$/.test(String(rec.hash || '')) &&
-    isFinite(Date.parse(rec.expiresAt)) && Date.parse(rec.expiresAt) > Date.now())
-    ? {
-      hash: String(rec.hash),
-      issuedAt: rec.issuedAt ? String(rec.issuedAt) : null,
-      expiresAt: String(rec.expiresAt),
-      attempts: Number(rec.attempts) || 0
-    }
-    : null;
 
   /* Membership. ⚠️ This function is a WHITELIST: it builds a fresh record and
      copies field by field, so anything not named here is silently dropped the
@@ -809,14 +738,12 @@ function publicView(cust, subtotal, now) {
   const isMem = isFinite(memberUntil) && memberUntil > now;
   return {
     found: true,
-    /* ⚠️ This view is the UNLOCKED one and says so. It is only ever sent to a
-       caller who presented a verified device credential (or to the owner).
-       The storefront's public lookup goes through lockedView() instead. */
+    /* The phone number is the credential, so every caller who gets this far
+       has proved everything the shop asks for. `identified` stays in the
+       payload because the guest page reads it, and `found` is what tells the
+       panel "nobody has earned on this number yet". */
     identified: true,
     name: maskName(cust.name),
-    /* The guest's own address, so the panel can say which inbox a recovery
-       code would go to. It is their own; nobody else can reach this view. */
-    email: cust.email || '',
     rules: rules(),
     points: Math.max(0, Math.floor(Number(cust.points) || 0)),
     pointsRedemption: subtotal == null ? null : pointsRedemption(cust, subtotal, now),
@@ -843,41 +770,22 @@ function publicView(cust, subtotal, now) {
   };
 }
 
-/* What a caller who has NOT proved they own the account gets.
+/* -------------------------------------------------------------------------- */
+/* What a bare phone number gets                                              */
+/* -------------------------------------------------------------------------- */
+/* THE WHOLE POINT of the 2026-10-16 decision: there is no second answer.
 
-   This is the answer to "anyone who knows a phone number can walk off with
-   the $5 on it". The account may well exist — the guest typed their own
-   number, so pretending it does not would just be a lie that makes the panel
-   useless — but not one point, not one coupon, not one order, and not even
-   the name comes back. What does come back is the two facts the guest needs
-   to get themselves unlocked: that there ARE rewards waiting, and whether
-   there is an address we could mail a code to.
+   For six weeks there were two views — this one, and a locked one that told a
+   caller with no credential nothing but "an account exists and has rewards on
+   it". The owner asked for that, then reversed it: "不需要EMAIL验证了，凭手机号
+   码就可以领奖励了". They were shown, in the question that settled it, that the
+   number is printed on every order ticket (printer.js:153) and so is not a
+   secret — and chose convenience anyway. `resolveLoyalty()` is the other half
+   of the same decision and points here.
 
-   Those two are a deliberate, small disclosure: they confirm "this number
-   shops here" to someone who guessed it. The alternative — a panel that says
-   "no rewards" to the guest who has $40 banked — is worse, and the owner
-   needs the guest to be able to self-serve. Points, coupons, spend history
-   and the name stay behind the credential. */
-function lockedView(cust, now) {
-  const base = {
-    found: !!cust,
-    identified: false,
-    rules: rules(),
-    points: 0,
-    pointsRedemption: null,
-    coupons: [],
-    member: { is: false, daysLeft: 0, until: null },
-    stamps: { settled: 0, every: STAMP_EVERY, into: 0, toNext: STAMP_EVERY }
-  };
-  if (!cust) return base;
-  const settled = Math.floor(Number(cust.settledOrders) || 0);
-  const into = settled % STAMP_EVERY;
-  return Object.assign(base, {
-    hasRewards: Math.max(0, Math.floor(Number(cust.points) || 0)) > 0 ||
-      (cust.coupons || []).some((c) => isUsable(c, now)),
-    hasEmail: !!cust.email
-  });
-}
+   If you are about to re-add a lock on this view: that is a product decision
+   the owner has already made once, in the other direction. Ask them; do not
+   quietly reintroduce it. */
 
 /* Is this expiry still in force? Kept here, next to the field it reads, so
    there is exactly one answer to "is this guest a member" — the board, the
@@ -899,8 +807,7 @@ function adminView(cust) {
     /* The hashes are useless to the console and a liability in a payload it
        writes to a CSV or a screen recording. The COUNT is what the owner
        actually needs: "this guest is signed in on 2 phones", "nobody is". */
-    devices: deviceCount(cust),
-    recoveryPending: !!(cust.recovery && Date.parse(cust.recovery.expiresAt) > now)
+    devices: deviceCount(cust)
   });
 }
 
@@ -938,7 +845,7 @@ module.exports = {
   POINTS_PER_DOLLAR, REDEEM_STEP, REDEEM_VALUE, POINT_BLOCKS_PER_ORDER,
   STAMP_EVERY, STAMP_VALUE, RETURN_VALUE, RETURN_DAYS, RETURN_MIN_SUBTOTAL,
   MAX_CUSTOMERS, MAX_COUPONS, COUPON_KINDS, CSV_COLUMNS,
-  MAX_DEVICES, RECOVERY_TTL_MS, RECOVERY_MAX_ATTEMPTS,
+  MAX_DEVICES,
   round2, normalizePhone, maskName, rules,
   couponId, makeCoupon, isExpired, isUsable,
   blankCustomer, normalizeCoupon, normalizeCustomer,
@@ -946,7 +853,7 @@ module.exports = {
   pointsBaseFor, pointsFor, isPaidStatus, comebackEarns,
   awardForOrder, pointsRedemption, pointsHoldReason, couponRedemption, resolveRedemption,
   toDescriptor, commitRedemption, releaseRedemption,
-  publicView, lockedView, adminView, toCsv,
+  publicView, adminView, toCsv,
   hashSecret, randomToken, normalizeEmail, issueDevice, verifyDevice,
-  revokeDevices, deviceCount, setEmail, makeRecoveryCode, startRecovery, checkRecovery
+  revokeDevices, deviceCount
 };

@@ -484,25 +484,6 @@ img { max-width: 100%; display: block; }
 .loy-row.is-info .rd.stamp { border: none; font-size: 15px; }
 .loy-row.is-info .tx small { opacity: .85; }
 
-/* ---------- Verifying a phone number ---------- */
-.loy-lock {
-  border: 1.5px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--black-3); padding: 13px;
-}
-.loy-lock b { display: block; font-size: 13px; margin-bottom: 4px; }
-.loy-lock small { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.55; }
-.loy-lock .btn-sm { margin-top: 11px; width: 100%; }
-.loy-lock .field { margin: 0; }
-.loy-lock .field label { font-size: 11.5px; }
-.loy-link {
-  display: block; width: 100%; margin-top: 9px; padding: 4px;
-  background: none; border: none; cursor: pointer;
-  color: var(--muted); font-size: 11.5px; text-decoration: underline;
-}
-.loy-lock .code-input {
-  text-align: center; letter-spacing: 7px; font-size: 21px; font-weight: 800;
-  padding-left: 12px; padding-right: 4px;
-}
 /* The "optional" chip next to a form label — the e-mail field is genuinely
    optional, and saying so is the difference between a guest filling it in and
    a guest abandoning checkout over one more demanded box. */

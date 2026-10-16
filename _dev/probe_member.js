@@ -87,34 +87,20 @@ const orderFor = (no, total, extra) => Object.assign({
   paid: false,
   source: 'probe'
 }, extra || {});
-/* ---- The membership credential -----------------------------------------
-   A phone number no longer reads or spends an account on its own
-   (probe_device_auth.js pins that boundary in full). This probe is about the
-   EARNING rules, so it has to hold a credential, just as a real guest's
-   browser does.
+/* ---- No credential is needed any more ------------------------------------
+   For six weeks this probe walked a guest through the counter-code unlock to
+   earn a device credential, because a bare phone number read nothing.
 
-   It cannot claim one off an order the way probe_loyalty.js does: membership
-   is enrolled at the counter through `adjust`, so there is no order to claim.
-   It uses the counter's OWN recovery path instead — the owner mints a code
-   with `issueCode: true`, the guest trades it at /api/recovery/verify — which
-   is exactly the door a real guest with no e-mail on file walks through. */
+   On 2026-10-16 the owner reversed that: a phone number IS the credential
+   ("不需要EMAIL验证了，凭手机号码就可以领奖励了"), having been shown that the
+   number is printed on every order ticket (printer.js:153). So this probe now
+   reads and spends with the bare number alone, and the only assertion that
+   could still hide a stale gate — that a read with NO credential succeeds —
+   is pinned further down.
+
+   probe_phone_rewards.js is the one that proves the boundary in full. */
 let DEVICE = '';
 const dev = () => (DEVICE ? '&device=' + encodeURIComponent(DEVICE) : '');
-function unlockWithCode() {
-  /* Deliberately returns false rather than throwing. A thrown harness hides
-     the blast radius — the whole point of red-verifying this is to see how
-     many later assertions a broken unlock drags down with it. */
-  return post('/api/customers/adjust', { phone: PHONE, issueCode: true, note: 'probe unlock' }, adminH())
-    .then((r) => {
-      const code = r.j && r.j.recoveryCode;
-      if (!code) return false;
-      return post('/api/recovery/verify', { phone: PHONE, code: code });
-    })
-    .then((r) => {
-      if (r && r.status === 200 && r.j && r.j.device) { DEVICE = r.j.device; return true; }
-      return false;
-    });
-}
 
 const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE) + dev());
 const membersAdmin = () => get('/api/customers', adminH());
@@ -169,13 +155,11 @@ waitForHealth(80).then(() => {
   check('with the fee the owner set', r.j && r.j.memberRules.fee === 9.99);
   check('and the 2x multiplier', r.j && r.j.memberRules.pointsMultiplier === 2);
 
-  /* ---- earn the credential the way a guest with no e-mail must ----
-     Everything past this point presents it, so if the unlock breaks every
-     later assertion goes red together — which is exactly what should happen. */
-  return unlockWithCode().then((ok) => {
-    check('a guest with no e-mail unlocks with a counter-issued code', ok === true);
-    return post('/api/customers/adjust', { phone: PHONE, member: 'confirm', note: 'probe enrolment' }, adminH());
-  });
+  /* ---- the number is all it takes ----
+     Nothing to earn first. If a stale `device_required` gate ever comes back,
+     the enrolment assertions above still pass and it is THIS one that goes
+     red — which is the whole reason it is here rather than left implicit. */
+  return post('/api/customers/adjust', { phone: PHONE, member: 'confirm', note: 'probe enrolment' }, adminH());
 }).then((r) => {
   check('enrolling a member needs no prior ledger entry',
     r.status === 200 && r.j && r.j.customer.memberUntil, 'status=' + r.status + ' ' + JSON.stringify(r.j));
@@ -204,19 +188,23 @@ waitForHealth(80).then(() => {
     r.j && r.j.customer.coupons.length === 1,
     'coupons=' + (r.j && r.j.customer.coupons.length));
 
-  /* ---- the bare number must NOT be enough ----
-     Paired with the unlocked read immediately below. This is the exact
-     vulnerability the owner found, pinned at the HTTP layer: knowing a mobile
-     number buys you the fact that an account exists, and nothing else. */
+  /* ---- a bare phone number reads the whole account ----
+     Paired with the enrolled read immediately below. This is the exact
+     behaviour the owner chose on 2026-10-16, pinned at the HTTP layer: knowing
+     a mobile number is now enough to see the balance, the rewards and the name.
+     It is the same statement probe_phone_rewards.js makes; it is repeated here
+     because this is the suite that would otherwise drift back to assuming a
+     credential exists. */
   return get('/api/customer?phone=' + encodeURIComponent(PHONE));
 }).then((r) => {
-  check('a bare phone number does not identify the account',
-    r.j && r.j.identified === false && r.j.found === true, JSON.stringify(r.j));
-  check('and hands back no points, no rewards and not even the name',
-    r.j && r.j.points === 0 && (r.j.coupons || []).length === 0 && r.j.name === undefined,
-    JSON.stringify(r.j));
-  check('but does confirm rewards are waiting, so the guest can self-serve',
-    r.j && r.j.hasRewards === true, JSON.stringify(r.j));
+  check('a bare phone number identifies the account',
+    r.j && r.j.identified === true && r.j.found === true, JSON.stringify(r.j));
+  check('and hands back the points and the rewards',
+    r.j && typeof r.j.points === 'number' && Array.isArray(r.j.coupons), JSON.stringify(r.j));
+  check('and the masked name', r.j && r.j.name === undefined || typeof r.j.name === 'string',
+    'name=' + (r.j && r.j.name));
+  check('but NOT the e-mail address nothing needs any more',
+    r.j && r.j.email === undefined, 'email leaked: ' + JSON.stringify(r.j && r.j.email));
   return member();
 }).then((r) => {
   check('the guest sees they are a member', r.j && r.j.member.is === true, JSON.stringify(r.j && r.j.member));

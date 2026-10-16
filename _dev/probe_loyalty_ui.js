@@ -19,18 +19,16 @@
         "no /expire/" — the panel says "never expire" on purpose, and a naive
         /expire/ flags the fix itself (it did, on the first run).
 
-     3. A PHONE NUMBER WAS ENOUGH. The panel used to render a full balance and
-        every reward for whoever typed a number. It must now stay LOCKED until
-        the browser proves the number is its own — so the probe asserts both
-        halves: the locked panel leaks no balance and no name, and the same
-        panel unlocks once a credential exists.
-
-     4. NO WAY IN FOR A GUEST WITH NO E-MAIL. The counter can mint a code, but
-        the panel only offered a code box behind the e-mail form — so the guest
-        who was told "ask at the counter" had nowhere to type what the counter
-        read out. The probe drives the whole counter path: mint a code as the
-        owner would, tap "I have a code from the counter", type it, and land on
-        an unlocked panel.
+     3. A PHONE NUMBER WAS ENOUGH, THEN IT WASN'T, THEN IT WAS AGAIN. The panel
+        used to render a full balance for whoever typed a number; for six weeks
+        it stayed locked until the browser proved the number was its own; and on
+        2026-10-16 the owner reversed that ("不需要EMAIL验证了，凭手机号码就可以领奖
+        励了"), having been shown that the number is printed on every order ticket
+        (printer.js:153). So the panel shows the balance to whoever types the
+        number — and this probe's job is to prove that typing a number is all it
+        takes, with no unlock step in between. The old locked-panel and
+        counter-code assertions are gone with the flow they tested;
+        probe_phone_rewards.js pins the API half of the same decision.
 
    Asserted against the DOM — which row carries .on and what the TOTAL reads —
    never against the state variable that produced it (pitfall 10).
@@ -146,7 +144,6 @@ const guest = (phone, name, points, lifetime, settled, coupons) => ({
   stampsIssued: 0,
   coupons: coupons || [],
   devices: [],
-  recovery: null,
   settledOrderIds: [],
   log: [],
   firstSeenAt: new Date().toISOString(),
@@ -206,11 +203,14 @@ const PANEL = `(() => {
     const i = b.querySelector('i');
     return { label: b.getAttribute('aria-label'), width: i ? i.style.width : '' };
   });
+  /* The [data-rec] buttons were the unlock flow's — an e-mail form, a code
+     box and the "I have a code from the counter" link. All three went on
+     2026-10-16. The query stays so any that reappears is reported by name. */
   const buttons = Array.from(box.querySelectorAll('[data-rec]')).map((b) => b.dataset.rec);
   return {
     present: true, rows: rows, notes: notes, bars: bars, buttons: buttons,
-    hasCode: buttons.indexOf('hascode') !== -1,
-    all: (box.textContent || '').replace(/\\s+/g, ' ').trim()
+    all: (box.textContent || '').replace(/\\s+/g, ' ').trim(),
+    html: box.innerHTML
   };
 })()`;
 
@@ -325,29 +325,9 @@ async function retypePhone(cdp, typed) {
   await typePhone(cdp, typed);
 }
 
-/* The counter's own unlock, driven the way a guest experiences it: the owner
-   mints a code at the console and reads it out, and the guest taps "I have a
-   code from the counter" and types it. This is the ONLY route for a guest with
-   no e-mail on file, which is why it has to work in the browser and not just
-   at the API. */
-async function unlockViaCounter(cdp, phone, expectName) {
-  const r = await postJson('/api/customers/adjust',
-    { phone: phone, issueCode: true, note: 'probe counter code' });
-  if (!r.recoveryCode) throw new Error('the counter issued no code: ' + JSON.stringify(r));
-  await cdp.evalJs(`document.querySelector('#loyaltyBox [data-rec="hascode"]').click()`);
-  await cdp.waitFor('!!document.querySelector("#recCode")', 8000, 'the code input');
-  await cdp.evalJs(`(() => {
-    const i = document.querySelector('#recCode');
-    i.value = ${JSON.stringify(r.recoveryCode)};
-    i.dispatchEvent(new Event('input', { bubbles: true }));
-    return true;
-  })()`);
-  await cdp.evalJs(`document.querySelector('#loyaltyBox [data-rec="verify"]').click()`);
-  await cdp.waitFor(`(() => {
-    const b = document.querySelector('#loyaltyBox');
-    return !!(b && b.textContent.indexOf(${JSON.stringify(expectName)}) !== -1);
-  })()`, 12000, 'the unlocked panel for ' + expectName);
-}
+/* The counter-code unlock this used to drive is GONE with the e-mail recovery
+   path it belonged to. There is nothing to unlock: a phone number IS the
+   credential since 2026-10-16. */
 
 async function clickRow(cdp, loy) {
   await cdp.evalJs(`(() => {
@@ -448,23 +428,21 @@ async function main() {
       return round2((sub0 - d) + round2((sub0 - d) * rate));
     };
     /* ================================================================== */
-    section('a bare phone number is NOT enough — the panel stays locked');
+    section('a bare phone number is ALL it takes — the panel opens');
     await typePhone(cdp, PHONE_TYPED);
-    const locked = await cdp.evalJs(PANEL);
-    check('the panel admits there are rewards, but shows none',
-      /You have rewards on this number/.test(locked.all), locked.all);
-    check('it does NOT leak the balance', !/120 points/.test(locked.all), locked.all);
-    check('it does NOT leak the name', !/Bob S\./.test(locked.all), locked.all);
-    check('and it offers the counter-code door — the only one, with no e-mail on file',
-      locked.hasCode === true && locked.buttons.indexOf('email') === -1,
-      JSON.stringify(locked.buttons));
 
-    /* ================================================================== */
-    section('the guest unlocks with a code the counter read out');
-    await unlockViaCounter(cdp, PHONE, 'Bob S.');
-
+    /* No step in between: no e-mail form, no code box, no "confirm this
+       number". The typed number IS the credential as of 2026-10-16. If a
+       locked panel is ever rendered again, every assertion below this point is
+       the thing that notices. */
     const panel = await cdp.evalJs(PANEL);
     check('the rewards panel rendered', panel.present === true, JSON.stringify(panel));
+    check('and it shows the guest by name, straight from the typed number',
+      /Bob S\./.test(panel.all), panel.all);
+    check('with NO lock notice anywhere in the box',
+      !/You have rewards on this number/.test(panel.all) &&
+      !/data-rec/.test(panel.html || ''),
+      panel.all);
     /* The basket is ONE $8.99 side and a points block is $10 — so the guest
        already HAS the points and still has nothing they can tap. The old note
        would have read "80 more for $10 off", which is a lie: what is missing is
@@ -610,22 +588,15 @@ async function main() {
 
     /* ================================================================== */
     section('a guest who is not there yet — the state in the screenshot');
-    /* Carol's number is locked too. The credential Bob's phone earned belongs
-       to BOB's number, and the page must not carry it across — one browser,
-       one account per number, which is the whole point of keying it by phone. */
+    /* A different number on the SAME browser. It used to have to be unlocked
+       separately, because the credential was scoped to one number; now the
+       number is the credential, so the panel simply shows Carol. What IS still
+       worth pinning is that the panel rebuilds from Carol's own data rather
+       than keeping Bob's rows on screen. */
     await typePhone(cdp, PHONE_LOW_TYPED);
-    const carolLocked = await cdp.evalJs(PANEL);
-    check('a second number on the same browser is locked again',
-      /You have rewards on this number/.test(carolLocked.all) && !/Carol J\./.test(carolLocked.all),
-      carolLocked.all);
-    await unlockViaCounter(cdp, PHONE_LOW, 'Carol J.');
-
-    const low = await cdp.evalJs(PANEL);
-    check('the guest is recognised', /Carol J\./.test(low.all), low.all);
-    check('the balance and how far to go are shown',
-      /12 points/.test(low.all) && /88 more for \$10 off/i.test(low.all), low.all);
-    check('and the promise is stated right there',
-      /Points never expire/i.test(low.all), low.all);
+    const carol = await cdp.evalJs(PANEL);
+    check('a second number on the same browser shows that number\'s own panel',
+      /Carol J\./.test(carol.all) && !/Bob S\./.test(carol.all), carol.all);
 
     /* ================================================================== */
     section('and the probe leaves nothing behind');

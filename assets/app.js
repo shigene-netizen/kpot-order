@@ -102,21 +102,7 @@
     scheduleSlots: [],
     scheduleFee: 0,
     scheduleState: '',
-    scheduleMsg: '',
-    /* Inline verification of a phone number the guest has not proved they own.
-       '' = not verifying, 'email' = typing the address, 'code' = typing the
-       6-digit code. Kept in state rather than in a sheet so the checkout the
-       guest is halfway through never leaves the screen. */
-    recoverStep: '',
-    recoverBusy: false,
-    recoverMsg: '',
-    recoverState: '',
-    /* HOW they reached the code step: 'email' after we mailed one, 'counter'
-       after the owner read one out. The copy differs, and so does what "go
-       back" means — a guest with no e-mail has no e-mail form to go back to. */
-    recoverVia: '',
-    /* Mirrors whatever is in the visible input, so a redraw cannot lose it. */
-    recoverInput: ''
+    scheduleMsg: ''
   };
 
   /* ------------------------------------------------------------------ */
@@ -1378,19 +1364,21 @@
   }
 
   /* ------------------------------------------------------------------ */
-  /* The membership credential                                           */
+  /* The device credential — CONVENIENCE ONLY since 2026-10-16            */
   /* ------------------------------------------------------------------ */
-  /* Kept on this device, scoped to ONE phone number. Two rules make it
-     behave:
+  /* Kept on this device, scoped to ONE phone number. It exists so a returning
+     guest does not retype their number, which is what the owner asked for
+     originally ("以后在同一设备结账时，可以自动识别账户并使用奖励").
 
-       * a credential is only ever SENT with the number it was issued for. A
+     ⚠️ It is NOT a gate any more. The phone number IS the credential — the
+     owner's reversal, made with the fact in front of them that the number is
+     printed on every ticket. So a missing credential costs a few keystrokes
+     and nothing else: Losing it (new phone, cleared site data) just means the
+     number gets typed again.
+
+       * a credential is only ever SENT with the number it was issued for, so a
          shared tablet where one guest signs in and the next types their own
-         number must not hand the first guest's rewards to the second — and
-         the server would refuse anyway, but sending it at all would be the
-         bug, not the refusal.
-       * holding one is what turns "checking your rewards" into a silent
-         success. Losing it (new phone, cleared site data) is not a disaster:
-         the guest recovers by e-mail, or asks at the counter. */
+         number never mixes the two. */
 
   function loadDevice() {
     try {
@@ -1408,10 +1396,6 @@
         name: String(name || '')
       }));
     } catch (e) { /* private mode — the guest just re-verifies next time */ }
-  }
-
-  function clearDevice() {
-    try { localStorage.removeItem(LS_DEVICE); } catch (e) {}
   }
 
   /* The credential to send WITH this phone number, or ''. */
@@ -1480,8 +1464,9 @@
   }
 
   /* What we tell the server about rewards: a WISH ("use my points", "use this
-     reward") and never an amount — plus the credential that proves the wish is
-     the guest's to make. */
+     reward") and never an amount. The phone number is what the account is
+     named after; `device` rides along purely so the server can recognise this
+     phone, and is not a condition of anything (see the header above). */
   function loyaltyPayload() {
     if (!state.loyaltyChoice) return null;
     const phone = (state.customer || {}).phone || '';
@@ -1526,11 +1511,6 @@
       /* The guest may have typed another digit while this was in flight; a
          stale answer must not overwrite the newer one. */
       if (clientPhone(state.customer.phone) !== phone) return;
-
-      /* We sent a credential and the server did not recognise it — the owner
-         has signed this device out, or the account moved. Drop it rather than
-         keep presenting a token that will never work again. */
-      if (data.identified === false && deviceFor(phone)) clearDevice();
 
       state.loyalty = data;
       state.loyaltyPhone = phone;
@@ -1606,108 +1586,18 @@
       '</div>';
   }
 
-  /* ---- Recovery, rendered in place ----------------------------------------
-     Deliberately NOT a sheet. The rewards box lives inside the checkout sheet,
-     and swapping the sheet out for a "verify" sheet would take the guest's
-     half-filled order off the screen — and closing it would leave them on the
-     menu with the cart still open, wondering what happened. Two steps, drawn
-     where the guest is already looking. */
-  function renderRecoverBox(box, L) {
-    const sig = [state.recoverStep, state.recoverMsg || '', state.recoverBusy ? 1 : 0,
-      state.recoverVia || ''].join('|');
-    /* Already drawn and nothing changed: do not rebuild it, or a background
-       re-price would wipe the code the guest is halfway through typing. */
-    if (box.dataset.recSig === sig) return;
-    box.dataset.recSig = sig;
-
-    const msg = state.recoverMsg
-      ? '<div class="small ' + (state.recoverState === 'ok' ? 'ok' : 'err') + '" style="margin-top:7px">' +
-        esc(state.recoverMsg) + '</div>'
-      : '';
-    const head = '<div class="section-label">Rewards</div>';
-
-    if (state.recoverStep === 'code') {
-      const viaCounter = state.recoverVia === 'counter';
-      box.innerHTML = '<div class="loy">' + head +
-        '<div class="loy-lock">' +
-          '<b>Enter your code</b>' +
-          '<small>' + (viaCounter
-            ? 'Type the 6-digit code the counter gave you. It works once, for 10 minutes.'
-            : 'Enter the 6-digit code we just sent. It works once, for 10 minutes.') + '</small>' +
-          '<div class="field" style="margin-top:9px">' +
-            '<input id="recCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" ' +
-              'maxlength="6" placeholder="000000" value="' + esc(state.recoverInput || '') + '">' +
-          '</div>' +
-          '<button class="btn btn-primary btn-sm" type="button" data-rec="verify"' +
-            (state.recoverBusy ? ' disabled aria-disabled="true"' : '') + '>' +
-            (state.recoverBusy ? 'Checking…' : 'Unlock my rewards') + '</button>' +
-          '<button class="loy-link" type="button" data-rec="restart">' +
-            (viaCounter ? 'Back' : 'Use a different e-mail') + '</button>' +
-          msg +
-        '</div>' +
-      '</div>';
-      return;
-    }
-
-    if (state.recoverStep === 'email') {
-      box.innerHTML = '<div class="loy">' + head +
-        '<div class="loy-lock">' +
-          '<b>Verify this number</b>' +
-          '<small>Type the e-mail on your account and we will send a 6-digit code. ' +
-            'If you never gave us one, ask at the counter.</small>' +
-          '<div class="field" style="margin-top:9px">' +
-            '<label>E-mail on the account</label>' +
-            '<input id="recEmail" type="email" inputmode="email" autocomplete="email" ' +
-              'placeholder="you@example.com" value="' + esc(state.recoverInput || '') + '">' +
-          '</div>' +
-          '<button class="btn btn-primary btn-sm" type="button" data-rec="send"' +
-            (state.recoverBusy ? ' disabled aria-disabled="true"' : '') + '>' +
-            (state.recoverBusy ? 'Sending…' : 'Send me a code') + '</button>' +
-          '<button class="loy-link" type="button" data-rec="cancel">Cancel</button>' +
-          msg +
-        '</div>' +
-      '</div>';
-      return;
-    }
-
-    const canMail = !!L.hasEmail;
-    box.innerHTML = '<div class="loy">' + head +
-      '<div class="loy-lock">' +
-        '<b>🔒 You have rewards on this number</b>' +
-        '<small>' + (canMail
-          ? 'This phone has not been confirmed yet. Verify it once and your points and rewards will be here every time.'
-          : 'We have no e-mail on this account. Ask at the counter and we will unlock your rewards on this phone.') +
-        '</small>' +
-        (canMail
-          ? '<button class="btn btn-primary btn-sm" type="button" data-rec="email">Verify this number</button>'
-          : '') +
-        /* The counter path has to be reachable from here, or the guest who is
-           told "ask at the counter" has nowhere to type what the counter read
-           out. Offered in both cases: an e-mail can be wrong or dead, and the
-           owner standing in front of the guest can always mint a code. */
-        '<button class="loy-link" type="button" data-rec="hascode">I have a code from the counter</button>' +
-        msg +
-      '</div>' +
-    '</div>';
-  }
-
   function renderLoyaltyBox() {
     const box = $('#loyaltyBox');
     if (!box) return;
 
     const digits = String((state.customer || {}).phone || '').replace(/\D/g, '');
-    if (digits.length < 7) { box.innerHTML = ''; box.dataset.recSig = ''; return; }
+    if (digits.length < 7) { box.innerHTML = ''; return; }
 
     if (!clientPhone(state.customer.phone)) {
       box.innerHTML = '<div class="loy"><div class="section-label">Rewards</div>' +
         '<div class="small dim">Use a 10-digit mobile number and this order starts earning points.</div></div>';
       return;
     }
-
-    /* A verification in progress owns the box until it finishes or is
-       cancelled. */
-    if (state.recoverStep) { renderRecoverBox(box, state.loyalty || {}); return; }
-    box.dataset.recSig = '';
 
     if (state.loyaltyState === 'busy' && !state.loyalty) {
       box.innerHTML = '<div class="loy"><div class="section-label">Rewards</div>' +
@@ -1717,18 +1607,13 @@
 
     const L = state.loyalty;
 
-    /* ---- locked, but there is something behind the door ------------------
-       The server tells us an account exists and whether anything is waiting
-       on it, and nothing else — no balance, no rewards, not the name. That is
-       the whole point: a phone number is public. So the box has to say "there
-       is something here, confirm it is yours" rather than showing a balance
-       anybody could read by typing a number. */
-    if (L && L.found && L.identified === false && L.hasRewards) {
-      renderRecoverBox(box, L);
-      return;
-    }
-
-    if (!L || !L.found || L.identified === false) {
+    /* No lock, no unlock step, no e-mail. Since 2026-10-16 the number the guest
+       typed IS the credential — the owner's call, made with the fact in front
+       of them that the same number is printed on every ticket. The panel shows
+       the balance to whoever types the number, which is exactly what was
+       asked for. (For six weeks this branch rendered a "confirm this phone"
+       panel instead.) */
+    if (!L || !L.found) {
       box.innerHTML = '<div class="loy"><div class="section-label">Rewards</div>' +
         '<div class="small dim">First order on this number — you start earning points with this one.</div></div>';
       return;
@@ -1804,78 +1689,6 @@
     return d <= 0 ? 'today' : (d + ' day' + (d === 1 ? '' : 's'));
   }
 
-  /* ---- the two verification steps ---------------------------------------- */
-
-  function recoverFail(msg) {
-    state.recoverBusy = false;
-    state.recoverState = 'err';
-    state.recoverMsg = msg;
-    renderLoyaltyBox();
-  }
-
-  async function recoverSend() {
-    const phone = clientPhone((state.customer || {}).phone);
-    const email = ($('#recEmail') || {}).value?.trim() || '';
-    if (!email) return recoverFail('Enter the e-mail on the account.');
-    state.recoverBusy = true;
-    state.recoverState = '';
-    state.recoverMsg = '';
-    renderLoyaltyBox();
-    try {
-      const res = await fetch('/api/recovery/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phone, email: email })
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.message || 'We could not send that.');
-      state.recoverStep = 'code';
-      state.recoverVia = 'email';
-      state.recoverBusy = false;
-      state.recoverInput = '';
-      state.recoverMsg = j.message || '';
-      state.recoverState = 'ok';
-      renderLoyaltyBox();
-      const inp = $('#recCode');
-      if (inp) inp.focus();
-    } catch (e) {
-      recoverFail(e.message || 'We could not send that.');
-    }
-  }
-
-  async function recoverVerify() {
-    const phone = clientPhone((state.customer || {}).phone);
-    const code = ($('#recCode') || {}).value?.replace(/\D/g, '') || '';
-    if (code.length !== 6) return recoverFail('Enter the 6-digit code.');
-    state.recoverBusy = true;
-    state.recoverState = '';
-    state.recoverMsg = '';
-    renderLoyaltyBox();
-    try {
-      const res = await fetch('/api/recovery/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phone, code: code })
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.message || 'That code did not work.');
-      saveDevice(j.device, phone, j.name);
-      state.recoverStep = '';
-      state.recoverVia = '';
-      state.recoverBusy = false;
-      state.recoverInput = '';
-      state.recoverMsg = '';
-      state.recoverState = '';
-      toast('Rewards unlocked on this phone', 'ok');
-      /* The box has to be rebuilt from the server's answer, not from what we
-         hope it says — the credential is live from this moment. */
-      await lookupLoyalty(true);
-      renderTotalsInCheckout();
-    } catch (e) {
-      recoverFail(e.message || 'That code did not work.');
-    }
-  }
-
   async function chooseLoyalty(value) {
     if (value === state.loyaltyChoice) return;
     state.loyaltyChoice = value;
@@ -1901,41 +1714,14 @@
     const box = $('#loyaltyBox');
     if (!box || box.dataset.loyBound === '1') return;
     box.dataset.loyBound = '1';
+    /* Delegation, NOT per-button onclick. renderLoyaltyBox() redraws the box
+       after every keystroke in the phone field and again inside
+       chooseLoyalty(), so per-button handlers were destroyed as soon as the
+       guest finished typing their number. */
     box.addEventListener('click', (ev) => {
-      const rec = ev.target && ev.target.closest ? ev.target.closest('[data-rec]') : null;
-      if (rec) {
-        if (rec.disabled) return;
-        const what = rec.dataset.rec;
-        if (what === 'email') { state.recoverStep = 'email'; state.recoverVia = 'email'; state.recoverInput = ''; state.recoverMsg = ''; renderLoyaltyBox(); const i = $('#recEmail'); if (i) i.focus(); return; }
-        /* Straight to the code step for a code the owner read out. A guest with
-           no e-mail on file — the very case the counter path exists for — has no
-           "Send me a code" button to get here through. */
-        if (what === 'hascode') { state.recoverStep = 'code'; state.recoverVia = 'counter'; state.recoverInput = ''; state.recoverMsg = ''; state.recoverState = ''; renderLoyaltyBox(); const i = $('#recCode'); if (i) i.focus(); return; }
-        if (what === 'send') return void recoverSend();
-        if (what === 'verify') return void recoverVerify();
-        /* "Go back" from a counter code lands on the locked panel, because
-           there is no e-mail form to return to. */
-        if (what === 'restart') { const back = state.recoverVia === 'counter' ? '' : 'email'; state.recoverStep = back; state.recoverVia = back; state.recoverInput = ''; state.recoverMsg = ''; state.recoverState = ''; renderLoyaltyBox(); const i = back === 'email' ? $('#recEmail') : null; if (i) i.focus(); return; }
-        if (what === 'cancel') { state.recoverStep = ''; state.recoverVia = ''; state.recoverInput = ''; state.recoverMsg = ''; state.recoverState = ''; renderLoyaltyBox(); return; }
-        return;
-      }
       const hit = ev.target && ev.target.closest ? ev.target.closest('[data-loy]') : null;
       if (!hit || hit.disabled) return;
       chooseLoyalty(hit.dataset.loy || '');
-    });
-    /* Keep what they are typing when a background re-price redraws the box —
-       the signature guard stops the redraw, this keeps the value in step in
-       case something else does force one. */
-    box.addEventListener('input', (ev) => {
-      const t = ev.target;
-      if (t && (t.id === 'recCode' || t.id === 'recEmail')) state.recoverInput = t.value;
-    });
-    box.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Enter') return;
-      const t = ev.target;
-      if (!t) return;
-      if (t.id === 'recEmail') { ev.preventDefault(); recoverSend(); }
-      if (t.id === 'recCode') { ev.preventDefault(); recoverVerify(); }
     });
   }
 
@@ -3443,18 +3229,6 @@
       L = await r.json();
     } catch (e) { return; }
     if (!L || !L.found) return;
-    /* The strip only ever shows a guest their OWN numbers, so with no
-       credential it says nothing rather than guessing — the checkout is where
-       they can confirm the number and see the real thing. */
-    if (L.identified === false) {
-      el.innerHTML = '<div class="ticket-loy">' +
-        '<div class="tl-head">⭐ Rewards</div>' +
-        '<div class="tl-line dim">' + (L.hasRewards
-          ? 'You have rewards on this number — confirm it at checkout to see them.'
-          : 'This order is earning you points.') + '</div>' +
-      '</div>';
-      return;
-    }
 
     const R = L.rules || {};
     const s = L.stamps || {};

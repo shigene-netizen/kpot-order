@@ -135,7 +135,7 @@ run probe_discount_http    _dev/probe_discount_http.js
 run probe_loyalty          _dev/probe_loyalty.js
 run probe_throttle_isolate _dev/probe_throttle_isolate.js
 run probe_member            _dev/probe_member.js
-run probe_device_auth      _dev/probe_device_auth.js
+run probe_phone_rewards     _dev/probe_phone_rewards.js
 run probe_schedule          _dev/probe_schedule.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
