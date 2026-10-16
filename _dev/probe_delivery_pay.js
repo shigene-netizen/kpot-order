@@ -404,6 +404,88 @@ async function main() {
     check('and gives the delivery reason, not the ceiling one',
       !!aCounter && /delivery/i.test(aCounter.sub || ''), 'sub=' + JSON.stringify(aCounter && aCounter.sub));
 
+    /* ================================================================== */
+    section('the delivery DATE and TIME picker — the guest must be able to choose');
+    /* The reported bug: the chips rendered, so the picker LOOKED right, but
+       renderScheduleBox() replaces the box's innerHTML and openCheckout()
+       re-renders straight after bindScheduleBox() — so the per-chip onclick
+       handlers were destroyed before the guest could tap anything. Nothing
+       threw; the picker simply did nothing. Asserted with real clicks, and
+       against the DOM, never the state variable that produced it. */
+    await cdp.waitFor('!!document.querySelector("#scheduleBox .sch-date")', 15000, 'the date chips');
+    await cdp.waitFor('!!document.querySelector("#scheduleBox .sch-slot")', 15000, 'the time slots');
+
+    const CHIPS = `(() => Array.from(document.querySelectorAll('#scheduleBox .sch-date')).map((b) => ({
+      big: ((b.querySelector('span') || {}).textContent || '').trim(),
+      small: ((b.querySelector('small') || {}).textContent || '').trim(),
+      iso: b.dataset.schDate,
+      on: b.classList.contains('on')
+    })))()`;
+
+    const chips = await cdp.evalJs(CHIPS);
+    check('the picker offers several days', (chips || []).length >= 2, JSON.stringify(chips));
+    /* Sunday is weekday 0. The old chip read `d.weekday || d.iso`, so Sunday
+       printed its raw ISO date and every other day printed a bare number. */
+    check('every date chip names a real weekday, not a number or a raw date',
+      (chips || []).length > 0 && chips.every((c) => /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)$/.test(c.big)),
+      JSON.stringify(chips));
+    check('and shows the month/day underneath',
+      (chips || []).every((c) => /^\d{1,2}\/\d{1,2}$/.test(c.small)), JSON.stringify(chips));
+    check('no chip falls back to printing the ISO string',
+      (chips || []).every((c) => c.big !== c.iso), JSON.stringify(chips));
+
+    /* Click the SECOND day — a day the guest did not start on, so the click
+       has to do real work. */
+    await cdp.evalJs(`document.querySelectorAll('#scheduleBox .sch-date')[1].click()`);
+    await cdp.waitFor(
+      `(() => { const b = document.querySelectorAll('#scheduleBox .sch-date')[1]; return !!(b && b.classList.contains('on')); })()`,
+      12000, 'the second date to become selected');
+    await cdp.waitFor('!!document.querySelector("#scheduleBox .sch-slot")', 12000,
+      'the slots for the newly picked day');
+
+    const afterDate = await cdp.evalJs(CHIPS);
+    check('clicking a date actually selects it',
+      (afterDate || []).filter((c) => c.on).length === 1 && afterDate[1].on === true,
+      JSON.stringify(afterDate));
+
+    /* Now pick a time. */
+    const firstSlotLabel = await cdp.evalJs(
+      `((document.querySelector('#scheduleBox .sch-slot span') || {}).textContent || '').trim()`);
+    await cdp.evalJs(`document.querySelector('#scheduleBox .sch-slot').click()`);
+    await cdp.waitFor(
+      `(() => { const b = document.querySelector('#scheduleBox .sch-slot'); return !!(b && b.classList.contains('on')); })()`,
+      12000, 'the first time slot to become selected');
+
+    const PICK = `(() => ({
+      dates: Array.from(document.querySelectorAll('#scheduleBox .sch-date')).map((b) => b.classList.contains('on')),
+      slots: Array.from(document.querySelectorAll('#scheduleBox .sch-slot')).filter((b) => b.classList.contains('on')).length,
+      note: Array.from(document.querySelectorAll('#scheduleBox .small.ok')).map((n) => n.textContent.trim()).join(' | ')
+    }))()`;
+    const pickState = await cdp.evalJs(PICK);
+    check('clicking a time slot actually selects exactly one',
+      pickState.slots === 1, JSON.stringify(pickState));
+    check('and the picker says the choice back to the guest',
+      /Delivering/i.test(pickState.note) && /\d{1,2}:\d{2}\s*(AM|PM)/i.test(pickState.note) &&
+      /on \d{1,2}\/\d{1,2}/.test(pickState.note),
+      'slot=' + JSON.stringify(firstSlotLabel) + ' note=' + JSON.stringify(pickState.note));
+    check('and the day the guest clicked is still the one selected',
+      pickState.dates[1] === true, JSON.stringify(pickState.dates));
+
+    /* Moving to a THIRD day must drop that choice: a slot id means a different
+       thing on a different day, and a lit chip over a stale date is the guest
+       reading one thing while the kitchen gets another. */
+    await cdp.evalJs(`document.querySelectorAll('#scheduleBox .sch-date')[2].click()`);
+    await cdp.waitFor(
+      `(() => { const b = document.querySelectorAll('#scheduleBox .sch-date')[2]; return !!(b && b.classList.contains('on')); })()`,
+      12000, 'the third date to become selected');
+    await cdp.waitFor('!!document.querySelector("#scheduleBox .sch-slot")', 12000, 'the third day\'s slots');
+
+    const moved = await cdp.evalJs(PICK);
+    check('changing the day clears the time picked on the old day',
+      moved.slots === 0, JSON.stringify(moved));
+    check('and stops claiming a delivery time it is not going to send',
+      !/Delivering/i.test(moved.note), 'note=' + JSON.stringify(moved.note));
+
     /* ---- the page must have thrown nothing --------------------------- */
     const errs = cdp.logs.filter((l) => /EXCEPTION|\[error\]/.test(l));
     check('the page logged no JavaScript errors', errs.length === 0, errs.slice(0, 3).join('\n         '));

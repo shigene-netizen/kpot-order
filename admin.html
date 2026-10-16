@@ -770,10 +770,17 @@
   function renderLoyRules(r){
     var b = $('#loyRules');
     if(!b || !r) return;
+    /* The come-back coupon is switched off (returnValue 0). Quoting "a $0
+       coupon, valid 14 days" at the owner would be nonsense, so the clause
+       goes away with the rule — and the no-expiry promise takes its place,
+       because that is now the whole deal. */
+    var comeback = r.returnValue > 0
+      ? ' · every settled order drops a $' + r.returnValue + ' coupon valid for ' + r.returnDays + ' days'
+      : '';
     b.textContent = '$1 spent earns ' + r.pointsPerDollar + ' point' + (r.pointsPerDollar === 1 ? '' : 's') +
       ' · ' + r.redeemStep + ' points = $' + r.redeemValue + ' off' +
       ' · every ' + r.stampEvery + ' orders earns a $' + r.stampValue + ' reward' +
-      ' · every settled order drops a $' + r.returnValue + ' coupon valid for ' + r.returnDays + ' days.';
+      comeback + ' · points and rewards never expire.';
   }
 
   function renderMembers(list){

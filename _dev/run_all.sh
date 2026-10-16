@@ -126,6 +126,7 @@ echo "--- real browser (headless Chrome) ---"
 run probe_guest_defaults   _dev/probe_guest_defaults.js
 run probe_guest_discount   _dev/probe_guest_discount.js
 run probe_delivery_pay     _dev/probe_delivery_pay.js
+run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js
 run probe_board_print_ui   _dev/probe_board_print_ui.js
 

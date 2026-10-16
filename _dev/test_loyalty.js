@@ -141,16 +141,15 @@ const o1 = order('KP-1', 15.99);
 const first = L.awardForOrder(c1, o1, NOW);
 ok('the first order reports a change', first.changed === true);
 check('the first order earns 15 points', first.points, 15);
-check('and one come-back coupon', first.coupons.length, 1);
+/* The come-back coupon is switched OFF (see the header note in customers.js):
+   a reward that carries a date reads to a guest as "my points expire", and
+   that is not the deal we offer. Nothing handed out may have a countdown. */
+check('and NO come-back coupon — the expiring reward is off', first.coupons.length, 0);
 check('the balance is 15', c1.points, 15);
 check('the lifetime total is 15', c1.lifetimePoints, 15);
 check('settled orders is 1', c1.settledOrders, 1);
 check('no stamp yet (10 orders is the milestone)', c1.stampsIssued, 0);
-ok('the coupon is the come-back kind', c1.coupons[0].kind === 'return');
-check('worth $5', c1.coupons[0].value, 5);
-ok('a come-back coupon EXPIRES',
-  c1.coupons[0].expiresAt !== null && L.isExpired(c1.coupons[0], NOW_MS + 15 * DAY));
-ok('and it is unused', c1.coupons[0].usedAt === null);
+ok('nothing on the ledger carries an expiry date', c1.coupons.every((c) => !c.expiresAt));
 ok('the earn is logged', c1.log.some((e) => e.kind === 'earn' && e.delta === 15));
 
 /* ---- Idempotency is per-ORDER, not per-guest ----
@@ -161,7 +160,7 @@ const again = L.awardForOrder(c1, o1, NOW + 'x'.length && NOW); /* the same orde
 ok('a re-award of the SAME order is refused', again.changed === false);
 check('and says why', again.reason, 'already_awarded');
 check('the balance did not move', c1.points, 15);
-check('and no second coupon appeared', c1.coupons.length, 1);
+check('and no coupon appeared on the re-award', c1.coupons.length, 0);
 check('settled orders still 1', c1.settledOrders, 1);
 
 /* A SECOND, DIFFERENT order still pays — the guard is the order, not a
@@ -181,8 +180,10 @@ check('the stamp reward is worth $10',
   c10.coupons.find((c) => c.kind === 'stamp').value, 10);
 ok('a stamp reward does not rot',
   c10.coupons.find((c) => c.kind === 'stamp').expiresAt === null);
-check('and the guest also holds exactly one come-back coupon (the rest were replaced)',
-  c10.coupons.filter((c) => c.kind === 'return').length, 1);
+check('and the guest holds NO come-back coupon (that reward is off)',
+  c10.coupons.filter((c) => c.kind === 'return').length, 0);
+ok('so the wallet is stamp rewards only, and every one of them keeps',
+  c10.coupons.every((c) => c.kind === 'stamp' && !c.expiresAt));
 
 /* 20 orders -> exactly 2 rewards, never a third. */
 const c20 = L.blankCustomer('6783355388');
@@ -199,38 +200,50 @@ cDup.settledOrders = 10;                       /* staff re-enters the same count
 L.awardForOrder(cDup, order('KP-99', 10), NOW); /* an 11th order */
 check('a re-entered milestone counter mints nothing extra', cDup.stampsIssued, 1);
 
-/* ---- The come-back coupon is one at a time on purpose ---- */
-const cR = L.blankCustomer('6783355388');
-L.awardForOrder(cR, order('KP-A', 10), NOW);
-const oldest = cR.coupons[0];
-L.awardForOrder(cR, order('KP-B', 10), NOW);
-check('five orders in a fortnight do not stack five coupons', cR.coupons.length, 1);
-ok('the older coupon was replaced, not kept',
-  cR.coupons[0].id !== oldest.id);
-ok('the replacement is fresh and unused', cR.coupons[0].usedAt === null);
-check('the replacement is logged', cR.log.filter((e) => e.kind === 'return_replaced').length, 1);
+/* ---- Points never expire -------------------------------------------------
+   The owner's rule, stated once and pinned here: a balance sits on the ledger
+   until the guest spends it, however long they are away. There is no expiry
+   field on a points balance to be forgotten, and redemption is driven by the
+   BALANCE, not by when any of it was earned. */
+const cDormant = L.blankCustomer('6783355388');
+L.awardForOrder(cDormant, order('KP-old', 120), NOW);
+check('the balance is banked', cDormant.points, 120);
+const THREE_YEARS = NOW_MS + 3 * 365 * DAY;
+check('a balance untouched for three years is still there',
+  L.publicView(cDormant, 20, THREE_YEARS).points, 120);
+ok('and it still buys the reward it always did',
+  !!L.pointsRedemption(cDormant, 20, THREE_YEARS));
+check('the shipped come-back rule is OFF', L.RETURN_VALUE, 0);
+check('and the storefront is told so', L.rules().returnValue, 0);
 
-/* A coupon already SPENT is left alone, so the audit trail still shows what
-   was given and taken. */
-const cU = L.blankCustomer('6783355388');
-L.awardForOrder(cU, order('KP-A', 10), NOW);
-cU.coupons[0].usedAt = NOW;
-cU.coupons[0].usedOn = 'KP-Z';
-L.awardForOrder(cU, order('KP-B', 10), NOW);
-check('a spent coupon survives the next order', cU.coupons.length, 2);
-ok('and keeps its history',
-  cU.coupons[0].usedAt === NOW && cU.coupons[0].usedOn === 'KP-Z');
+/* Switching the reward OFF must not confiscate a coupon a guest was already
+   given: 'return' stays a legal kind, so a legacy coupon keeps working inside
+   its window and still expires when its own date passes. */
+const cLegacy = L.blankCustomer('6783355388');
+const legacy = L.makeCoupon('return', 5, '$5 off — come back within 14 days', 'KP-L', NOW);
+cLegacy.coupons.push(legacy);
+ok('a legacy come-back coupon still redeems inside its window',
+  !!L.couponRedemption(cLegacy, legacy.id, 20, NOW_MS));
+ok('and still refuses once its own date has passed',
+  L.couponRedemption(cLegacy, legacy.id, 20, NOW_MS + 15 * DAY) === null);
+check('and it survives a round-trip through the ledger normaliser',
+  L.normalizeCustomer(cLegacy).coupons.length, 1);
 
 /* ---- Ceilings ---- */
 const cMax = L.blankCustomer('6783355388');
 for (let i = 0; i < L.MAX_COUPONS; i++) {
   cMax.coupons.push(L.makeCoupon('stamp', 10, 'stamp ' + i, 'KP-seed', NOW));
 }
+/* Drive the counter to the milestone so a reward really IS due — with a full
+   wallet it must be DEFERRED (the counter does not advance past it), not
+   silently lost and not allowed to blow past the ceiling. */
+for (let i = 0; i < 9; i++) L.awardForOrder(cMax, order('KP-f' + i, 1), NOW);
 L.awardForOrder(cMax, order('KP-X', 12), NOW);
-check('a full coupon wallet takes no new come-back coupon',
+check('a full coupon wallet takes no new reward',
   cMax.coupons.length, L.MAX_COUPONS);
-check('but points are still earned', cMax.points, 12);
-check('and the order still counts', cMax.settledOrders, 1);
+check('and the milestone is deferred, not marked as issued', cMax.stampsIssued, 0);
+check('but points are still earned', cMax.points, 21);
+check('and the orders still count', cMax.settledOrders, 10);
 
 /* ---- No customer, no award ---- */
 check('awarding to nobody changes nothing',
@@ -531,7 +544,7 @@ const R = L.rules();
 check('$1 of food = 1 point', R.pointsPerDollar, 1);
 check('100 points = $5 off', R.redeemStep + ' -> $' + R.redeemValue, '100 -> $5');
 check('every 10 orders = $10', R.stampEvery + ' -> $' + R.stampValue, '10 -> $10');
-check('$5 come-back coupon', R.returnValue, 5);
+check('the come-back coupon is switched OFF', R.returnValue, 0);
 check('valid 14 days', R.returnDays, 14);
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -227,10 +227,12 @@ waitForHealth(80).then(() => {
   check('points ARE earned once payment is confirmed', r.j && r.j.points === 15,
     'points=' + (r.j && r.j.points));
   check('the name comes back masked', r.j && r.j.name === 'Bob S.', 'name=' + (r.j && r.j.name));
-  check('a come-back coupon was issued', r.j && r.j.coupons && r.j.coupons.length === 1,
+  /* The expiring come-back coupon is switched OFF: a reward carrying a date
+     reads to a guest as "my points expire", which is not the deal we offer. */
+  check('NO come-back coupon is issued', r.j && r.j.coupons && r.j.coupons.length === 0,
     JSON.stringify(r.j && r.j.coupons));
-  check('...worth $5', r.j && r.j.coupons && r.j.coupons[0].value === 5);
-  check('...and it expires', r.j && r.j.coupons && r.j.coupons[0].expiresAt !== null);
+  check('and the storefront is told the reward is off',
+    r.j && r.j.rules && r.j.rules.returnValue === 0, JSON.stringify(r.j && r.j.rules));
   check('the stamp card shows 1 settled order', r.j && r.j.stamps && r.j.stamps.settled === 1);
   check('with 9 to go to the $10 reward', r.j && r.j.stamps && r.j.stamps.toNext === 9);
 
@@ -238,6 +240,15 @@ waitForHealth(80).then(() => {
   check('the server logged the payout', /loyalty: .* earned 15 point/.test(serverLog),
     serverLog.split('\n').filter((l) => /loyalty/.test(l)).slice(-3).join(' | '));
 
+  /* Hand one out by hand. Redemption has to stay live for a reward the shop
+     chooses to give, and this is the counter's own "make it right" tool. */
+  return post('/api/customers/adjust',
+    { phone: PHONE, coupon: { value: 5, label: '$5 off — come back within 14 days', days: 14 }, note: 'probe grant' },
+    adminH());
+}).then((r) => {
+  check('staff can hand a guest a reward by hand',
+    r.status === 200 && r.j && r.j.customer.coupons.length === 1,
+    'status=' + r.status + ' ' + JSON.stringify(r.j));
   return member();
 }).then((r) => {
   const first = r.j;

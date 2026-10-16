@@ -187,6 +187,12 @@
       });
   }
   function loadScheduleDate(iso) {
+    /* A slot id means a different thing on a different day, so a selection made
+       on the old date must not carry over. Without this the slot chip for
+       "1:00 PM" stayed lit on the NEW day (the id matches) while state.schedule
+       still said the OLD date — the guest reads one thing and the kitchen gets
+       another. Re-picking the same day keeps the choice. */
+    if (state.schedule && state.schedule.date !== iso) state.schedule = null;
     state.scheduleDate = iso;
     state.scheduleSlots = [];
     state.scheduleState = 'busy';
@@ -204,6 +210,34 @@
         renderScheduleBox();
       });
   }
+  /* ---- Delivery-day labels ---------------------------------------------
+     The server sends `weekday` as a NUMBER, and Sunday is 0. The old chip
+     read `d.weekday || d.iso`, so Sunday — the one day whose number is falsy
+     — printed the raw ISO date instead of a day name, and every other chip
+     printed a bare digit ("6") that means nothing to a guest standing at the
+     counter. Derive the name explicitly; never fall back to a number. */
+  const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function weekdayName(iso, weekday) {
+    const n = Number(weekday);
+    if (Number.isInteger(n) && n >= 0 && n <= 6) return WEEKDAYS[n];
+    /* No usable number: read the day off the ISO string as UTC. Parsing it as
+       LOCAL time would let the browser's timezone move the date a day, and the
+       guest is not necessarily in the shop's timezone. */
+    const t = Date.parse(String(iso || '') + 'T00:00:00Z');
+    return isFinite(t) ? WEEKDAYS[new Date(t).getUTCDay()] : '';
+  }
+  function monthDay(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    return m ? (Number(m[2]) + '/' + Number(m[3])) : String(iso || '');
+  }
+  function fullDayLabel(d) {
+    const wd = weekdayName(d && d.iso, d && d.weekday);
+    const md = monthDay(d && d.iso);
+    const ahead = Number(d && d.daysAhead);
+    const rel = ahead === 1 ? ' (tomorrow)' : (ahead === 0 ? ' (today)' : '');
+    return (wd ? wd + ' ' : '') + md + rel;
+  }
+
   function renderScheduleBox() {
     const box = $('#scheduleBox');
     if (!box) return;
@@ -220,8 +254,11 @@
     }
     const days = state.scheduleDays || [];
     const dateChips = days.map((d) =>
-      '<button class="sch-date' + (state.scheduleDate === d.iso ? ' on' : '') + '" type="button" data-sch-date="' + esc(d.iso) + '">' +
-        '<span>' + esc(d.weekday || d.iso) + '</span><small>' + esc(d.iso) + '</small>' +
+      '<button class="sch-date' + (state.scheduleDate === d.iso ? ' on' : '') + '" type="button"' +
+        ' data-sch-date="' + esc(d.iso) + '" title="' + esc(fullDayLabel(d)) + '"' +
+        ' aria-label="' + esc(fullDayLabel(d)) + '">' +
+        '<span>' + esc(weekdayName(d.iso, d.weekday)) + '</span>' +
+        '<small>' + esc(monthDay(d.iso)) + '</small>' +
       '</button>').join('');
     const slots = (state.scheduleSlots || []).map((s) => {
       const on = state.schedule && state.schedule.slot === s.id;
@@ -232,28 +269,53 @@
         '<span>' + esc(s.label) + '</span><small>' + esc(note) + '</small>' +
       '</button>';
     }).join('');
+    /* Two labelled steps, because the guest has to make two choices and the
+       old single "Delivery Time" heading sat above a row of days. */
+    const slotBlock = state.scheduleDate
+      ? '<div class="section-label" style="margin-top:12px">Delivery Time' +
+        (state.scheduleFee ? ' · ' + money(state.scheduleFee) : '') + '</div>' +
+        (slots
+          ? '<div class="sch-slots">' + slots + '</div>'
+          : '<div class="small dim">No times left for this day.</div>')
+      : '';
+    /* Say the choice back to the guest. A red outline on a small chip is easy
+       to miss, and "did I actually pick a time?" is a counter conversation. */
+    const picked = state.schedule
+      ? '<div class="small ok" style="margin-top:8px">Delivering ' +
+        esc(state.schedule.slotLabel || '') + ' on ' + esc(monthDay(state.schedule.date)) + '</div>'
+      : '';
     box.innerHTML = '<div class="loy">' +
-      '<div class="section-label">Delivery Time' + (state.scheduleFee ? ' · ' + money(state.scheduleFee) : '') + '</div>' +
+      '<div class="section-label">Delivery Date</div>' +
       (dateChips
         ? '<div class="sch-dates">' + dateChips + '</div>'
         : '<div class="small dim">No delivery dates available.</div>') +
-      (state.scheduleDate ? '<div class="sch-slots">' + slots + '</div>' : '') +
+      slotBlock +
+      picked +
       (state.scheduleMsg ? '<div class="small err" style="margin-top:6px">' + esc(state.scheduleMsg) + '</div>' : '') +
     '</div>';
   }
+  /* Delegated, and bound ONCE per box element.
+     renderScheduleBox() replaces the box's innerHTML, which throws away any
+     onclick attached to the chips — and openCheckout() re-renders immediately
+     after binding (loadSchedule(), then loadScheduleDate(), each render
+     again), so the per-chip handlers were already gone before the guest could
+     tap anything. The symptom is a picker that looks perfect and does nothing.
+     One listener on the container survives every re-render. */
   function bindScheduleBox() {
-    $$('#scheduleBox [data-sch-date]').forEach((btn) => {
-      btn.onclick = () => loadScheduleDate(btn.dataset.schDate);
-    });
-    $$('#scheduleBox [data-sch-slot]').forEach((btn) => {
-      btn.onclick = () => {
-        if (btn.disabled) return;
-        const slot = (state.scheduleSlots || []).find((s) => s.id === btn.dataset.schSlot);
-        if (!slot) return;
-        state.schedule = { date: state.scheduleDate, slot: slot.id, slotLabel: slot.label };
-        state.scheduleMsg = '';
-        renderScheduleBox();
-      };
+    const box = $('#scheduleBox');
+    if (!box || box.dataset.schBound === '1') return;
+    box.dataset.schBound = '1';
+    box.addEventListener('click', (ev) => {
+      const hit = ev.target && ev.target.closest
+        ? ev.target.closest('[data-sch-date],[data-sch-slot]') : null;
+      if (!hit || hit.disabled) return;
+      const iso = hit.dataset.schDate;
+      if (iso) { loadScheduleDate(iso); return; }
+      const slot = (state.scheduleSlots || []).find((s) => s.id === hit.dataset.schSlot);
+      if (!slot) return;
+      state.schedule = { date: state.scheduleDate, slot: slot.id, slotLabel: slot.label };
+      state.scheduleMsg = '';
+      renderScheduleBox();
     });
   }
   /* What the discount comes off, i.e. everything tax is charged on. Mirrors
@@ -1410,12 +1472,19 @@
 
     const pr = L.pointsRedemption;
     if (pr) {
+      /* The no-expiry promise rides on whichever points line is showing, so it
+         is never missing just because the guest happens to be able to redeem
+         right now. A countdown next to a balance is what started all this. */
       rows.push(loyaltyRowHTML('points', 'Use ' + pr.points + ' points',
-        '-' + money(pr.value), 'You have ' + L.points + ' points'));
+        '-' + money(pr.value), 'You have ' + L.points + ' points · never expire'));
     } else if (L.points > 0) {
       const need = R.redeemStep - (L.points % R.redeemStep);
+      /* Say the promise out loud. The owner's whole objection to the old panel
+         was a countdown sitting next to a points balance — a guest who reads
+         "Expires …" next to "12 points" concludes the points die. */
       rows.push('<div class="loy-note small dim">You have ' + L.points + ' point' +
-        (L.points === 1 ? '' : 's') + ' — ' + need + ' more for $' + R.redeemValue + ' off.</div>');
+        (L.points === 1 ? '' : 's') + ' — ' + need + ' more for $' + R.redeemValue +
+        ' off. Points never expire.</div>');
     }
 
     (L.coupons || []).forEach((c) => {
@@ -1457,9 +1526,19 @@
     syncCartUI();
   }
 
+  /* Delegated for the same reason as bindScheduleBox(): renderLoyaltyBox()
+     replaces the box's innerHTML, and it runs again after every reprice
+     (lookupLoyalty → reprice → renderLoyaltyBox, and again inside
+     chooseLoyalty), so per-button handlers were destroyed as soon as the
+     guest finished typing their number. */
   function bindLoyaltyBox() {
-    $$('#loyaltyBox [data-loy]').forEach((btn) => {
-      btn.onclick = () => chooseLoyalty(btn.dataset.loy || '');
+    const box = $('#loyaltyBox');
+    if (!box || box.dataset.loyBound === '1') return;
+    box.dataset.loyBound = '1';
+    box.addEventListener('click', (ev) => {
+      const hit = ev.target && ev.target.closest ? ev.target.closest('[data-loy]') : null;
+      if (!hit || hit.disabled) return;
+      chooseLoyalty(hit.dataset.loy || '');
     });
   }
 

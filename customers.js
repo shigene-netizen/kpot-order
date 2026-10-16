@@ -31,8 +31,19 @@ const REDEEM_STEP = 100;       // …spent in whole blocks of 100 points…
 const REDEEM_VALUE = 5;        // …each worth $5 off
 const STAMP_EVERY = 10;        // every 10 settled orders earns…
 const STAMP_VALUE = 10;        // …a $10 reward
-const RETURN_VALUE = 5;        // and every settled order drops a $5 coupon…
-const RETURN_DAYS = 14;        // …that expires in a fortnight
+/* The come-back coupon. DISABLED (0) on the owner's instruction.
+
+   A reward with an expiry date on it reads to a guest as "my points expire",
+   and that is not the deal we offer. Points and stamp rewards never expire:
+   a guest banks points for as long as it takes and takes $5 off at 100. So
+   nothing on the rewards panel may carry a countdown.
+
+   Set this back to 5 (and RETURN_DAYS to the window you want) to bring the
+   nudge back — the whole mechanism below is intact and only this guard
+   switches it on. Guests who already hold one keep it: COUPON_KINDS still
+   lists 'return', so a coupon already issued is not dropped from the ledger. */
+const RETURN_VALUE = 0;
+const RETURN_DAYS = 14;        // only meaningful when RETURN_VALUE > 0
 
 /* Sanity ceilings. A ledger that grows without bound is a ledger that
    eventually fails to load. */
