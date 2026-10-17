@@ -2028,6 +2028,13 @@ function printConfig() {
   return {
     enabled: p.enabled !== false,
     paper: String(p.paper || '80'),
+    /* Real printable width of THIS printer, in characters. Left null, printer.js
+       uses its own default (48 for 80mm, 32 for 58mm) — which is the right
+       thing for a generic head but the wrong thing for the Toast TP200 in
+       this shop, whose 7mm + 9mm fixed margins reduce an 80mm roll to ~42
+       usable columns. Without this number every line silently wraps on the
+       printer and the two-column totals shred themselves. */
+    cols: Number.isInteger(p.cols) && p.cols > 0 ? p.cols : null,
     cut: p.cut !== false
   };
 }
@@ -2088,7 +2095,7 @@ function enqueueKitchenTicket(order, opts) {
 
   let bytes = null, error = '';
   try {
-    bytes = renderKitchenTicket(order, { paper: cfg.paper, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
+    bytes = renderKitchenTicket(order, { paper: cfg.paper, cols: cfg.cols, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
   } catch (e) {
     error = e.message;
     console.error('[kpot] could not render ticket for ' + order.id + ':', e.message);
@@ -2195,7 +2202,7 @@ function reprintKitchenTicket(orderId) {
   const cfg = printConfig();
   let bytes;
   try {
-    bytes = renderKitchenTicket(o, { paper: cfg.paper, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
+    bytes = renderKitchenTicket(o, { paper: cfg.paper, cols: cfg.cols, cut: cfg.cut, storeName: (ASSETS.CONFIG.store || {}).name });
   } catch (e) {
     return { error: 'render_failed', message: e.message };
   }

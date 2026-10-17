@@ -232,11 +232,11 @@ check('each modifier gets its own line',
 check('modifiers are indented', r80.lines.filter((l) => /Broth:|Protein:|Spicy:/.test(l.text)).every((l) => l.text.startsWith(' ')));
 const itemLine = lineFor(r80, '2x Build Your Own Bowl');
 eq('an item line is bold (readable at a glance)', itemLine.bold, true);
-eq('an item name that fits at double width is double size', itemLine.size, 2);
+eq('an item name is always single size for visual consistency across lines', itemLine.size, 1);
 const bigName = replay(P.renderKitchenTicket(order({
   lines: [{ name: 'A Very Long Item Name That Cannot Possibly Fit Double Width', qty: 1, desc: '' }]
 }), { paper: '80' }));
-eq('a long item name falls back to single size rather than wrapping',
+eq('a long item name stays single size, never double',
   bigName.lines.find((l) => l.text.includes('A Very Long')).size, 1);
 const modLine = r80.lines.find((l) => l.text.includes('Broth: Japanese Miso'));
 eq('a modifier line is not bold', modLine.bold, false);
@@ -262,6 +262,39 @@ check('58mm uses 32 columns', r58.lines.some((l) => l.text === '-'.repeat(32)));
 check('58mm never emits a line wider than 32', r58.lines.every((l) => l.text.length <= 32),
   'max=' + Math.max(...r58.lines.map((l) => l.text.length)));
 check('58mm uses the full 32 columns for a left/right row', (lineFor(r58, 'TYPE') || {}).text.length === 32);
+
+/* ---- printable width override ----
+   The `cols` option is what the owner sets in assets/config.js when their
+   printer's fixed mechanical margins reduce the real printable width below
+   the headline 48 (Toast TP200: 7mm + 9mm of unreachable paper = ~42 usable
+   columns). Without this option every line silently wraps on the printer
+   and the two-column rows shred themselves — "DINE-IN" prints as "D" +
+   "INE-IN", "$13.77" drops onto its own line, and indented modifiers lose
+   their indent. The test exists so the next person to "simplify" the
+   override path sees the failure mode documented, not as a vague "don't
+   touch". */
+console.log('\nprintable width override');
+const r42 = replay(P.renderKitchenTicket(order(), { paper: '80', cols: 42 }));
+check('cols: 42 produces no line wider than 42', r42.lines.every((l) => l.text.length <= 42),
+  'max=' + Math.max(...r42.lines.map((l) => l.text.length)));
+const typeAt42 = lineFor(r42, 'TYPE');
+check('a left/right row fills the full custom width', typeAt42.text.length === 42, typeAt42.text);
+check('a left/right row at 42 keeps label left and value right',
+  typeAt42.text.startsWith('TYPE') && typeAt42.text.trim().endsWith('PICKUP'));
+check('the rule line honours the custom width', r42.lines.some((l) => l.text === '-'.repeat(42)));
+
+/* And the preview — the plain-text version is what the owner reads, so it
+   must not silently disagree with what the printer actually gets. */
+const prev42 = P.previewKitchenTicket(order(), { paper: '80', cols: 42 });
+check('preview at cols: 42 never exceeds 42', prev42.split('\n').every((l) => l.length <= 42),
+  'max=' + Math.max(...prev42.split('\n').map((l) => l.length)));
+
+/* Negative case: with NO cols set, the ticket uses the paper default and
+   produces a 48-wide line for an 80mm roll — which is the layout that
+   shreds itself on a printer with 7mm + 9mm fixed margins. The test exists
+   so the regression is loud, not silent. */
+const r48 = replay(P.renderKitchenTicket(order(), { paper: '80' }));
+check('without cols, an 80mm ticket still uses the 48-column default', r48.lines.some((l) => l.text.length === 48));
 
 /* ---- control codes ---- */
 console.log('\ncontrol codes');

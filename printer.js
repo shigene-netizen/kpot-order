@@ -186,7 +186,13 @@ function buildTicket(order, opts) {
 
   for (const l of lines) {
     const qty = Number(l.qty) || 1;
-    line(qty + 'x ' + sanitize(l.name), { bold: true, size: sizeFor(qty + 'x ' + sanitize(l.name), cols) });
+    /* Items are forced to a single, consistent size. Letting `sizeFor`
+       promote short names to double-width made the ticket look uneven —
+       "1x Rice" in giant letters next to "1x Spicy Beef Hot Pot Bowl" in
+       normal letters — and on a real printer with hardware margins the
+       inconsistent line lengths were the first thing to wrap and break the
+       alignment. Bold carries the emphasis now. */
+    line(qty + 'x ' + sanitize(l.name), { bold: true, size: 1 });
     /* `desc` was built by pricing.js as mods.concat(addons).join(' · '), so
        splitting on that exact separator recovers the individual choices and
        lets each one sit on its own line where it can be ticked off. */

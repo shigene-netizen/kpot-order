@@ -301,8 +301,16 @@ const CONFIG = {
      way to reach a printer on your shop's network.
 
      What lives here is the ticket itself:
-       paper  '80' = 80mm roll (48 characters wide) — the usual kitchen size
-              '58' = 58mm roll (32 characters) — the small handheld ones
+       paper  '80' = 80mm roll — the usual kitchen size
+              '58' = 58mm roll — the small handheld ones
+       cols   How many characters the printer can ACTUALLY print across.
+              printer.js defaults to 48 (80mm) / 32 (58mm) when this is left
+              blank, but real printers have fixed mechanical margins that eat
+              into the paper. The Toast TP200 in this shop, for instance, has
+              7mm + 9mm of unreachable paper, so only ~42 characters fit —
+              leave cols at the default and every line wraps, the two-column
+              totals shred themselves, and "DINE-IN" prints as "D" + "INE-IN".
+              Set this once for your printer and forget it.
        cut    true  = tell the printer to cut the paper after each ticket
               false = leave it (some cheap printers have no cutter)
 
@@ -312,6 +320,11 @@ const CONFIG = {
   printer: {
     enabled: true,
     paper: '80',
+    /* Real printable width of THIS printer, characters. printer.js falls back
+       to its own default (48 for 80mm, 32 for 58mm) when this is left null.
+       The Toast TP200 in the shop has 7mm + 9mm fixed margins, so 42 is the
+       honest number. Set wrong and the two-column rows fall apart on paper. */
+    cols: 42,
     cut: true
   },
 
