@@ -1602,6 +1602,28 @@ function sendOrderNotification(order) {
     .catch((e) => { console.error('[kpot] order email error:', e && e.message); });
 }
 
+/* Best-effort e-mail to the CUSTOMER when their order is ready. Never blocks the
+   request, never throws. Only fires if the guest supplied an e-mail. */
+function sendCustomerReadyEmail(order) {
+  if (!MAIL || !MAIL.configured) return;
+  const to = order.customer && order.customer.email;
+  if (!to) return;
+  const store = (ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go';
+  const lines = [];
+  lines.push('Good news — your order is ready!');
+  lines.push('');
+  lines.push(store + ' · Order ' + (order.id || ''));
+  if (order.customer && order.customer.name) lines.push('For: ' + order.customer.name);
+  if (order.orderType === 'dinein') lines.push('Table: ' + (order.table || '?'));
+  else if (order.orderType === 'pickup') lines.push('Pickup at the counter.');
+  else if (order.orderType === 'delivery') lines.push('Your driver is on the way.');
+  lines.push('');
+  lines.push('Thank you for ordering with us!');
+  MAIL.send({ to: to, subject: store + ' — your order ' + (order.id || '') + ' is ready', text: lines.join('\r\n') })
+    .then((r) => { if (!r || !r.ok) console.error('[kpot] customer ready email failed:', (r && r.error) || 'unknown'); })
+    .catch((e) => { console.error('[kpot] customer ready email error:', e && e.message); });
+}
+
 /* The Web Push payload for a fresh order. Must match what sw.js's `push` handler
    expects: { title, body, tag, url }. `tag` groups notifications so a burst of
    orders doesn't stack endlessly on the lock screen. */
@@ -1611,6 +1633,17 @@ function buildPushPayload(order) {
   const body = who + ' · $' + Number(order.total || 0).toFixed(2) +
     ((order.orderType === 'dinein') ? ' · Table ' + (order.table || '?') : ' · ' + (order.orderType || ''));
   return { title, body, tag: 'kpot-new-' + (order.id || Date.now()), url: 'admin-orders.html' };
+}
+
+/* A harmless push used by the admin "test push" button — proves the link is live
+   without creating an order, printing a ticket, or touching rewards. */
+function buildTestPushPayload() {
+  return {
+    title: '🔔 KPOT test push',
+    body: 'If you see this, new-order alerts are working.',
+    tag: 'kpot-test-' + Date.now(),
+    url: 'admin-orders.html'
+  };
 }
 
 /* Admin-gated: register or remove a push subscription for the owner's device.
@@ -2126,6 +2159,13 @@ async function handleUpdateOrder(req, res, id) {
      cannot double-print either.) */
   if (o.status === 'preparing' && wasStatus !== 'preparing') {
     enqueueKitchenTicket(o);
+  }
+
+  /* Reaching 'ready' is the moment to tell the GUEST their order is up. Only on
+     the TRANSITION, so re-saving a ready order does not re-mail them. No-op when
+     the guest left the e-mail blank. */
+  if (o.status === 'ready' && wasStatus !== 'ready') {
+    sendCustomerReadyEmail(o);
   }
 
   console.log('[kpot] order ' + id + ' -> ' + o.status + ' (' + o.paymentStatus + ')');
@@ -3576,6 +3616,17 @@ const server = http.createServer((req, res) => {
       console.error('[kpot] push subscription unhandled:', e && e.message);
       sendJSON(res, 500, { error: 'internal_error' });
     });
+  }
+
+  /* Admin-only: fire a test push to every subscribed device without creating an
+     order — lets the owner confirm the push link is live any time, with no print
+     or reward side effects. */
+  if (pathname === '/api/push/test') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    if (!PUSH || !PUSH.configured()) return sendJSON(res, 503, { error: 'push_not_configured' });
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    PUSH.sendToAll(buildTestPushPayload());
+    return sendJSON(res, 200, { ok: true, devices: PUSH.count() });
   }
 
   /* ---- Order board + store controls ---- */

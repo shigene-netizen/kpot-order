@@ -146,6 +146,7 @@
   <div class="staff-bar">
     <span id="installHost"></span>
     <button type="button" class="notify-btn" id="notifyBtn" hidden>🔔 Enable new-order alerts</button>
+    <button type="button" class="notify-btn" id="testPushBtn" hidden>📨 Send test push</button>
   </div>
 
   <div class="card">
@@ -263,6 +264,11 @@ $('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorag
 
 function renderNotifyBtn() {
   const b = $('#notifyBtn');
+  /* The "test push" button is admin-only (the route is key-gated server-side) and
+     only needs a subscribed device somewhere — not this one — so show it whenever
+     the board is open, regardless of this browser's own notification support. */
+  const tb = $('#testPushBtn');
+  if (tb) tb.hidden = false;
   if (!b) return;
   if (!StaffPWA.notifySupported()) { b.hidden = true; return; }
   b.hidden = false;
@@ -297,6 +303,17 @@ $('#notifyBtn').onclick = () => {
     }
     renderNotifyBtn();
   });
+};
+
+/* Fire a test push to every subscribed device without placing an order — a quick
+   "is the link still live?" check. Admin-gated server-side; best-effort UI. */
+$('#testPushBtn').onclick = () => {
+  const btn = $('#testPushBtn');
+  btn.disabled = true;
+  (window.StaffPWA && StaffPWA.sendTestPush(headers()))
+    .then((ok) => { toast(ok ? '📨 Test push sent' : 'Test push failed (push not set up?)'); })
+    .catch(() => { toast('Test push failed'); })
+    .then(() => { btn.disabled = false; });
 };
 
 /* Keep the server's push subscriptions in step with this device's alert setting.

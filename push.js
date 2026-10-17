@@ -141,4 +141,8 @@ function sendToAll(payload) {
   });
 }
 
-module.exports = { init, configured, publicKey, subscribe, unsubscribe, sendToAll };
+/* How many devices are currently subscribed. Used by the admin "test push"
+   button so it can report how many phones are about to buzz. */
+function count() { return configured() ? readSubs().length : 0; }
+
+module.exports = { init, configured, publicKey, count, subscribe, unsubscribe, sendToAll };

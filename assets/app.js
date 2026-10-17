@@ -2042,14 +2042,15 @@
     const body =
       '<div class="section-label" style="margin-top:4px">Your Details</div>' +
       '<div class="field"><label>Name</label><input id="cName" placeholder="e.g. Alex" value="' + esc(c.name) + '"></div>' +
-      '<div class="field"><label>Mobile (for order updates)</label><input id="cPhone" type="tel" inputmode="tel" placeholder="(555) 123-4567" value="' + esc(c.phone) + '"></div>' +
-      /* Optional, and labelled as such. It exists for exactly one reason: it
-         is the only way a guest can move their rewards to a NEW phone without
-         standing at the counter. A guest who leaves it blank still orders and
-         still earns — they just cannot self-serve a device change later. */
-      '<div class="field"><label>E-mail <span class="opt">optional</span></label>' +
+      '<div class="field"><label>Mobile</label><input id="cPhone" type="tel" inputmode="tel" placeholder="(555) 123-4567" value="' + esc(c.phone) + '"></div>' +
+      '<div class="small dim" style="margin:-6px 0 10px">Used for this order and Reward enrollment - not marketing SMS consent.</div>' +
+      /* REQUIRED now: it is how we e-mail the guest the moment their order is
+         ready, and it is their reward enrollment contact. A guest who leaves it
+         blank cannot be told their food is up, so the order cannot be placed
+         without it. */
+      '<div class="field"><label>E-mail <span class="opt">(for order updates)</span></label>' +
         '<input id="cEmail" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" value="' + esc(c.email || '') + '"></div>' +
-      '<div class="small dim" style="margin:-6px 0 10px">Only used to send you a rewards code if you change phones.</div>' +
+      '<div class="small dim" style="margin:-6px 0 10px">We e-mail you the moment your order is ready.</div>' +
       /* Rewards hang off the mobile number, so the box sits directly under it —
          the guest sees what their number is worth the moment they type it. */
       '<div id="loyaltyBox"></div>' +
@@ -2283,11 +2284,16 @@
     const email = ($('#cEmail') || {}).value?.trim() || '';
     if (!name) { toast('Please enter your name', 'err'); $('#cName').focus(); return; }
     if (phone.replace(/\D/g, '').length < 7) { toast('Please enter a valid mobile number', 'err'); $('#cPhone').focus(); return; }
-    /* The server silently drops an address it cannot read, which would leave
-       the guest believing they had given us one — and then wondering why a
-       code never arrives. Catch it here instead. Mirrors normalizeEmail(). */
-    if (email && !/^[^\s@,;]+@[^\s@,;.]+(\.[^\s@,;.]+)+$/.test(email)) {
-      toast('That e-mail does not look right — fix it, or leave it blank.', 'err');
+    /* E-mail is now required: it is how we tell the guest their order is ready,
+       and it is their reward enrollment contact. Catch a missing or malformed
+       address here so the order never goes through without one. */
+    if (!email) {
+      toast('Please enter your e-mail — we send order updates there.', 'err');
+      $('#cEmail').focus();
+      return;
+    }
+    if (!/^[^\s@,;]+@[^\s@,;.]+(\.[^\s@,;.]+)+$/.test(email)) {
+      toast('That e-mail does not look right — please check it.', 'err');
       $('#cEmail').focus();
       return;
     }

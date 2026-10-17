@@ -249,6 +249,18 @@
     });
   }
 
+  /* Ask the server to fire a test push to every subscribed device (admin only).
+     `hdrs` should carry the admin key. Resolves true/false — UI convenience, so
+     failures are swallowed rather than thrown. */
+  function sendTestPush(hdrs) {
+    return fetch('/api/push/test', {
+      method: 'POST',
+      headers: hdrs || { 'Content-Type': 'application/json' }
+    })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
+  }
+
   function init(opts) {
     opts = opts || {};
     if ('serviceWorker' in navigator) {
@@ -275,6 +287,7 @@
     pushPublicKey: pushPublicKey,
     subscribePush: subscribePush,
     unsubscribePush: unsubscribePush,
+    sendTestPush: sendTestPush,
     ready: ready
   };
 })();
