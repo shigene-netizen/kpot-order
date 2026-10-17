@@ -1206,18 +1206,39 @@ function startScheduleLoop() {
 /* ---- Store hours tick -------------------------------------------------------
    The owner's manual open/closed switch is for OVERRIDES (e.g. closing early
    for a private event). Day-to-day, the shop follows its configured business
-   hours: when opening time arrives we flip open=true; when closing time arrives
-   we flip open=false. This mirrors the schedule loop pattern — runs every
-   FLUSH_MS, only touches the `open` flag, never the per-channel switches. */
+   hours: when opening time arrives BOTH `open` and `acceptingOrders` flip to
+   true; when closing time arrives BOTH flip to false. `open` is held strictly
+   on the hours clock. `acceptingOrders` is re-synced to the hours state ONLY at
+   an open/close transition (and on the very first tick, to heal a stale
+   persisted value) — so an in-day manual pause of orders is preserved until
+   the next transition, while the store still auto-opens and auto-closes both
+   flags in lockstep with business hours. */
 function startStoreHoursLoop() {
+  let lastHoursOpen = null;
   const tick = () => {
     const closed = hoursClosedNow(hoursSpec());
     const wantOpen = !closed;
+    let changed = false;
+    /* `open` is always driven by the hours clock. */
     if (storeStatus.open !== wantOpen) {
       storeStatus.open = wantOpen;
-      saveStoreStatus();
-      console.log('[kpot] store hours tick -> open=' + wantOpen);
+      changed = true;
     }
+    /* Sync `acceptingOrders` to the hours clock: heal any stale persisted value
+       on the first tick, then re-sync only on an open/close transition so a
+       manual in-day pause of orders survives until the next transition. */
+    if (lastHoursOpen === null || lastHoursOpen !== wantOpen) {
+      if (storeStatus.acceptingOrders !== wantOpen) {
+        storeStatus.acceptingOrders = wantOpen;
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveStoreStatus();
+      console.log('[kpot] store hours tick -> open=' + wantOpen +
+        ' acceptingOrders=' + storeStatus.acceptingOrders);
+    }
+    lastHoursOpen = wantOpen;
   };
   /* Defer the first tick: storeStatus is declared with `let` further down
      in this module, so touching it synchronously here (during module load)

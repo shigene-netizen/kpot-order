@@ -293,7 +293,7 @@ const CONFIG = {
     /* New-order email alerts. When set, the server emails this address every
        time a guest places an order. Requires GMAIL_USER + GMAIL_APP_PASSWORD
        env vars (or secrets.local.json) on the server. Leave blank to disable. */
-    notifyTo: ''               // e.g. 'owner@kpot.com'
+    notifyTo: 'kpotexpress@gmail.com' // e.g. 'owner@kpot.com'
   },
 
   /* ---- Kitchen printer -------------------------------------------------
