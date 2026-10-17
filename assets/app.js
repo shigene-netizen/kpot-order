@@ -3005,7 +3005,11 @@
   function applyStoreStatus(store) {
     if (!store) return;
     state.acceptingOrders = store.acceptingOrders !== false;
-    state.storeOpen = store.open !== false;
+    /* The store is open only when BOTH the owner's manual switch AND the
+       configured business hours (computed on the server clock) say so. This
+       is the bug fix: previously state.storeOpen tracked only the manual
+       switch, so the badge said closed but ordering still went through. */
+    state.storeOpen = store.open !== false && store.openNow !== false;
     if (store.orderTypes && typeof store.orderTypes === 'object') {
       state.orderTypes = store.orderTypes;
     }

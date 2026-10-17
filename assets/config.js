@@ -289,7 +289,11 @@ const CONFIG = {
   dispatch: {
     webhookUrl: '',            // e.g. 'https://hooks.zapier.com/hooks/catch/.../'
     email: '',                 // e.g. 'orders@kpot.com'
-    whatsapp: ''               // e.g. '15551234567'  (country code, digits only)
+    whatsapp: '',              // e.g. '15551234567'  (country code, digits only)
+    /* New-order email alerts. When set, the server emails this address every
+       time a guest places an order. Requires GMAIL_USER + GMAIL_APP_PASSWORD
+       env vars (or secrets.local.json) on the server. Leave blank to disable. */
+    notifyTo: ''               // e.g. 'owner@kpot.com'
   },
 
   /* ---- Kitchen printer -------------------------------------------------

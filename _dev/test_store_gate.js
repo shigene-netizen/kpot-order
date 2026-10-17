@@ -40,9 +40,10 @@ vm.runInContext(
   'const ORDER_TYPE_LABELS = { pickup:"pickup", dinein:"dine-in", delivery:"delivery" };\n' +
   'let storeStatus = null;\n' +
   grab('orderTypeEnabled') + '\n' +
+  grab('hoursClosedNow') + '\n' +
   grab('storeGate') + '\n' +
   'this.setStatus = (s) => { storeStatus = s; };\n' +
-  'this.gate = (t) => storeGate(t);\n' +
+  'this.gate = (t, opts) => storeGate(t, opts);\n' +
   'this.enabled = (t) => orderTypeEnabled(t);',
   ctx
 );
@@ -50,9 +51,10 @@ vm.runInContext(
 function status({ open = true, accepting = true, pickup = true, dinein = true, delivery = true }) {
   ctx.setStatus({ open, acceptingOrders: accepting, orderTypes: { pickup, dinein, delivery } });
 }
-function gate(t) { return ctx.gate(t); }
+function gate(t, opts) { return ctx.gate(t, opts); }
 
 const ALL_ON = {};
+const SPEC = { openMinute: 720, closeSunThu: 1290, closeFriSat: 1350 };
 
 let pass = 0, fail = 0;
 function check(desc, got, wantBlocked, wantCode) {

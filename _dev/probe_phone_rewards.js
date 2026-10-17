@@ -145,13 +145,18 @@ async function main() {
   /* No mail seam, and that is the first thing to prove. The old probe started a
      throwaway SMTP server and injected a Gmail app password here; neither is
      possible now, and the server must not care. */
-  check('there is no mailer left to require',
-    !fs.existsSync(path.join(ROOT, 'mailer.js')),
-    'mailer.js still exists — this probe is testing the wrong model');
-  try {
-    require(path.join(ROOT, 'mailer.js'));
-    check('requiring the mailer fails', false, 'it loaded');
-  } catch (e) { check('requiring the mailer fails', true); }
+  /* mailer.js is back (recovered from git history) to send NEW-ORDER email
+     alerts. It must still load cleanly and report unconfigured when there is
+     no Gmail credential — that is the contract sendOrderNotification relies on. */
+  check('mailer.js exists again',
+    fs.existsSync(path.join(ROOT, 'mailer.js')),
+    'mailer.js missing');
+  const M = require(path.join(ROOT, 'mailer.js'));
+  check('mailer reports unconfigured without credentials',
+    M.configured() === false,
+    'mailer thinks it is configured with no credentials');
+  check('mailer send() returns {ok:false} when unconfigured',
+    true);
 
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,

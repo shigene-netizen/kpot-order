@@ -30,6 +30,8 @@ const D = require('./discounts.js');
 const L = require('./customers.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
+let MAIL = null;
+try { MAIL = require('./mailer.js'); } catch (e) { MAIL = null; }
 
 const ROOT = __dirname;
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -704,7 +706,7 @@ async function handleCheckout(req, res) {
      moves money arrives from the client — and a client is not a place to
      enforce a business rule. Delivery switched off mid-session must not be
      able to take a card payment. */
-  const gate = storeGate(order.orderType);
+  const gate = storeGate(order.orderType, { scheduled: !!schedule, hoursSpec: hoursSpec() });
   if (gate.blocked) {
     console.warn('[kpot] checkout refused —', gate.code, '| type:', JSON.stringify(order.orderType));
     const msg = {
@@ -1174,6 +1176,7 @@ startBackupLoop();
    hard and no exit handler runs (always the case on Windows). */
 startFlushLoop();
 startScheduleLoop();
+startStoreHoursLoop();
 
 /* ---- The delivery window tick ---------------------------------------------
    A scheduled order sits on the board as `received` until its window opens,
@@ -1197,6 +1200,30 @@ function startScheduleLoop() {
       }
     }
   }, FLUSH_MS);
+  if (timer.unref) timer.unref();
+}
+
+/* ---- Store hours tick -------------------------------------------------------
+   The owner's manual open/closed switch is for OVERRIDES (e.g. closing early
+   for a private event). Day-to-day, the shop follows its configured business
+   hours: when opening time arrives we flip open=true; when closing time arrives
+   we flip open=false. This mirrors the schedule loop pattern — runs every
+   FLUSH_MS, only touches the `open` flag, never the per-channel switches. */
+function startStoreHoursLoop() {
+  const tick = () => {
+    const closed = hoursClosedNow(hoursSpec());
+    const wantOpen = !closed;
+    if (storeStatus.open !== wantOpen) {
+      storeStatus.open = wantOpen;
+      saveStoreStatus();
+      console.log('[kpot] store hours tick -> open=' + wantOpen);
+    }
+  };
+  /* Defer the first tick: storeStatus is declared with `let` further down
+     in this module, so touching it synchronously here (during module load)
+     hits the temporal dead zone. */
+  setTimeout(tick, 0);
+  const timer = setInterval(tick, FLUSH_MS);
   if (timer.unref) timer.unref();
 }
 
@@ -1331,7 +1358,8 @@ const ORDER_TYPE_LABELS = { pickup: 'pickup', dinein: 'dine-in', delivery: 'deli
    tampered client sending {"orderType":"teleport"} gets served as a normal
    pickup order — a typo, or an attempt to slip past a switched-off channel,
    must fail closed. */
-function storeGate(t) {
+function storeGate(t, opts) {
+  opts = opts || {};
   if (!ORDER_TYPES.includes(t)) {
     return { blocked: true, code: 'unknown_type', label: 'that' };
   }
@@ -1344,7 +1372,40 @@ function storeGate(t) {
   if (storeStatus.orderTypes[t] === false) {
     return { blocked: true, code: 'type_off', label: ORDER_TYPE_LABELS[t] };
   }
+  /* Business hours: only blocks IMMEDIATE orders. A scheduled delivery for
+     tomorrow is legitimate even while the shop is closed tonight. */
+  let _spec = null;
+  try { _spec = (opts && opts.hoursSpec) || (typeof hoursSpec === 'function' ? hoursSpec() : null); } catch (e) { _spec = null; }
+  if (!opts.scheduled && hoursClosedNow(_spec)) {
+    return { blocked: true, code: 'closed', label: ORDER_TYPE_LABELS[t] };
+  }
   return { blocked: false };
+}
+
+/* Pure, testable: is the store currently closed according to its configured
+   hoursSpec? Returns true when the local clock falls outside the open window.
+   Handles both normal-day (e.g. 12:00–21:30) and past-midnight windows.
+   Exported via grab() in test_store_gate.js. */
+function hoursClosedNow(spec) {
+  if (!spec) return false;
+  const now = new Date();
+  const day = now.getDay();                     // 0 = Sunday
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const closeFor = (d) => (d === 5 || d === 6) ? spec.closeFriSat : spec.closeSunThu;
+  const open = parseInt(spec.openMinute, 10);
+  if (!isFinite(open)) return false;
+  const close = parseInt(closeFor(day), 10);
+  if (!isFinite(close)) return false;
+  /* Normal same-day window. */
+  if (close >= open) {
+    return !(mins >= open && mins < close);
+  }
+  /* Past-midnight window. */
+  if (mins >= open) return false;
+  const y = (day + 6) % 7;                      // yesterday
+  const closeY = parseInt(closeFor(y), 10);
+  if (!isFinite(closeY)) return false;
+  return mins >= closeY;
 }
 
 /* Is this order type switched OFF by the owner? Only the per-channel switch —
@@ -1365,6 +1426,11 @@ function publicStoreView() {
   return {
     open: storeStatus.open,
     acceptingOrders: storeStatus.acceptingOrders,
+    /* Time-based openness, derived from hoursSpec() on the server clock. The
+       guest page uses this to show the closed banner even when the owner has
+       not flipped the manual switch — the complaint was that the badge said
+       closed but ordering still went through. */
+    openNow: !hoursClosedNow(hoursSpec()),
     orderTypes: {
       pickup: storeStatus.orderTypes.pickup !== false,
       dinein: storeStatus.orderTypes.dinein !== false,
@@ -1479,6 +1545,36 @@ function scheduledForMsOf(order) {
 /* Best-effort push to the owner's own automation (Zapier / Make / n8n / a
    Google Sheet script) when an order arrives or its status changes. Never
    blocks the request. */
+/* Best-effort e-mail to the owner when a new order arrives. Never blocks the
+   request, never throws. Disabled when dispatch.notifyTo is blank or when the
+   mailer is not configured. */
+function sendOrderNotification(order) {
+  if (!MAIL || !MAIL.configured) return;
+  const to = ASSETS.CONFIG.dispatch && ASSETS.CONFIG.dispatch.notifyTo;
+  if (!to) return;
+  const lines = [];
+  lines.push('New order ' + (order.id || '') + ' — ' + (order.payMethod || '') + ' $' + Number(order.total || 0).toFixed(2));
+  lines.push('');
+  lines.push('Type: ' + (order.orderType || ''));
+  lines.push('Customer: ' + ((order.customer && order.customer.name) || '') + ' ' + ((order.customer && order.customer.phone) || ''));
+  if (order.customer && order.customer.email) lines.push('Email: ' + order.customer.email);
+  lines.push('');
+  lines.push('Items:');
+  (order.lines || order.items || []).forEach((it) => {
+    lines.push('  ' + (it.qty || 1) + ' x ' + (it.name || it.n || '') + '  $' + Number(it.unit || it.price || 0).toFixed(2));
+  });
+  lines.push('');
+  lines.push('Subtotal $' + Number(order.subtotal || 0).toFixed(2) +
+    '  Tax $' + Number(order.tax || 0).toFixed(2) +
+    '  Tip $' + Number(order.tip || 0).toFixed(2) +
+    '  Total $' + Number(order.total || 0).toFixed(2));
+  lines.push('');
+  lines.push('Status: ' + (order.status || 'received'));
+  MAIL.send({ to: to, subject: 'New KPOT order ' + (order.id || ''), text: lines.join('\r\n') })
+    .then((r) => { if (!r || !r.ok) console.error('[kpot] order email failed:', (r && r.error) || 'unknown'); })
+    .catch((e) => { console.error('[kpot] order email error:', e && e.message); });
+}
+
 function fireDispatch(order) {
   const url = ASSETS.CONFIG.dispatch && ASSETS.CONFIG.dispatch.webhookUrl;
   if (!url) return;
@@ -1775,6 +1871,7 @@ async function handleCreateOrder(req, res) {
   console.log('[kpot] order created ' + id + ' (' + (body.payMethod || '') + ') $' + order.total.toFixed(2) +
     (order.status === 'preparing' ? ' [auto-preparing]' : ''));
   fireDispatch(order);
+  sendOrderNotification(order);
   return sendJSON(res, 200, { ok: true, id, status: order.status });
 }
 
