@@ -259,7 +259,7 @@ let audioUnlocked = false;
 function headers() { return { 'Content-Type':'application/json', ...(KEY ? { 'X-Admin-Key': KEY } : {}) }; }
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
 
-$('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorage.setItem('kpotAdminKey', KEY); toast('Key saved'); load(); };
+$('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorage.setItem('kpotAdminKey', KEY); toast('Key saved'); load(); if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') syncPush(); };
 
 function renderNotifyBtn() {
   const b = $('#notifyBtn');
