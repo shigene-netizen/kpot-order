@@ -33,6 +33,11 @@ const SC = require('./schedule.js');
 let MAIL = null;
 try { MAIL = require('./mailer.js'); } catch (e) { MAIL = null; }
 
+/* Web Push (real push to the owner's phone even when the board is closed).
+   Wrapped so a missing package never stops the server from booting. */
+let PUSH = null;
+try { PUSH = require('./push.js'); } catch (e) { PUSH = null; }
+
 const ROOT = __dirname;
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
@@ -1177,6 +1182,7 @@ startBackupLoop();
 startFlushLoop();
 startScheduleLoop();
 startStoreHoursLoop();
+if (PUSH) PUSH.init();
 
 /* ---- The delivery window tick ---------------------------------------------
    A scheduled order sits on the board as `received` until its window opens,
@@ -1596,6 +1602,31 @@ function sendOrderNotification(order) {
     .catch((e) => { console.error('[kpot] order email error:', e && e.message); });
 }
 
+/* The Web Push payload for a fresh order. Must match what sw.js's `push` handler
+   expects: { title, body, tag, url }. `tag` groups notifications so a burst of
+   orders doesn't stack endlessly on the lock screen. */
+function buildPushPayload(order) {
+  const who = ((order.customer && order.customer.name) || 'Guest');
+  const title = '🛎️ New KPOT order — #' + (order.id || '');
+  const body = who + ' · $' + Number(order.total || 0).toFixed(2) +
+    ((order.orderType === 'dinein') ? ' · Table ' + (order.table || '?') : ' · ' + (order.orderType || ''));
+  return { title, body, tag: 'kpot-new-' + (order.id || Date.now()), url: 'admin-orders.html' };
+}
+
+/* Admin-gated: register or remove a push subscription for the owner's device.
+   The body is { subscription: { endpoint, keys } }. Dedupe + atomic save happen
+   inside push.js, so this stays thin. */
+async function handlePushSubscription(req, res, remove) {
+  let raw, body;
+  try { raw = await readBody(req, 16 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+  const sub = body && body.subscription;
+  const r = remove
+    ? PUSH.unsubscribe(sub && sub.endpoint)
+    : PUSH.subscribe(sub);
+  return sendJSON(res, r.ok ? 200 : 400, r);
+}
+
 function fireDispatch(order) {
   const url = ASSETS.CONFIG.dispatch && ASSETS.CONFIG.dispatch.webhookUrl;
   if (!url) return;
@@ -1893,6 +1924,9 @@ async function handleCreateOrder(req, res) {
     (order.status === 'preparing' ? ' [auto-preparing]' : ''));
   fireDispatch(order);
   sendOrderNotification(order);
+  /* Real push: lands on the owner's phone even with the board closed/locked.
+     Fire-and-forget — never blocks the order response. */
+  if (PUSH) PUSH.sendToAll(buildPushPayload(order));
   return sendJSON(res, 200, { ok: true, id, status: order.status });
 }
 
@@ -3422,6 +3456,13 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  /* The browser needs our VAPID public key before it can subscribe to push.
+     Public, unauthenticated — it is not a secret (every subscriber gets it). */
+  if (pathname === '/api/push/vapid-public-key') {
+    if (req.method !== 'GET') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return sendJSON(res, 200, { publicKey: (PUSH && PUSH.configured()) ? PUSH.publicKey() : null });
+  }
+
   /* Which payment methods does Stripe ACTUALLY offer right now?
      ---------------------------------------------------------------------
      Wallet buttons (Apple Pay / Google Pay) are gated by Dashboard toggles and
@@ -3521,6 +3562,19 @@ const server = http.createServer((req, res) => {
     }).catch((e) => {
       console.error('[kpot] recheck unhandled:', e && e.message);
       return sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  /* ---- Web Push subscriptions ------------------------------------------
+     Admin-gated: only the back office (which holds the admin key) may register
+     or remove a push target. The public key itself is unauthenticated above. */
+  if (pathname === '/api/push/subscribe' || pathname === '/api/push/unsubscribe') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    if (!PUSH || !PUSH.configured()) return sendJSON(res, 503, { error: 'push_not_configured' });
+    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    return handlePushSubscription(req, res, pathname.endsWith('/unsubscribe')).catch((e) => {
+      console.error('[kpot] push subscription unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
     });
   }
 

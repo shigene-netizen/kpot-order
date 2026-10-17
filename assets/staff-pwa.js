@@ -173,6 +173,82 @@
 
   /* -------------------------------------------------------------------- boot */
 
+  /* Web Push -----------------------------------------------------------------
+     Real push (not just client-side polling): subscribe this device to the
+     server's VAPID key so a "new order" alert arrives even when the board is
+     closed or the screen is locked. */
+
+  /* A promise that resolves true once a service worker is active and controlling
+     the page — the moment pushManager is safe to use. Resolves false if there's
+     no SW support, registration failed, or it takes too long (we never want to
+     hang the alert-toggle on this). */
+  var swReady = null;
+  function ready() {
+    if (swReady) return swReady;
+    swReady = new Promise(function (resolve) {
+      var done = false;
+      var finish = function (v) { if (!done) { done = true; resolve(v); } };
+      if (!('serviceWorker' in navigator)) return finish(false);
+      navigator.serviceWorker.ready.then(function () { finish(true); })
+        .catch(function () { finish(false); });
+      setTimeout(function () { finish(false); }, 3000);
+    });
+    return swReady;
+  }
+
+  function pushSupported() {
+    return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  }
+
+  /* base64url → Uint8Array, the shape the Push API wants for applicationServerKey. */
+  function urlBase64ToUint8Array(b64) {
+    var pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    var norm = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(norm);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  /* Ask the server for its VAPID public key (it lives in secrets, never in the
+     client). Returns the key string, or null if push isn't configured. */
+  function pushPublicKey() {
+    return fetch('/api/push/vapid-public-key')
+      .then(function (r) { return r.json(); })
+      .then(function (j) { return (j && j.publicKey) || null; })
+      .catch(function () { return null; });
+  }
+
+  /* Subscribe (or return the existing subscription). Returns a serialisable
+     subscription object the server can store, or null on any failure. */
+  function subscribePush(publicKey) {
+    return new Promise(function (resolve) {
+      if (!pushSupported() || !swReg || !swReg.pushManager || !publicKey) { resolve(null); return; }
+      swReg.pushManager.getSubscription()
+        .then(function (existing) {
+          return existing || swReg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey)
+          });
+        })
+        .then(function (sub) { resolve(sub ? sub.toJSON() : null); })
+        .catch(function () { resolve(null); });
+    });
+  }
+
+  /* Tear down this device's subscription (alerts toggled off / app removed). */
+  function unsubscribePush() {
+    return new Promise(function (resolve) {
+      if (!pushSupported() || !swReg || !swReg.pushManager) { resolve(false); return; }
+      swReg.pushManager.getSubscription()
+        .then(function (sub) {
+          if (!sub) { resolve(false); return; }
+          sub.unsubscribe().then(function () { resolve(true); }).catch(function () { resolve(false); });
+        })
+        .catch(function () { resolve(false); });
+    });
+  }
+
   function init(opts) {
     opts = opts || {};
     if ('serviceWorker' in navigator) {
@@ -194,6 +270,11 @@
     requestNotify: requestNotify,
     notifyPermission: notifyPermission,
     notifySupported: notifySupported,
-    isStandalone: isStandalone
+    isStandalone: isStandalone,
+    pushSupported: pushSupported,
+    pushPublicKey: pushPublicKey,
+    subscribePush: subscribePush,
+    unsubscribePush: unsubscribePush,
+    ready: ready
   };
 })();

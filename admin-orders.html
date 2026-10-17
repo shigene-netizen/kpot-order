@@ -290,12 +290,36 @@ $('#notifyBtn').onclick = () => {
       StaffPWA.chime();
       StaffPWA.notify('🔔 Alerts are on', { body: 'New orders will pop up here.', requireInteraction: false });
       toast('New-order alerts enabled');
+      syncPush();
     } else {
       toast('Notifications were not allowed');
+      syncPush();
     }
     renderNotifyBtn();
   });
 };
+
+/* Keep the server's push subscriptions in step with this device's alert setting.
+   On → subscribe with the server's VAPID key and POST it (admin-gated). Off →
+   remove any subscription we previously stored. Best-effort: a failure here must
+   never break the alert toggle or the board. */
+async function syncPush() {
+  if (!window.StaffPWA || !StaffPWA.pushSupported()) return;
+  try {
+    const want = notifyOn && StaffPWA.notifyPermission() === 'granted';
+    if (!want) { await StaffPWA.unsubscribePush(); return; }
+    await StaffPWA.ready();
+    const pub = await StaffPWA.pushPublicKey();
+    if (!pub) return; // server not configured for push
+    const sub = await StaffPWA.subscribePush(pub);
+    if (!sub) return;
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ subscription: sub })
+    }).catch(() => {});
+  } catch (e) { /* best effort */ }
+}
 
 function showAuth(b) { $('#authBanner').hidden = !b; }
 
@@ -819,6 +843,7 @@ if (window.StaffPWA) {
   StaffPWA.init({ installHost: document.getElementById('installHost') });
 }
 renderNotifyBtn();
+if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') syncPush();
 
 // initial load + poll
 load();
