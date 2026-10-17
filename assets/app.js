@@ -2043,14 +2043,14 @@
       '<div class="section-label" style="margin-top:4px">Your Details</div>' +
       '<div class="field"><label>Name</label><input id="cName" placeholder="e.g. Alex" value="' + esc(c.name) + '"></div>' +
       '<div class="field"><label>Mobile</label><input id="cPhone" type="tel" inputmode="tel" placeholder="(555) 123-4567" value="' + esc(c.phone) + '"></div>' +
-      '<div class="small dim" style="margin:-6px 0 10px">Used for this order and Reward enrollment - not marketing SMS consent.</div>' +
+      '<div class="small dim" style="margin:8px 0 14px">Used for this order and Reward enrollment - not marketing SMS consent.</div>' +
       /* REQUIRED now: it is how we e-mail the guest the moment their order is
          ready, and it is their reward enrollment contact. A guest who leaves it
          blank cannot be told their food is up, so the order cannot be placed
          without it. */
       '<div class="field"><label>E-mail <span class="opt">(for order updates)</span></label>' +
         '<input id="cEmail" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" value="' + esc(c.email || '') + '"></div>' +
-      '<div class="small dim" style="margin:-6px 0 10px">We e-mail you the moment your order is ready.</div>' +
+      '<div class="small dim" style="margin:8px 0 14px">We e-mail you the moment your order is ready.</div>' +
       /* Rewards hang off the mobile number, so the box sits directly under it —
          the guest sees what their number is worth the moment they type it. */
       '<div id="loyaltyBox"></div>' +
