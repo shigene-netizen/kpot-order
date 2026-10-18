@@ -218,6 +218,12 @@ async function main() {
         PORT: String(PORT),
         ADMIN_KEY,
         KPOT_FLUSH_MS: '500',
+        /* The business-hours tick holds `open` strictly on the hours clock —
+           after closing time it closes the shop under this probe within one
+           flush, and a guest page that will not accept orders cannot be
+           driven through a cart at all. A 24h spec keeps the shop open at any
+           clock; production never sets this. See hoursSpec() in server.js. */
+        KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
         KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
         KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
         KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),

@@ -461,6 +461,20 @@ img { max-width: 100%; display: block; }
 .loy-row .amt { flex: none; font-size: 13px; font-weight: 800; color: var(--green); }
 .loy-note { margin: 2px 0 9px; }
 
+/* ---------- Live delivery-distance check ----------
+   The guest typing a delivery address gets the answer while they type, not
+   after they pay: inside the 2-mile radius a quiet green line, outside it a
+   loud red card with a one-tap way out to Pickup. Red, not yellow — unlike
+   the rewards panel this is a wall, and it should read like one. */
+.geo { padding: 0 18px; margin-top: 2px; }
+.geo-in {
+  background: rgba(215,38,61,.10);
+  border: .5px solid rgba(215,38,61,.45);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  margin-top: 8px;
+}
+
 /* ---------- Stamp card progress ----------
    The bar is the "how close am I" answer the owner asked for, so it sits
    between the title and the sentence rather than replacing either. The fill

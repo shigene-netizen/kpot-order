@@ -30,6 +30,7 @@ const D = require('./discounts.js');
 const L = require('./customers.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
+const G = require('./geo.js');
 let MAIL = null;
 try { MAIL = require('./mailer.js'); } catch (e) { MAIL = null; }
 
@@ -124,7 +125,29 @@ function scheduleCfg() {
 function deliveryPricingOpts() {
   return { deliveryEnabled: !storeTypeOff('delivery') };
 }
+/* Business hours, from config — or, for TESTS ONLY, from the environment.
+
+   The seam exists because the store-hours tick holds `open` strictly on the
+   hours clock: an owner's manual override is for early closes, not for
+   staying open, so a browser probe that needs the shop open CANNOT get it
+   through the board after closing time — and every probe that adds to a cart
+   needs exactly that. Without this, the whole browser half of the suite goes
+   red every night at 21:30 and stays red until noon, for a reason that has
+   nothing to do with what any of them test. Production never sets the
+   variable. Parsed once, cached — the tick calls this every flush. */
+const HOURS_SPEC_OVERRIDE = (() => {
+  if (!process.env.KPOT_HOURS_SPEC) return undefined;
+  try {
+    const spec = JSON.parse(process.env.KPOT_HOURS_SPEC);
+    console.warn('[kpot] WARNING: business hours overridden (KPOT_HOURS_SPEC) — tests only, never set this in production.');
+    return spec;
+  } catch (e) {
+    console.error('[kpot] KPOT_HOURS_SPEC is not valid JSON — ignoring:', e.message);
+    return undefined;
+  }
+})();
 function hoursSpec() {
+  if (HOURS_SPEC_OVERRIDE !== undefined) return HOURS_SPEC_OVERRIDE;
   return ((ASSETS.CONFIG || {}).store || {}).hoursSpec || {};
 }
 
@@ -710,8 +733,22 @@ async function handleCheckout(req, res) {
      hides or greys out a switched-off channel, but the request that actually
      moves money arrives from the client — and a client is not a place to
      enforce a business rule. Delivery switched off mid-session must not be
-     able to take a card payment. */
-  const gate = storeGate(order.orderType, { scheduled: !!schedule, hoursSpec: hoursSpec() });
+     able to take a card payment.
+
+     `scheduled` is read off the payload, the same field handleCreateOrder
+     trusts (body.schedule): a delivery booked for tomorrow's window is
+     legitimate while the shop is closed tonight, everything else is an
+     immediate order and the business-hours check applies. It used to
+     reference a variable that does not exist in this function, which threw
+     on every checkout — a 500 for every guest trying to pay online. The
+     lesson: a identifier that parses cleanly is not an identifier that
+     exists. The suite that runs without STRIPE_TEST_KEY never reached this
+     line, which is why nothing went red. */
+  const sched = (order.schedule && typeof order.schedule === 'object') ? order.schedule : null;
+  const gate = storeGate(order.orderType, {
+    scheduled: !!(sched && sched.date && sched.slot),
+    hoursSpec: hoursSpec()
+  });
   if (gate.blocked) {
     console.warn('[kpot] checkout refused —', gate.code, '| type:', JSON.stringify(order.orderType));
     const msg = {
@@ -721,6 +758,31 @@ async function handleCheckout(req, res) {
       unknown_type: 'That order type was not recognised. Please pick Pickup, Dine-In, or Delivery.'
     }[gate.code] || 'We could not accept that order type.';
     return sendJSON(res, 409, { error: gate.code, message: msg });
+  }
+
+  /* ---- Delivery distance — the 2-mile rule -------------------------------
+     Same reasoning as the gate above, one business rule down: a guest outside
+     the delivery radius must not be handed to Stripe. This is where money
+     moves, so the check happens HERE as well as at order creation — the
+     browser's live check is a courtesy, not the enforcement.
+
+     Fail-open by design (geo.js): if the address cannot be verified the
+     order proceeds and the kitchen sees the address on the ticket. Only a
+     positive measurement — a coordinate beyond the radius — refuses. */
+  if (order.orderType === 'delivery') {
+    const geo = await G.deliveryCheck((order.customer || {}).when);
+    if (geo.status === 'blocked') {
+      console.warn('[kpot] checkout refused — delivery out of range —',
+        geo.miles !== null ? geo.miles.toFixed(2) + ' mi (' + geo.source + ')' : geo.source,
+        '| addr:', JSON.stringify(String((order.customer || {}).when || '').slice(0, 80)));
+      return sendJSON(res, 409, {
+        error: 'delivery_out_of_range',
+        miles: geo.miles,
+        radius: G.RADIUS_MI,
+        message: geo.message || 'That address is outside our ' + G.RADIUS_MI +
+          '-mile delivery area. Please choose Pickup or Dine-In.'
+      });
+    }
   }
 
   try {
@@ -760,6 +822,41 @@ async function handleCheckout(req, res) {
       message: aborted ? 'Stripe took too long to respond. Please try again.' : 'Could not reach Stripe. Please try again.'
     });
   }
+}
+
+/* POST /api/delivery/check { address } — the guest's browser asks this while
+   the delivery address is being typed, so an out-of-range address is caught
+   BEFORE the guest pays rather than at "Place Order".
+
+   Advisory only. The enforcing gates are the ones in handleCheckout and
+   handleCreateOrder: anything a browser can be told, a guest can skip (a
+   stale tab, a hand-built request). This endpoint exists so the honest
+   answer reaches the guest early.
+
+   Heavily throttled and tiny: it geocodes an address, so each call costs an
+   outbound request, and a typing guest must not be able to turn that into a
+   geocoding hammer. */
+async function handleDeliveryCheck(req, res) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+  if (throttled('geocheck:' + ip, 60, 60000)) {
+    return sendJSON(res, 429, { error: 'rate_limited', status: 'unknown' });
+  }
+
+  let raw;
+  try { raw = await readBody(req, 8 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json', status: 'unknown' }); }
+
+  const address = String((body && body.address) || '').slice(0, 300);
+  const geo = await G.deliveryCheck(address);
+  return sendJSON(res, 200, {
+    status: geo.status,                 /* 'ok' | 'blocked' | 'unknown' */
+    ok: geo.status !== 'blocked',
+    miles: geo.miles,
+    radius: G.RADIUS_MI,
+    source: geo.source,                 /* 'street' | 'zip' | 'unverified' | 'empty' */
+    message: geo.message || ''
+  });
 }
 
 /* GET /api/verify-session?id=cs_... — did this payment really go through?
@@ -1819,6 +1916,27 @@ async function handleCreateOrder(req, res) {
       });
     }
     schedule = verdict;
+  }
+  /* ---- Delivery distance — the 2-mile rule -------------------------------
+     Checked against the EFFECTIVE type, so a tampered payload cannot dodge it
+     by sending an orderType we coerce to pickup. Runs after the schedule gate
+     so an out-of-range order is also a bad-time order only when it really is.
+     Fail-open on purpose (geo.js): an unverifiable address is allowed, the
+     kitchen sees it on the ticket; a coordinate beyond 2 miles is refused. */
+  if (effectiveType === 'delivery') {
+    const geo = await G.deliveryCheck((body.customer || {}).when);
+    if (geo.status === 'blocked') {
+      console.warn('[kpot] refused out-of-range delivery order —',
+        geo.miles !== null ? geo.miles.toFixed(2) + ' mi (' + geo.source + ')' : geo.source,
+        '| addr:', JSON.stringify(String((body.customer || {}).when || '').slice(0, 80)));
+      return sendJSON(res, 409, {
+        error: 'delivery_out_of_range',
+        miles: geo.miles,
+        radius: G.RADIUS_MI,
+        message: geo.message || 'That address is outside our ' + G.RADIUS_MI +
+          '-mile delivery area. Please choose Pickup or Dine-In.'
+      });
+    }
   }
   /* Delivery must be prepaid — see counterDeliveryVerdict(). Checked against
      the EFFECTIVE type, so a tampered payload cannot dodge the rule by sending
@@ -3537,6 +3655,15 @@ const server = http.createServer((req, res) => {
     return handlePrice(req, res).catch((e) => {
       console.error('[kpot] price unhandled:', e && e.message);
       sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  /* Live delivery-distance check (advisory — see handleDeliveryCheck). */
+  if (pathname === '/api/delivery/check') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    return handleDeliveryCheck(req, res).catch((e) => {
+      console.error('[kpot] delivery check unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error', status: 'unknown' });
     });
   }
 

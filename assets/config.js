@@ -67,7 +67,7 @@ const CONFIG = {
   orderTypes: [
     { id: 'dinein', n: 'Dine-In', d: 'Order from your table', icon: '🍽️' },
     { id: 'pickup', n: 'Pickup / To Go', d: 'Ready in ~20–25 min', icon: '🛍️' },
-    { id: 'delivery', n: 'Delivery', d: 'Within 5 mi · ~40 min', icon: '🛵' }
+    { id: 'delivery', n: 'Delivery', d: 'Within 2 mi · ~40 min', icon: '🛵' }
   ],
   /* ---- Delivery -----------------------------------------------------------
      Delivery is next-day and windowed, not "in 40 minutes": the guest picks a

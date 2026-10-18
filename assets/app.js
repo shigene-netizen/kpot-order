@@ -102,7 +102,13 @@
     scheduleSlots: [],
     scheduleFee: 0,
     scheduleState: '',
-    scheduleMsg: ''
+    scheduleMsg: '',
+    /* Live delivery-distance check (the 2-mile rule, measured by the server).
+       status: '' (nothing typed yet) | 'busy' | 'ok' | 'blocked' | 'unknown'
+       | 'err'. The server enforces the rule regardless; this only lets the
+       guest find out BEFORE paying. */
+    deliveryGeo: { status: '', miles: null, msg: '', source: '' },
+    geoTimer: 0
   };
 
   /* ------------------------------------------------------------------ */
@@ -323,6 +329,110 @@
       state.schedule = { date: state.scheduleDate, slot: slot.id, slotLabel: slot.label };
       state.scheduleMsg = '';
       renderScheduleBox();
+    });
+  }
+  /* ---- Live delivery-distance check --------------------------------------
+     The 2-mile rule lives on the server (geo.js) and is enforced there. This
+     only moves the answer earlier: the guest typing an address outside the
+     radius is told while they type, with a one-tap way out to Pickup, instead
+     of discovering it after the payment page. Advisory by design — a browser
+     answer can be skipped (stale tab, hand-built request); the server's
+     cannot. */
+  function scheduleGeoCheck(now) {
+    if (state.geoTimer) { clearTimeout(state.geoTimer); state.geoTimer = 0; }
+    if (now) return checkDeliveryGeo();
+    state.geoTimer = setTimeout(checkDeliveryGeo, 550);
+  }
+  function checkDeliveryGeo() {
+    state.geoTimer = 0;
+    const input = $('#cWhen');
+    const addr = input ? input.value.trim() : '';
+    if (state.orderType !== 'delivery' || addr.length < 8) {
+      /* Too short to be an address — this is pickup-time / table-number
+         territory, and the box only ever applies to Delivery. */
+      state.deliveryGeo = { status: '', miles: null, msg: '', source: '' };
+      renderGeoBox();
+      return;
+    }
+    state.deliveryGeo = { status: 'busy', miles: null, msg: '', source: '' };
+    renderGeoBox();
+    fetch('/api/delivery/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address: addr })
+    })
+      .then((r) => r.json().catch(() => ({})))
+      .then((j) => {
+        /* The address may have changed while the request was in flight — a
+           stale answer shown against the new text is worse than no answer. */
+        const cur = $('#cWhen');
+        if (cur && cur.value.trim() !== addr) return;
+        state.deliveryGeo = {
+          status: (j && j.status) || 'err',
+          miles: (j && typeof j.miles === 'number') ? j.miles : null,
+          msg: (j && j.message) || '',
+          source: (j && j.source) || ''
+        };
+        renderGeoBox();
+      })
+      .catch(() => { /* unreachable: the server still enforces — stay quiet */ });
+  }
+  function renderGeoBox() {
+    const box = $('#geoBox');
+    if (!box) return;
+    if (state.orderType !== 'delivery') { box.innerHTML = ''; return; }
+    const g = state.deliveryGeo;
+    if (!g.status) { box.innerHTML = ''; return; }
+    if (g.status === 'busy') {
+      box.innerHTML = '<div class="geo"><div class="small dim">Checking delivery distance...</div></div>';
+      return;
+    }
+    if (g.status === 'blocked') {
+      box.innerHTML = '<div class="geo"><div class="geo-in">' +
+        '<div class="small err">' +
+          esc(g.msg || 'That address is outside our 2-mile delivery area. Please choose Pickup or Dine-In.') +
+        '</div>' +
+        '<button class="btn btn-sm" type="button" data-geo-pickup style="margin-top:9px">Switch to Pickup</button>' +
+        '</div></div>';
+      /* Place Order must not offer a delivery the server will refuse. */
+      const po = $('#placeOrder');
+      if (po) { po.disabled = true; po.setAttribute('aria-disabled', 'true'); }
+      return;
+    }
+    if (g.status === 'ok') {
+      const near = (g.source === 'street' && g.miles !== null)
+        ? ' (' + g.miles.toFixed(1) + ' mi from us)' : '';
+      box.innerHTML = '<div class="geo"><div class="small ok">Within our delivery area' + near + '</div></div>';
+      return;
+    }
+    if (g.status === 'unknown') {
+      box.innerHTML = '<div class="geo"><div class="small dim">' +
+        esc(g.msg || 'We could not verify that address automatically — we deliver within 2 miles of the store.') +
+        '</div></div>';
+      return;
+    }
+    /* 'err' — the check itself failed. Silent: no evidence either way, and the
+       server gate still holds the line at Place Order. */
+    box.innerHTML = '';
+  }
+  /* Delegated, bound once per element, exactly like the schedule box above:
+     renderGeoBox() replaces innerHTML, and a per-render onclick would be
+     thrown away by the next render before the guest could tap it. */
+  function bindGeoBox() {
+    const box = $('#geoBox');
+    if (!box || box.dataset.geoBound === '1') return;
+    box.dataset.geoBound = '1';
+    box.addEventListener('click', (ev) => {
+      const hit = ev.target && ev.target.closest
+        ? ev.target.closest('[data-geo-pickup]') : null;
+      if (!hit) return;
+      /* Do what the guest's own tap on the Pickup card would do — through the
+         SAME delegated handler, so the availability check, the shell re-render
+         and the checkout reopening all happen exactly once, in their usual
+         order. Re-implementing the switch here would be a second copy of that
+         logic to keep in sync. */
+      const card = document.querySelector('#otGrid .ot-card[data-ot="pickup"]');
+      if (card) card.click();
     });
   }
   /* What the discount comes off, i.e. everything tax is charged on. Mirrors
@@ -2057,6 +2167,9 @@
       '<div id="scheduleBox"></div>' +
       '<div class="field"><label>' + esc(otLabel) + '</label>' +
         '<input id="cWhen" placeholder="' + (state.orderType === 'dinein' ? 'Table 12' : state.orderType === 'delivery' ? '123 Main St, Apt 4' : 'ASAP (20–25 min)') + '" value="' + esc(c.when || '') + '"></div>' +
+      /* The live 2-mile delivery check fills this in — only ever on Delivery,
+         and only once the guest has typed enough to be an address. */
+      '<div id="geoBox"></div>' +
       (CONFIG.features.orderNotes ? '<div class="field"><label>Order Notes</label><textarea id="cNotes" placeholder="Extra napkins, no chopsticks…">' + esc(c.notes) + '</textarea></div>' : '') +
       '<div class="section-label">Payment Method</div>' +
       payOpts +
@@ -2097,6 +2210,11 @@
        input directly, and a re-render would otherwise drop what was typed. */
     const em = $('#cEmail');
     if (em) em.oninput = () => { state.customer.email = em.value.trim(); };
+    /* On Delivery this input IS the address, so it drives the distance check
+       (debounced — every keystroke would be a geocode). On the other channels
+       it is a pickup time or a table number and must not trigger anything. */
+    const wh = $('#cWhen');
+    if (wh) wh.oninput = () => { if (state.orderType === 'delivery') scheduleGeoCheck(); };
     renderLoyaltyBox();
     bindLoyaltyBox();
     if (state.orderType === 'delivery' && deliveryOn()) {
@@ -2106,6 +2224,13 @@
         const first = state.scheduleDays[0];
         if (first) return loadScheduleDate(first.iso);
       });
+      renderGeoBox();
+      bindGeoBox();
+      /* An address carried over from a previous session (or restored with the
+         cart) is checked immediately — the guest must not have to retype it
+         to learn it is refused. */
+      const pre = $('#cWhen');
+      if (pre && pre.value.trim().length >= 8) scheduleGeoCheck(true);
     }
 
     /* The bill may have changed while the sheet was closed, so ask again before
@@ -2299,6 +2424,15 @@
     }
     if (state.orderType === 'delivery' && !schedulePayload()) {
       toast('Please pick a delivery date and time.', 'err');
+      return;
+    }
+    /* The live distance check refused this address. Do not submit: the server
+       would refuse it again (geo.js is the real gate), and the guest has
+       already been shown the reason and the way out. An EMPTY check (nothing
+       typed, or the check itself failed) is not a refusal and passes — that
+       verdict belongs to the server. */
+    if (state.orderType === 'delivery' && state.deliveryGeo.status === 'blocked') {
+      toast(state.deliveryGeo.msg || 'That address is outside our delivery area. Please choose Pickup.', 'err');
       return;
     }
 
@@ -3293,6 +3427,11 @@
           return;
         }
         state.orderType = ot.dataset.ot;
+        /* A distance verdict belongs to the Delivery channel: keeping a
+           'blocked' one would leave a Pickup checkout shown as out of range
+           (and Place Order disabled) for an address that is not being
+           delivered to at all. */
+        state.deliveryGeo = { status: '', miles: null, msg: '', source: '' };
         renderShell();
         syncCartUI();
         if (state.sheet === 'checkout') openCheckout();

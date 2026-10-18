@@ -101,6 +101,10 @@ async function main() {
          the shop's own board. */
       KPOT_ORDERS_FILE: ORDERS_FILE,
       KPOT_CUSTOMERS_FILE: path.join(path.dirname(ORDERS_FILE), 'customers.local.json'),
+      /* The store-hours tick SAVES store status on every open/close
+         transition — an unpinned suite run after closing time rewrites the
+         shop's own switches. */
+      KPOT_STORE_FILE: path.join(path.dirname(ORDERS_FILE), 'store.local.json'),
       KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
       ORDERS_BACKUP_DIR: path.join(SCRATCH, 'backups')
     }),

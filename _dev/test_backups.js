@@ -69,6 +69,10 @@ function boot() {
       ORDERS_BACKUP_DIR: BACKUPS,
       KPOT_ORDERS_FILE: ORDERS,
       KPOT_CUSTOMERS_FILE: path.join(path.dirname(ORDERS), 'customers.local.json'),
+      /* The store-hours tick SAVES store status on every open/close
+         transition — an unpinned suite run after closing time rewrites the
+         shop's own switches. */
+      KPOT_STORE_FILE: path.join(path.dirname(ORDERS), 'store.local.json'),
       KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
       STRIPE_SECRET_KEY: 'sk_test_backup_not_a_real_key',
       KPOT_FLUSH_MS: '700'

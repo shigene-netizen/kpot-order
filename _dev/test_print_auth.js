@@ -54,6 +54,10 @@ async function bootServer(label, port, secrets, env) {
       KPOT_SECRETS_FILE: secretsFile,
       KPOT_ORDERS_FILE: path.join(dir, 'orders.local.json'),
       KPOT_CUSTOMERS_FILE: path.join(dir, 'customers.local.json'),
+      /* The store-hours tick SAVES store status on every open/close
+         transition — an unpinned suite run after closing time rewrites the
+         shop's own switches. */
+      KPOT_STORE_FILE: path.join(dir, 'store.local.json'),
       KPOT_PRINT_FILE: path.join(dir, 'print.local.json'),
       KPOT_FLUSH_MS: '500',
       /* Never inherit a real key from the parent environment. */

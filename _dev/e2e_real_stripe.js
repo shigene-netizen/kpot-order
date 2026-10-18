@@ -223,6 +223,10 @@ async function main() {
   const env = Object.assign({}, process.env, { PORT: String(PORT) });
   env.KPOT_ORDERS_FILE = ORDERS_FILE;
   env.KPOT_CUSTOMERS_FILE = CUSTOMERS_FILE;
+  /* The store-hours tick SAVES store status on every open/close transition —
+     without this pin a suite run after closing time rewrites the shop's own
+     switches. */
+  env.KPOT_STORE_FILE = path.join(path.dirname(ORDERS_FILE), 'store.local.json');
   /* Env wins over secrets.local.json in server.js, so the live key on disk is
      never touched by this run. In preflight we deliberately inject a BOGUS
      test key rather than letting the server fall back to the real one: the
@@ -231,6 +235,10 @@ async function main() {
      instead of creating a payable session on the live account. */
   env.STRIPE_SECRET_KEY = PREFLIGHT_ONLY ? 'sk_test_preflight_not_a_real_key' : key;
   env.STRIPE_ENABLED = '1';
+  /* 24h hours spec: this drives a real browser through a cart, and the
+     business-hours tick would close the shop under it after closing time.
+     See hoursSpec() in server.js. */
+  env.KPOT_HOURS_SPEC = '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}';
   const server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe']
   });

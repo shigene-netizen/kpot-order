@@ -105,6 +105,7 @@ run test_discount          _dev/test_discount.js
 run test_loyalty           _dev/test_loyalty.js
 run test_member             _dev/test_member.js
 run test_schedule           _dev/test_schedule.js
+run test_delivery_geo       _dev/test_delivery_geo.js
 
 echo
 echo "--- page syntax (the inline scripts in the owner's own pages) ---"
@@ -137,6 +138,7 @@ run probe_throttle_isolate _dev/probe_throttle_isolate.js
 run probe_member            _dev/probe_member.js
 run probe_phone_rewards     _dev/probe_phone_rewards.js
 run probe_schedule          _dev/probe_schedule.js
+run probe_delivery_geo_http _dev/probe_delivery_geo_http.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 
@@ -145,6 +147,7 @@ echo "--- real browser (headless Chrome) ---"
 run probe_guest_defaults   _dev/probe_guest_defaults.js
 run probe_guest_discount   _dev/probe_guest_discount.js
 run probe_delivery_pay     _dev/probe_delivery_pay.js
+run probe_delivery_geo_ui  _dev/probe_delivery_geo_ui.js
 run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js
 run probe_board_print_ui   _dev/probe_board_print_ui.js

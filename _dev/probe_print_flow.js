@@ -153,6 +153,10 @@ async function main() {
         KPOT_FLUSH_MS: '1000',
         KPOT_ORDERS_FILE: ORDERS_FILE,
         KPOT_CUSTOMERS_FILE: path.join(path.dirname(ORDERS_FILE), 'customers.local.json'),
+        /* The store-hours tick SAVES store status on every open/close
+           transition — an unpinned suite run after closing time rewrites the
+           shop's own switches. */
+        KPOT_STORE_FILE: path.join(path.dirname(ORDERS_FILE), 'store.local.json'),
         KPOT_PRINT_FILE: PRINT_FILE,
         /* Reach "failed" on the first attempt. The real backoff runs 2s, 4s,
            8s … 60s, so waiting out 10 attempts would add ~5 minutes to the

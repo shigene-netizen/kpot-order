@@ -140,6 +140,12 @@ async function main() {
         PORT: String(PORT),
         ADMIN_KEY,
         KPOT_FLUSH_MS: '500',
+        /* The business-hours tick holds `open` strictly on the hours clock —
+           after closing time it closes the shop under this probe within one
+           flush, and a guest page that will not accept orders cannot be
+           driven through a cart at all. A 24h spec keeps the shop open at any
+           clock; production never sets this. See hoursSpec() in server.js. */
+        KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
         KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
         KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
         KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
@@ -284,6 +290,10 @@ async function main() {
     await cdp.evalJs(`(() => {
       const n = document.querySelector('#cName'); if (n) n.value = ${JSON.stringify(GUEST)};
       const p = document.querySelector('#cPhone'); if (p) p.value = '4045550142';
+      /* E-mail became required (order-ready notification + reward contact) —
+         a probe that leaves it blank is stopped by the same validation a
+         guest is, before the submit path this probe exists to test. */
+      const e = document.querySelector('#cEmail'); if (e) e.value = 'button-fx-probe@example.invalid';
       const c = document.querySelector('[data-pay="counter"]'); if (c) c.click();
       return true;
     })()`);
