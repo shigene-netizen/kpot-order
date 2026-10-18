@@ -106,6 +106,7 @@ run test_loyalty           _dev/test_loyalty.js
 run test_member             _dev/test_member.js
 run test_schedule           _dev/test_schedule.js
 run test_delivery_geo       _dev/test_delivery_geo.js
+run test_dispatch           _dev/test_dispatch.js
 
 echo
 echo "--- page syntax (the inline scripts in the owner's own pages) ---"
@@ -140,6 +141,7 @@ run probe_phone_rewards     _dev/probe_phone_rewards.js
 run probe_schedule          _dev/probe_schedule.js
 run probe_delivery_geo_http _dev/probe_delivery_geo_http.js
 run probe_closed_orders_http _dev/probe_closed_orders_http.js
+run probe_driver_http      _dev/probe_driver_http.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 
@@ -152,6 +154,7 @@ run probe_delivery_geo_ui  _dev/probe_delivery_geo_ui.js
 run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js
 run probe_board_print_ui   _dev/probe_board_print_ui.js
+run probe_driver_ui        _dev/probe_driver_ui.js
 
 if [ -n "${STRIPE_TEST_KEY:-}" ]; then
   echo

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<title>KPOT To Go — Delivery Run</title>
+<link rel="manifest" href="staff-board.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="KPOT Driver">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<style>
+  :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
+          --line:#322f3a; --txt:#F4F1EA; --mut:#9a93a0; --green:#2EA043; --amber:#E8B44A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family: Inter, -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+         -webkit-text-size-adjust:100%; }
+  a { color:inherit; text-decoration:none; }
+  .wrap { max-width: 640px; margin:0 auto; padding: 14px 12px 80px; }
+  header.bar { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .logo-k { width:38px; height:38px; border-radius:10px; background:var(--red);
+            color:#fff; font-weight:900; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  header.bar h1 { font-size:18px; margin:0; flex:1; }
+  header.bar .sub { font-size:12px; color:var(--mut); }
+  .line { font-size:13px; color:var(--mut); margin:0 2px 14px; }
+  .line b { color:var(--txt); }
+
+  /* --- the key gate ------------------------------------------------------ */
+  .gate { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-top:18px; }
+  .gate h2 { font-size:15px; margin:0 0 6px; }
+  .gate p { font-size:13px; color:var(--mut); line-height:1.55; margin:0 0 12px; }
+  .gate .row { display:flex; gap:8px; }
+  .gate input { flex:1; background:var(--card2); color:var(--txt); border:1px solid var(--line);
+                border-radius:10px; padding:12px; font:inherit; }
+  .gate .note { font-size:12px; color:var(--mut); margin-top:10px; line-height:1.5; }
+  .btn { font:inherit; font-weight:700; border:none; border-radius:10px; padding:12px 14px; cursor:pointer; }
+  .btn.primary { background:var(--red); color:#fff; }
+  .btn.ghost { background:var(--card2); color:var(--txt); border:1px solid var(--line); }
+  .btn[disabled] { opacity:.55; cursor:default; }
+
+  /* --- one delivery ------------------------------------------------------ */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px;
+          padding:14px; margin-bottom:12px; }
+  .card.done { opacity:.45; }
+  .card .top { display:flex; align-items:flex-start; gap:12px; }
+  /* The sequence number is the whole point of the page: it is the answer to
+     "which one do I take first", so it is the biggest thing on the card. */
+  .seq { min-width:44px; height:44px; border-radius:12px; background:var(--red); color:#fff;
+         font-weight:900; font-size:22px; display:flex; align-items:center; justify-content:center; }
+  .top .meta { flex:1; min-width:0; }
+  .win { font-size:13px; font-weight:700; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; margin-top:5px; }
+  .pill { font-size:11px; padding:3px 8px; border-radius:99px; font-weight:700; white-space:nowrap; }
+  .pill.mi { background:rgba(255,255,255,.10); color:#cfc9d6; }
+  .pill.mi.zip { background:rgba(232,180,74,.18); color:var(--amber); }
+  .pill.overdue { background:#e5484d; color:#fff; }
+  .pill.paid { background:rgba(46,160,67,.2); color:#6ee787; }
+  .pill.unpaid { background:#e5484d; color:#fff; }
+  .pill.status { background:rgba(255,255,255,.10); color:#cfc9d6; }
+  .pill.status.ready { background:rgba(46,160,67,.2); color:#6ee787; }
+
+  /* The address: tappable, and it LOOKS tappable — this is the thing the
+     driver's thumb goes to the moment the card is read. */
+  a.addr { display:block; margin-top:11px; font-size:19px; font-weight:800; line-height:1.3;
+           padding:10px 12px; background:var(--card2); border:1px solid var(--line); border-radius:12px; }
+  a.addr .go { display:block; font-size:11px; font-weight:700; color:var(--mut); margin-top:4px; letter-spacing:.03em; }
+  .who { display:flex; gap:8px; flex-wrap:wrap; margin-top:9px; font-size:13px; }
+  .who a { color:#8ab4ff; font-weight:700; }
+  .who .nm { color:var(--mut); }
+  .bag { margin-top:9px; font-size:13px; color:var(--mut); line-height:1.5; }
+  .bag b { color:var(--txt); }
+  .note { margin-top:8px; font-size:13px; background:rgba(232,180,74,.14); border:1px solid rgba(232,180,74,.35);
+          color:#f0d38a; border-radius:10px; padding:8px 10px; line-height:1.45; }
+  .foot { display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .foot .tot { font-size:15px; font-weight:800; }
+  .foot .deliver { flex:1; background:var(--green); color:#04140a; font-size:15px; padding:14px; }
+  .foot .deliver[disabled] { opacity:.6; }
+
+  .empty { text-align:center; padding:46px 16px; color:var(--mut); }
+  .empty .big { font-size:40px; }
+  .empty p { font-size:14px; line-height:1.6; }
+  .bar2 { display:flex; gap:8px; align-items:center; margin:0 0 12px; flex-wrap:wrap; }
+  .bar2 .sp { flex:1; }
+  .err { background:rgba(248,81,73,.14); border:1px solid rgba(248,81,73,.45); color:#ff9b93;
+         border-radius:12px; padding:12px; font-size:13px; line-height:1.5; margin-bottom:12px; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#000; color:#fff;
+           padding:10px 16px; border-radius:10px; opacity:0; transition:.3s; pointer-events:none; z-index:99; }
+  .toast.show { opacity:1; }
+  @media (max-width:420px) { .foot { flex-direction:column; align-items:stretch; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <div class="logo-k">K</div>
+    <h1>Delivery Run</h1>
+    <span class="sub" id="dayLabel"></span>
+  </header>
+  <p class="line" id="summary"></p>
+
+  <!-- ================= the key gate ================= -->
+  <section class="gate" id="gate" hidden>
+    <h2>Driver key</h2>
+    <p>This page shows where today's customers live. It needs the key the shop
+       gave you — it only opens the delivery run, nothing else.</p>
+    <div class="row">
+      <input id="keyIn" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Driver key" enterkeyhint="go">
+      <button class="btn primary" id="keyGo">Open</button>
+    </div>
+    <div class="note" id="keyErr" style="color:#ff9b93"></div>
+    <div class="note">The key is kept on THIS phone only. Use
+      <b>Forget this phone</b> below to remove it.</div>
+  </section>
+
+  <!-- ================= the run ================= -->
+  <main id="run" hidden>
+    <div class="bar2">
+      <button class="btn ghost" id="refresh">Refresh</button>
+      <span class="sp"></span>
+      <button class="btn ghost" id="forget">Forget this phone</button>
+    </div>
+    <div class="err" id="err" hidden></div>
+    <div id="cards"></div>
+    <div class="empty" id="empty" hidden>
+      <div class="big">🎉</div>
+      <p><b>Nothing left to deliver.</b><br>Every order for today is done.</p>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<!-- Installs to the home screen like the kitchen board — the driver opens it
+     with one tap, full screen, no browser chrome. -->
+<script src="assets/staff-pwa.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (s) { return document.querySelector(s); };
+  var KEY = localStorage.getItem('kpotDriverKey') || '';
+  var POLL_MS = 15000;
+  var timer = 0;
+  var busy = {};        /* order id -> true while its Delivered tap is in flight */
+
+  function toast(msg) {
+    var t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.classList.remove('show'); }, 1800);
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+
+  /* --- the run ------------------------------------------------------------
+     The server already sequenced this list (window first, then distance):
+     the order the cards are drawn in IS the order to drive them. We do not
+     re-sort here — a second opinion in the browser is how a browser ends up
+     disagreeing with the kitchen. */
+  function load() {
+    return fetch('/api/driver/queue', { headers: { 'X-Driver-Key': KEY } })
+      .then(function (r) {
+        if (r.status === 401) {
+          /* A key that stopped working: forget it and ask again rather than
+             retrying a dead credential every 15 seconds. The sentinel matters
+             — returning null here would fall into the "could not reach the
+             shop" branch below and say the wrong thing. */
+          localStorage.removeItem('kpotDriverKey');
+          KEY = '';
+          showGate('That key was not accepted. Check it with the shop and try again.');
+          return 'locked';
+        }
+        return r.json().catch(function () { return null; });
+      })
+      .then(function (j) {
+        if (j === 'locked') return;
+        if (!j) { showErr('Could not reach the shop. Check your connection and refresh.'); return; }
+        if (!j.ok) { showErr(j.message || 'Something went wrong.'); return; }
+        render(j);
+      })
+      .catch(function () { showErr('Could not reach the shop. Check your connection and refresh.'); });
+  }
+
+  function render(j) {
+    $('#gate').hidden = true;
+    $('#run').hidden = false;
+    $('#err').hidden = true;
+
+    $('#dayLabel').textContent = j.date || '';
+    var n = j.seq.length;
+    $('#summary').innerHTML = n
+      ? '<b>' + n + '</b> ' + (n === 1 ? 'delivery' : 'deliveries') + ' to go — top to bottom is the order to run them'
+        + (j.overdue ? ' · <b>' + j.overdue + '</b> left over from before' : '')
+      : 'All of today\'s deliveries are done.';
+
+    var host = $('#cards');
+    host.innerHTML = '';
+    $('#empty').hidden = n > 0;
+
+    j.seq.forEach(function (e) {
+      host.appendChild(card(e));
+    });
+  }
+
+  function card(e) {
+    var d = document.createElement('div');
+    d.className = 'card';
+
+    var mi = e.miles == null ? '' :
+      '<span class="pill mi' + (e.distSource === 'zip' ? ' zip' : '') + '">' +
+      e.miles.toFixed(1) + ' mi' + (e.distSource === 'zip' ? ' (ZIP)' : '') + '</span>';
+
+    var html = '';
+    html += '<div class="top">';
+    html += '  <div class="seq">' + e.seq + '</div>';
+    html += '  <div class="meta">';
+    html += '    <div class="win">' + esc(e.windowLabel || 'Delivery') + '</div>';
+    html += '    <div class="badges">' + mi +
+              (e.overdue ? '<span class="pill overdue">LEFT OVER</span>' : '') +
+              '<span class="pill status' + (e.status === 'ready' ? ' ready' : '') + '">' +
+                esc(e.status === 'ready' ? 'Ready' : e.status === 'preparing' ? 'Cooking' : 'On the board') + '</span>' +
+              '<span class="pill ' + (e.paid ? 'paid' : 'unpaid') + '">' +
+                (e.paid ? 'Paid' : 'NOT PAID') + '</span>';
+    html += '    </div>';
+    html += '  </div>';
+    html += '</div>';
+
+    /* The address is the navigation button. A delivery with no address at all
+       (a data problem, not a driver problem) still gets a row — just no map. */
+    if (e.address && e.mapsUrl) {
+      html += '<a class="addr" href="' + esc(e.mapsUrl) + '" target="_blank" rel="noopener">' +
+                esc(e.address) + '<span class="go">OPEN IN MAPS ›</span></a>';
+    } else {
+      html += '<div class="addr">No address on this order — ask the shop.</div>';
+    }
+
+    html += '<div class="who">' +
+              '<span class="nm">' + esc(e.customer.name || 'Guest') + '</span>' +
+              (e.customer.phone
+                ? '<a href="tel:' + esc(e.customer.phone.replace(/[^\d+]/g, '')) + '">' +
+                    '📞 ' + esc(e.customer.phone) + '</a>'
+                : '') +
+            '</div>';
+
+    if (e.itemsText) html += '<div class="bag"><b>' + esc(e.itemsText) + '</b></div>';
+    if (e.notes) html += '<div class="note">' + esc(e.notes) + '</div>';
+
+    html += '<div class="foot">';
+    html += '  <span class="tot">' + money(e.total) + '</span>';
+    html += '  <button class="btn deliver" data-id="' + esc(e.id) + '"' +
+              (busy[e.id] ? ' disabled' : '') + '>Delivered</button>';
+    html += '</div>';
+
+    d.innerHTML = html;
+    /* Event delegation (pitfall 43): the card is redrawn every refresh, so the
+       handler lives on the container, not on the button that gets replaced. */
+    return d;
+  }
+
+  /* Marking delivered is the ONLY thing a driver can do, and the server says
+     so: any other answer is shown, but the card stays. */
+  function deliver(id, btn) {
+    if (busy[id]) return;
+    busy[id] = true;
+    btn.disabled = true;
+    btn.textContent = 'Marking…';
+    fetch('/api/orders/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Driver-Key': KEY },
+      body: JSON.stringify({ status: 'completed' })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        return { status: r.status, j: j };
+      });
+    }).then(function (out) {
+      if (out.status === 200) {
+        toast('Marked delivered');
+        load();
+      } else {
+        busy[id] = false;
+        btn.disabled = false;
+        btn.textContent = 'Delivered';
+        toast(out.j.message || 'Could not mark that one.');
+      }
+    }).catch(function () {
+      busy[id] = false;
+      btn.disabled = false;
+      btn.textContent = 'Delivered';
+      toast('No connection — try again.');
+    });
+  }
+
+  function showErr(msg) {
+    var e = $('#err');
+    e.textContent = msg;
+    e.hidden = !msg;
+  }
+  function showGate(msg) {
+    $('#run').hidden = true;
+    $('#gate').hidden = false;
+    $('#keyErr').textContent = msg || '';
+    $('#keyIn').value = '';
+    $('#keyIn').focus();
+  }
+
+  /* --- wiring ------------------------------------------------------------ */
+  $('#cards').addEventListener('click', function (ev) {
+    var btn = ev.target.closest('button.deliver');
+    if (btn) deliver(btn.getAttribute('data-id'), btn);
+  });
+
+  $('#keyGo').onclick = function () {
+    var v = $('#keyIn').value.trim();
+    if (!v) { $('#keyErr').textContent = 'Enter the key.'; return; }
+    KEY = v;
+    localStorage.setItem('kpotDriverKey', KEY);
+    load();
+  };
+  $('#keyIn').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') $('#keyGo').onclick();
+  });
+
+  $('#refresh').onclick = function () { toast('Refreshing…'); load(); };
+  $('#forget').onclick = function () {
+    localStorage.removeItem('kpotDriverKey');
+    KEY = '';
+    showGate('Key removed from this phone.');
+  };
+
+  /* Poll while the page is open, and catch up the moment the driver switches
+     back to it — a phone that was in a pocket for an hour should not show a
+     stale run. */
+  function startPolling() {
+    clearInterval(timer);
+    timer = setInterval(function () {
+      if (document.visibilityState === 'visible') load();
+    }, POLL_MS);
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') load();
+  });
+
+  if (KEY) { load(); } else { showGate(''); }
+  startPolling();
+})();
+</script>
+</body>
+</html>

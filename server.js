@@ -31,6 +31,7 @@ const L = require('./customers.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
 const G = require('./geo.js');
+const DISP = require('./dispatch.js');
 let MAIL = null;
 try { MAIL = require('./mailer.js'); } catch (e) { MAIL = null; }
 
@@ -973,6 +974,41 @@ if (!PRINT_KEY && ADMIN_KEY) {
   console.warn('[kpot] PRINT_KEY not set — the print agent endpoint is OPEN (dev mode).');
 }
 
+/* The driver's key. Third independent credential, same shape as the print
+   key: the driver's phone gets to see the day's delivery run (guest addresses
+   and phone numbers) and to mark a delivery done, and NOTHING else — not the
+   store controls, not the prices, not the whole board.
+
+   Unlike the print key this one FAILS CLOSED. The queue is a list of where
+   the shop's customers live; an unconfigured server must not publish it just
+   because it is also unconfigured for printing. With DRIVER_KEY unset, GET
+   /api/driver/queue answers 401 and driver.html says so on screen. */
+function loadDriverKey() {
+  if (process.env.DRIVER_KEY) return process.env.DRIVER_KEY.trim();
+  try {
+    const p = SECRETS_FILE;
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (j && j.driverKey) return String(j.driverKey).trim();
+  } catch (e) { /* no local secrets — fine */ }
+  return '';
+}
+let DRIVER_KEY = loadDriverKey();
+if (!DRIVER_KEY) {
+  console.warn('[kpot] DRIVER_KEY not set — the driver queue endpoint is LOCKED.');
+  console.warn('       Set driverKey in secrets.local.json (a DIFFERENT value from');
+  console.warn('       adminKey) to let the driver page work.');
+}
+
+/* Accepts the driver key OR the owner's admin key: the owner is allowed to
+   look at their own delivery run, and the console key is the stronger
+   credential, so honouring it here adds no hole. The reverse is NOT true —
+   the driver key never opens anything else (see handleUpdateOrder). */
+function driverAuthorized(req) {
+  if (DRIVER_KEY && String(req.headers['x-driver-key'] || '') === DRIVER_KEY) return true;
+  if (ADMIN_KEY && String(req.headers['x-admin-key'] || '') === ADMIN_KEY) return true;
+  return false;
+}
+
 /* ---- Outgoing mail ------------------------------------------------------
    GONE on 2026-10-16, with the e-mail recovery path it served. The owner's
    decision ("不需要EMAIL验证了，凭手机号码就可以领奖励了") removed the only thing
@@ -1888,6 +1924,9 @@ async function handleCreateOrder(req, res) {
   const effectiveType = ORDER_TYPES.includes(body.orderType) ? body.orderType : 'pickup';
   const sched = (body.schedule && typeof body.schedule === 'object') ? body.schedule : null;
   let schedule = null;
+  /* The point the 2-mile gate measured, kept on the order below so the
+     delivery run can sort by distance without geocoding again. */
+  let orderGeo = null;
 
   if (effectiveType !== 'delivery') {
     if (sched && (sched.date || sched.slot)) {
@@ -1977,6 +2016,22 @@ async function handleCreateOrder(req, res) {
         message: geo.message || 'That address is outside our ' + G.RADIUS_MI +
           '-mile delivery area. Please choose Pickup or Dine-In.'
       });
+    }
+    /* Keep the measured point on the order. This geocode is happening anyway
+       — it is the same call the guest's live check and the checkout gate make
+       — so throwing the coordinates away would mean paying for them twice: the
+       delivery run (dispatch.js) sorts by distance, and an order with no point
+       on it sorts to the back of its window. `source` records which ruler
+       measured it so the driver page can say "ZIP estimate" when it was not
+       the street. An unknown check stores nothing: there is no point to keep,
+       and dispatch falls back to the ZIP table (or to "no distance"). */
+    if (geo.coords && isFinite(Number(geo.coords.lat)) && isFinite(Number(geo.coords.lon))) {
+      orderGeo = {
+        lat: Number(geo.coords.lat),
+        lon: Number(geo.coords.lon),
+        miles: geo.miles,
+        source: geo.source
+      };
     }
   }
   /* Delivery must be prepaid — see counterDeliveryVerdict(). Checked against
@@ -2070,6 +2125,10 @@ async function handleCreateOrder(req, res) {
     deliverySlot: schedule ? schedule.slot : '',
     deliverySlotLabel: schedule ? schedule.slotLabel : '',
     scheduledFor: schedule ? schedule.scheduledFor : '',
+    /* Present on delivery orders that could be measured, absent everywhere
+       else. dispatch.js reads it to sequence the day's run; nothing else
+       cares, and an order without one is simply sorted last in its window. */
+    geo: orderGeo || undefined,
     table: body.table || '',
     customer,
     /* Never leaves the server except as this hash, and never appears in any
@@ -2182,14 +2241,81 @@ async function handleGetOrder(req, res, id) {
   return sendJSON(res, 200, publicOrderView(o));
 }
 
+/* --------------------------------------------------------------------------
+   GET /api/driver/queue — the day's delivery run, in the order to run it.
+
+   What the driver's phone shows: every delivery that is still out there —
+   today's, plus anything still open from an earlier day — sequenced by
+   dispatch.js (window first, then distance). Completed and cancelled orders
+   are gone from the list the moment they are marked, so the card the driver
+   just finished disappears instead of sitting there.
+
+   Authenticated with the DRIVER key or the owner's ADMIN key; nothing about
+   the store, the money or the other channels is on the wire. Fails closed:
+   with no driver key configured, 401.
+   -------------------------------------------------------------------------- */
+async function handleDriverQueue(req, res) {
+  if (!driverAuthorized(req)) {
+    return sendJSON(res, 401, {
+      error: 'unauthorized',
+      message: 'A driver key is required to see the delivery run.'
+    });
+  }
+  let seq;
+  try {
+    seq = DISP.sequenceDeliveries(orders.values(), { slots: scheduleCfg().slots });
+  } catch (e) {
+    console.error('[kpot] driver queue unhandled:', e && e.message);
+    return sendJSON(res, 500, { error: 'internal_error' });
+  }
+  return sendJSON(res, 200, {
+    ok: true,
+    date: DISP.localDateKey(Date.now()),
+    generatedAt: new Date().toISOString(),
+    count: seq.length,
+    overdue: seq.filter((e) => e.overdue).length,
+    seq: seq
+  });
+}
+
 async function handleUpdateOrder(req, res, id) {
-  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  const isAdmin = adminAuthorized(req);
+  /* A driver holds the weakest credential there is here, and it may move an
+     order in exactly one direction: a delivery, to completed. The narrowness
+     is enforced by REPLACING what the driver sent — everything past this
+     branch (payment status, schedule, discounts, notes) reads `body`, and a
+     driver's body is `{status:'completed'}` or nothing at all. */
+  const isDriver = !isAdmin && driverAuthorized(req);
+  if (!isAdmin && !isDriver) return sendJSON(res, 401, { error: 'unauthorized' });
   const o = orders.get(id);
   if (!o) return sendJSON(res, 404, { error: 'not_found' });
   let raw;
   try { raw = await readBody(req, 8 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
   let body;
   try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+
+  if (isDriver) {
+    if (body.status !== 'completed' || Object.keys(body).length !== 1) {
+      return sendJSON(res, 403, {
+        error: 'driver_readonly',
+        message: 'A driver can only mark a delivery order as delivered.'
+      });
+    }
+    if (o.orderType !== 'delivery') {
+      return sendJSON(res, 403, {
+        error: 'driver_not_delivery',
+        message: 'Only delivery orders can be marked delivered.'
+      });
+    }
+    if (o.status === 'cancelled') {
+      return sendJSON(res, 409, {
+        error: 'order_cancelled',
+        message: 'That order was cancelled.'
+      });
+    }
+    body = { status: 'completed' };
+    console.log('[kpot] driver marked order ' + id + ' delivered');
+  }
 
   const wasStatus = o.status;
   if (body.status && VALID_STATUS.includes(body.status)) {
@@ -3805,6 +3931,15 @@ const server = http.createServer((req, res) => {
     });
     if (req.method === 'GET') return handleListOrders(req, res).catch((e) => {
       console.error('[kpot] list-orders unhandled:', e && e.message);
+      sendJSON(res, 500, { error: 'internal_error' });
+    });
+    return sendJSON(res, 405, { error: 'method_not_allowed' });
+  }
+
+  /* The driver's delivery run — its own path, its own key, nothing else. */
+  if (pathname === '/api/driver/queue') {
+    if (req.method === 'GET') return handleDriverQueue(req, res).catch((e) => {
+      console.error('[kpot] driver-queue unhandled:', e && e.message);
       sendJSON(res, 500, { error: 'internal_error' });
     });
     return sendJSON(res, 405, { error: 'method_not_allowed' });

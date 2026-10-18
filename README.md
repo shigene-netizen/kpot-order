@@ -45,7 +45,9 @@ python make_admin_qr.py <线上地址>
 | 文件 | 作用 |
 |---|---|
 | `index.html` | **客人端点餐页面**（扫码后打开的页面） |
+| `admin-orders.html` | **店主控制台**：生成二维码、批量生成桌号码、打印桌卡、配置检查 |
 | `admin.html` | **店主控制台**：生成二维码、批量生成桌号码、打印桌卡、配置检查 |
+| `driver.html` | **司机端**：今天的外送派送队列（按顺序送，见四点八） |
 | `assets/menu.js` | 菜单数据（改价格 / 加菜品只改这里） |
 | `assets/config.js` | 店铺信息、税率、小费、支付方式（**日常只需改这一个文件**） |
 | `assets/app.js` | 点餐逻辑 |
@@ -56,6 +58,7 @@ python make_admin_qr.py <线上地址>
 | `customers.js` | **会员积分 / 回头券的纯规则**（见五点八；2026-10-14 本地完成，未发布） |
 | `member.js` | **月度会员费 / 权益的纯规则**（2026-10-14 本地完成，未发布） |
 | `schedule.js` | **限时段 Delivery（次日起、时段容量）的纯规则**（2026-10-14 本地完成，未发布） |
+| `dispatch.js` | **外送派送顺序**（今天该送哪些、先送哪单，见四点八） |
 | `discounts.js` | 优惠码存储与校验 |
 | `customers.local.json` | **会员表**（2026-10-14 新增；容器本地，靠滚动备份兜底） |
 | `package.json` | 依赖声明（**零依赖**，只是为了 `npm start` 方便） |
@@ -464,6 +467,64 @@ hoursSpec: {
 （全天营业）——营业时间 tick 每 `FLUSH_MS` 就用时钟刷新 `open`，所以**光用
 `/api/store` 把店打开是不够的**，一个 flush 之后就被改回去（这就是
 `probe_delivery_geo_http` 时红时绿的原因）。生产环境不设这个变量。
+
+---
+
+## 四点八、司机端：今天的外送按顺序送
+
+店主要一个「后台把外送单按时间和地址排好给司机」的队列。2026-10-18 店主拍板：
+**独立司机页面**、**独立司机钥匙**、**先按时间窗、同窗内近的优先**。
+
+打开 **`https://order.kpotexpress.com/driver.html`**（手机优先，可「添加到主屏幕」，
+像看板一样全屏打开）。输一次司机钥匙，**从上到下就是送货顺序**。
+
+### 排的是哪些单
+
+| 进队列 | 不进队列 |
+|---|---|
+| 今天的配送单（未完成、未取消） | 明天及以后的预订（还没到那天） |
+| 前几天送不掉、还开着的单（卡上标 **LEFT OVER**） | 已完成 / 已取消 |
+| 未付款的单（卡上大红 **NOT PAID**，司机照送，收钱的事柜台处理） | 自取 / 堂食 |
+
+### 排序规则（dispatch.js，纯函数）
+
+1. **配送时间窗** —— 早的窗先送，永远。12 点的三单永远排在 2 点那单前面。
+2. **同一个窗内按距离**，近的优先。距离用**下单时就算好的坐标**（2 英里闸门那次
+   地理编码，直接存在订单的 `geo` 字段上，不重复花钱）；老订单没有坐标就退回
+   ZIP 质心；两者都没有 → **排在这个窗的最后**，绝不插到最前面。
+3. 还分不出先后 → 按下单时间，再按单号。**排序是全序**，所以司机刷新页面不会
+   看到队伍悄悄重排。
+
+每张卡上：序号（大字）、时间窗、距离（`0.7 mi`；ZIP 估的会写 `(ZIP)`）、**地址
+（点一下直接跳 Google Maps 导航）**、客人姓名 + 可点的电话、袋子里有什么
+（按厨房自己的行，不是客人嘴里的）、客人备注、总价、付没付。
+
+### 司机只能做一件事
+
+司机钥匙（`DRIVER_KEY`）只允许 **`GET /api/driver/queue`** 和 **把一单配送单标记
+成「已送达」**。改时间、改价、改支付状态、动自取单、动已取消的单——全部拒绝
+（`driver_readonly` / `driver_not_delivery` / `order_cancelled`）。店主自己的
+admin key 照样什么都能做（也能开这个页面看自己的队），反过来不行。
+
+> **第三把钥匙，和另两把互不相通**：`ADMIN_KEY`（看板）、`PRINT_KEY`（打印代理）、
+> `DRIVER_KEY`（司机）。它**故意 fail closed**：没设 `driverKey` 时队列接口返回
+> 401——不像打印接口在「什么都没配」的开发模式下会敞开，因为这个接口吐出的是
+> 客人住在哪、电话多少。
+>
+> 生成一把（和另两把**不同的值**）：
+> ```bash
+> node -e "console.log(require('crypto').randomBytes(18).toString('base64url'))"
+> ```
+> 写进 `secrets.local.json` 的 `"driverKey"`，或设环境变量 `DRIVER_KEY`（环境变量优先）。
+> 钥匙只存在**司机自己那台手机**上，页面底下有 **Forget this phone** 一键抹掉。
+
+### 测试
+
+- `_dev/test_dispatch.js`（纯逻辑：进不进队列、窗口优先、同窗就近、异常单垫底、排序稳定）
+- `_dev/probe_driver_http.js`（钥匙矩阵：没钥匙/错钥匙/打印钥匙 401，司机钥匙和店主钥匙 200；
+  司机只能「送达」；没配 `driverKey` 的服务是锁着的；2 英里闸门测出的坐标确实存进了订单）
+- `_dev/probe_driver_ui.js`（真浏览器：钥匙门、顺序、卡片内容、点 Delivered 后卡片消失并重排队号、
+  送完显示空状态、Forget this phone 重新上锁）
 
 ---
 
@@ -1195,6 +1256,9 @@ Stripe 付款后会带客人回到 `?paid=1`（成功）或 `?canceled=1`（放�
 - [ ] **店里那台 Windows 电脑**按 [`print-agent/PRINT-AGENT-SETUP.md`](print-agent/PRINT-AGENT-SETUP.md)
       装好、填好 `config.json`、设好**开机自启**（不做这步，点 PREPARING 不会出纸）
 - [ ] 在路由器里给打印机**绑定固定 IP**（否则路由器重启后 IP 变了就不打了）
+- [ ] 在 `secrets.local.json` 里放一把 **`driverKey`**（与 adminKey/printKey 不同的值），
+      把 `https://order.kpotexpress.com/driver.html` 这个地址和钥匙交给司机
+      （不配这把钥匙，司机页面就是锁着的——见四点八）
 - [ ] `secrets.local.json` **不要**提交到任何公开仓库（已在屏蔽名单）
 
 ### 上线前的支付实测（真实 Stripe，测试模式）
@@ -1347,7 +1411,7 @@ bash _dev/run_all.sh
 STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 ```
 
-当前 **35 个套件，全绿**：
+当前 **38 个套件，全绿**：
 
 | 套件 | 覆盖 | 项数 |
 |---|---|---|
@@ -1374,6 +1438,8 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_schedule` | 真服务端：时段容量从实时订单推导、渠道关时 409、payload 校验、次日单不跳厨房 | 34 |
 | `probe_delivery_geo_http` | **外送 2 英里**：两道钱关口真的拦、桩 Stripe 上结账不 500（2026-10-18 新增） | 29 |
 | `probe_closed_orders_http` | **打烊后不接单**：到店付款单被拒且不上看板、在线支付中的单一律放行、店主暂停接单也拦（2026-10-18 新增） | 13 |
+| `test_dispatch` | **外送派送顺序**：进不进队列、窗口优先、同窗就近、异常单垫底、排序稳定（2026-10-18 新增） | 32 |
+| `probe_driver_http` | **司机队列**：钥匙矩阵（没/错/打印钥匙 401，司机与店主 200）、司机只能「送达」、没配 driverKey 就是锁的、坐标存进订单（2026-10-18 新增） | 47 |
 | `probe_print_flow` | 真服务端 + 真代理 + 假打印机，整条打印链路（含「打印机失联时理由要写明地址」） | 24 |
 | `test_agent_discovery` | 打印代理能不能自己跟上换掉的网站地址 | 27 |
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
@@ -1383,6 +1449,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |
 | `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因 | 29 |
+| `probe_driver_ui` | **真浏览器**里的司机页：钥匙门、按顺序的卡片、点 Delivered 卡片消失并重排队号、送完的空状态、Forget this phone（2026-10-18 新增） | 28 |
 | `probe_cancel_settles` | 放弃付款的订单不会留在看板上（真实 Stripe） | 5 |
 | `e2e_real_stripe` | 整条真实支付链路（真实 Stripe 测试模式） | 17 |
 

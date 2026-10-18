@@ -217,15 +217,22 @@ async function geocodeStreetCached(address) {
  *            'unknown'  — could not verify; order is allowed (fail open)
  *   miles:   number|null — distance to the store, when known
  *   source:  'street' | 'zip' | 'unverified' | 'empty' — which ruler decided
+ *   coords:  {lat, lon}|null — the point that was measured, when there was one
  *   message: string      — guest-facing sentence for the UI (may be '')
  * }>
  *
  * Never throws. Never rejects. A delivery order that cannot be measured is
- * allowed through on purpose — see the module header. */
+ * allowed through on purpose — see the module header.
+ *
+ * `coords` is what the delivery-dispatch queue sorts by: the guest page
+ * already pays for this geocode (it is the same call the guest's live check
+ * makes), so the point is handed back rather than thrown away, and
+ * handleCreateOrder keeps it on the order. A ZIP-centroid result carries
+ * the CENTROID, not the house — `source` says which one you are looking at. */
 async function deliveryCheck(address) {
   const q = norm(address);
   if (!q) {
-    return { status: 'unknown', miles: null, source: 'empty', message: '' };
+    return { status: 'unknown', miles: null, source: 'empty', coords: null, message: '' };
   }
 
   /* 1. Street-level — the confident ruler. */
@@ -234,32 +241,33 @@ async function deliveryCheck(address) {
     const miles = haversineMi(STORE, point);
     if (miles > RADIUS_MI) {
       return {
-        status: 'blocked', miles: miles, source: 'street',
+        status: 'blocked', miles: miles, source: 'street', coords: point,
         message: 'That address is about ' + miles.toFixed(1) +
           ' miles from us — we deliver within ' + RADIUS_MI + ' miles. Please choose Pickup or Dine-In.'
       };
     }
-    return { status: 'ok', miles: miles, source: 'street', message: '' };
+    return { status: 'ok', miles: miles, source: 'street', coords: point, message: '' };
   }
 
   /* 2. ZIP-level fallback — only when the street could not be matched. */
   const zip = extractZip(q);
   const centroid = zip ? ZIP_CENTROIDS[zip] : null;
   if (centroid) {
-    const miles = haversineMi(STORE, { lat: centroid[0], lon: centroid[1] });
+    const coords = { lat: centroid[0], lon: centroid[1] };
+    const miles = haversineMi(STORE, coords);
     if (miles > RADIUS_MI + ZIP_GRACE_MI) {
       return {
-        status: 'blocked', miles: miles, source: 'zip',
+        status: 'blocked', miles: miles, source: 'zip', coords: coords,
         message: 'That address looks outside our ' + RADIUS_MI +
           '-mile delivery area. Please choose Pickup or Dine-In, or call us at +1 (678) 335-5388.'
       };
     }
-    return { status: 'ok', miles: miles, source: 'zip', message: '' };
+    return { status: 'ok', miles: miles, source: 'zip', coords: coords, message: '' };
   }
 
   /* 3. Unverifiable — fail OPEN. */
   return {
-    status: 'unknown', miles: null, source: 'unverified',
+    status: 'unknown', miles: null, source: 'unverified', coords: null,
     message: 'We could not verify that address automatically — we deliver within ' +
       RADIUS_MI + ' miles of the store.'
   };
