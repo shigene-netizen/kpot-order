@@ -139,6 +139,7 @@ run probe_member            _dev/probe_member.js
 run probe_phone_rewards     _dev/probe_phone_rewards.js
 run probe_schedule          _dev/probe_schedule.js
 run probe_delivery_geo_http _dev/probe_delivery_geo_http.js
+run probe_closed_orders_http _dev/probe_closed_orders_http.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 

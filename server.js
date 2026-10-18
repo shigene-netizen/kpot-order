@@ -1917,6 +1917,47 @@ async function handleCreateOrder(req, res) {
     }
     schedule = verdict;
   }
+  /* ---- Open for business -----------------------------------------------
+     The shop's hours have been enforced at POST /api/checkout since the first
+     import (storeGate), and the guest page refuses every path to THIS
+     endpoint while ordersBlocked() — but the API itself did not, so a
+     hand-crafted POST landed an order on the board with the kitchen shut and
+     paged the owner's phone with the new-order e-mail and push. Proven in
+     _dev/probe_closed_orders_http.js, which is red without this block.
+
+     Refused only where no money has moved — the owner's decision
+     (2026-10-18): a pay-at-counter order is written to the board BEFORE
+     anyone pays, so turning it away costs the guest nothing and the kitchen
+     loses nothing. An order the guest is paying for online is NEVER turned
+     away: the guest page writes it the moment Stripe hands back a session,
+     minutes before the money lands, and a guest who paid at 21:29 must not
+     come back at 21:31 to find their order gone. A kitchen can refuse an
+     order that is on its board; it cannot conjure one that was never
+     written. (Known residue: a hand-crafted order claiming an online method
+     still lands, unpaid and marked — the same exposure as an honest guest
+     mid-payment. Distinguishing them needs a Stripe round-trip, and the
+     board already shows such an order as unpaid.)
+
+     Same reading of "closed" as checkout and the guest page: the owner's
+     manual switch AND the configured hours. A delivery with a resolved
+     schedule above is about tomorrow and is not blocked by tonight's clock. */
+  if (body.payMethod === 'counter') {
+    const gate = storeGate(effectiveType, {
+      scheduled: !!schedule,
+      hoursSpec: hoursSpec()
+    });
+    if (gate.blocked) {
+      console.warn('[kpot] refused counter order —', gate.code,
+        '| type:', JSON.stringify(effectiveType));
+      const msg = {
+        closed: 'We are currently closed. Please try again during opening hours.',
+        not_accepting: 'We are not accepting orders right now.',
+        type_off: 'We are not taking ' + gate.label + ' orders right now.',
+        unknown_type: 'That order type was not recognised. Please pick Pickup, Dine-In, or Delivery.'
+      }[gate.code] || 'We could not accept that order type.';
+      return sendJSON(res, 409, { error: gate.code, message: msg });
+    }
+  }
   /* ---- Delivery distance — the 2-mile rule -------------------------------
      Checked against the EFFECTIVE type, so a tampered payload cannot dodge it
      by sending an orderType we coerce to pickup. Runs after the schedule gate

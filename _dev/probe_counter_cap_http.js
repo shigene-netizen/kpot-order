@@ -97,6 +97,10 @@ const server = spawn(process.execPath, ['server.js'], {
     /* The delivery section below flips the channel switch through the board's
        own endpoint — that writes this file, so it MUST be a scratch one. */
     KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
+    /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
+       refuses those outside opening hours. The clock must not decide these
+       cases. See hoursSpec() in server.js. */
+    KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
     ADMIN_KEY: ADMIN,
     /* Set (and different) so the server does not log the "ADMIN_KEY set but
        PRINT_KEY not" warning and lock the print endpoint in this run. */

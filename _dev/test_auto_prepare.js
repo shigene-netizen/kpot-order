@@ -142,6 +142,10 @@ function bootServer(port, extraEnv) {
       KPOT_CUSTOMERS_FILE: path.join(path.dirname(ORDERS_FILE), 'customers.local.json'),
       KPOT_PRINT_FILE: PRINT_FILE,
       KPOT_STORE_FILE: STORE_FILE,
+      /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
+         refuses those outside opening hours. The clock must not decide these
+         cases. See hoursSpec() in server.js. */
+      KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
       KPOT_SECRETS_FILE: SECRETS_FILE,
       KPOT_DISCOUNTS_FILE: path.join(SCRATCH, 'discounts.local.json'),
       KPOT_MENU_FILE: path.join(SCRATCH, 'menu.local.json'),

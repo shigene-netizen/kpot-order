@@ -101,6 +101,12 @@ const server = spawn(process.execPath, ['server.js'], {
     KPOT_FLUSH_MS: '500',
     KPOT_GEOCODE_API_BASE: 'http://127.0.0.1:' + GEO_PORT,
     KPOT_STRIPE_API_BASE: 'http://127.0.0.1:' + STRIPE_PORT + '/v1/checkout/sessions',
+    /* 24h open. The store-hours tick drives `open` from the clock every
+       FLUSH_MS (500ms here), so without this the manual open:true flip below
+       is clobbered mid-probe at off-hours and the scheduled-delivery checkout
+       case dies of a clock race rather than of distance. Production never
+       sets this. See hoursSpec() in server.js. */
+    KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
     KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
     KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
     KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),

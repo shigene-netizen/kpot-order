@@ -73,6 +73,10 @@ function boot() {
          transition — an unpinned suite run after closing time rewrites the
          shop's own switches. */
       KPOT_STORE_FILE: path.join(path.dirname(ORDERS), 'store.local.json'),
+      /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
+         refuses those outside opening hours. The clock must not decide these
+         cases. See hoursSpec() in server.js. */
+      KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
       KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
       STRIPE_SECRET_KEY: 'sk_test_backup_not_a_real_key',
       KPOT_FLUSH_MS: '700'

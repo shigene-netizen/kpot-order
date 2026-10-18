@@ -110,6 +110,10 @@ const server = spawn(process.execPath, ['server.js'], {
     KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
     KPOT_DISCOUNTS_FILE: path.join(SCRATCH, 'discounts.local.json'),
     KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
+    /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
+       refuses those outside opening hours. The clock must not decide these
+       cases. See hoursSpec() in server.js. */
+    KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
     KPOT_SECRETS_FILE: path.join(SCRATCH, 'secrets.local.json'),
     ORDERS_BACKUP_DIR: path.join(SCRATCH, 'backups')
   }),

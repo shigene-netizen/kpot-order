@@ -157,6 +157,10 @@ async function main() {
            transition — an unpinned suite run after closing time rewrites the
            shop's own switches. */
         KPOT_STORE_FILE: path.join(path.dirname(ORDERS_FILE), 'store.local.json'),
+        /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
+           refuses those outside opening hours. The clock must not decide these
+           cases. See hoursSpec() in server.js. */
+        KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
         KPOT_PRINT_FILE: PRINT_FILE,
         /* Reach "failed" on the first attempt. The real backoff runs 2s, 4s,
            8s … 60s, so waiting out 10 attempts would add ~5 minutes to the
