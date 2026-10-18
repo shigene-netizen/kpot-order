@@ -1010,13 +1010,15 @@ function driverAuthorized(req) {
 }
 
 /* ---- Outgoing mail ------------------------------------------------------
-   GONE on 2026-10-16, with the e-mail recovery path it served. The owner's
-   decision ("不需要EMAIL验证了，凭手机号码就可以领奖励了") removed the only thing
-   this server ever sent, so the mailer, the /api/recovery/* endpoints and the
-   Gmail app-password dependency all went with it. Nothing here talks SMTP any
-   more — see `mailer.js` in git history if it is ever wanted back, and note it
-   was removed because the owner did not want the dependency, not because it
-   did not work. */
+   Back on 2026-10-17, after a short removal: the owner dropped the e-mail
+   recovery path on 2026-10-16 ("不需要EMAIL验证了，凭手机号码就可以领奖励了"),
+   which briefly took the mailer with it, then asked for new-order e-mail
+   notifications — so `mailer.js` (zero-dependency SMTP) is loaded at the top of
+   this file and sends two messages: one to the owner when an order arrives,
+   one to the guest when it is ready. Credentials live in
+   secrets.local.json (gmailUser / gmailAppPassword); when they are missing the
+   mailer reports `not configured` and every sender no-ops silently — orders
+   still flow, only the notifications stop. */
 
 /* ---- The shop's clock ---------------------------------------------------
    Every date this server computes is LOCAL-time arithmetic: dateKeyOf() decides
@@ -1702,9 +1704,6 @@ function scheduledForMsOf(order) {
   return isFinite(t) ? t : 0;
 }
 
-/* Best-effort push to the owner's own automation (Zapier / Make / n8n / a
-   Google Sheet script) when an order arrives or its status changes. Never
-   blocks the request. */
 /* Best-effort e-mail to the owner when a new order arrives. Never blocks the
    request, never throws. Disabled when dispatch.notifyTo is blank or when the
    mailer is not configured. */
