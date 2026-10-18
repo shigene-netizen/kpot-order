@@ -51,6 +51,7 @@ python make_admin_qr.py <线上地址>
 | `assets/app.js` | 点餐逻辑 |
 | `assets/styles.css` | 界面样式 |
 | `server.js` | **小后端**：创建 Stripe 支付会话 + 静态文件托管 |
+| `geo.js` | **外送 2 英里距离校验**（地理编码 + Haversine，见四点六） |
 | `pricing.js` | **服务端重新计价**（防篡改核心，见第九节） |
 | `customers.js` | **会员积分 / 回头券的纯规则**（见五点八；2026-10-14 本地完成，未发布） |
 | `member.js` | **月度会员费 / 权益的纯规则**（2026-10-14 本地完成，未发布） |
@@ -380,6 +381,55 @@ hoursSpec: {
 > `maybeAutoPrepare()`（`storeGate` 附近），三个触发点：
 > 下单时、`settleBoardFromStripe()`（覆盖 Stripe 回跳和 Re-check 两条路）、
 > 以及 PATCH 里员工手改 paymentStatus。测试 `_dev/test_auto_prepare.js`。
+
+---
+
+## 四点六、外送只送 2 英里：超距自动拦截，引导改自取
+
+**规则（2026-10-18 店主定）**：外送只送店铺周围 **2 英里**。超出的一律
+**不让下单**，请客人改选自取或堂食。菜单卡片和官网落地页都已从 5 英里
+改成 2 英里。
+
+### 怎么量距离
+
+`geo.js`（零依赖）按三级走，**只有拿到实在证据才拦**：
+
+| 级别 | 做法 | 结果 |
+|---|---|---|
+| 1. 街道级（可信） | 用**美国人口普查局免费地理编码**（无需密钥）把地址变成坐标，和店铺坐标算 Haversine 直线距离 | ≤2 英里放行，>2 英里 **拦截** |
+| 2. ZIP 码兜底 | 地址编码不出来（新小区、写法生僻）时，查内置的附近 ZIP 质心表；质心在 2+1 英里内放行，超出 **拦截** | 精度换覆盖，只在兜底时用 |
+| 3. 量不了（**故障开放**） | 地理编码服务挂了、地址无法定位 | **放行**，订单照收——地址照印在厨房小票上 |
+
+> 第 3 条是故意的：**不能因为政府网站打不开就让店开不了张**。
+> 拦截只发生在「有实据超距」时。
+
+### 在哪拦截（两道，都是服务端）
+
+1. **`POST /api/checkout`**（创建 Stripe 会话前）——钱还没移动就被拦下
+2. **`POST /api/orders`**（订单上看板前）——按**生效渠道**判断，改包名绕不过
+
+两道都返回：
+
+```json
+{ "error": "delivery_out_of_range", "miles": 9.2, "radius": 2,
+  "message": "That address is about 9.2 miles from us — we deliver within 2 miles. Please choose Pickup or Dine-In." }
+```
+
+### 客人那边（提前告知，不用等付钱）
+
+结账页选 Delivery 后，地址框边打边查（`POST /api/delivery/check`）：
+
+- **超距**：红卡片说明原因 + 「Switch to Pickup」一键转自取，**Place Order 同时变灰**
+- **在范围内**：一行小绿字（街道级还会写上「离我们 0.7 mi」）
+- **查不到**：一行小灰字说明情况，**照样能下单**（和服务端故障开放一致）
+
+自取 / 堂食的单完全不查——那个框填的是取餐时间或桌号。
+
+### 测试
+
+- `_dev/test_delivery_geo.js`（26 项，纯逻辑，本地假地理编码）
+- `_dev/probe_delivery_geo_http.js`（29 项，起真服务 + 假 Stripe，两道拦截都验）
+- `_dev/probe_delivery_geo_ui.js`（16 项，真浏览器，客人看到的每一种状态）
 
 ---
 
@@ -1263,32 +1313,39 @@ bash _dev/run_all.sh
 STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 ```
 
-当前 **24 个套件，全绿**：
+当前 **34 个套件，全绿**：
 
 | 套件 | 覆盖 | 项数 |
 |---|---|---|
-| `test_counter_cap` | 到店付款 $30 上限的规则 | 20 |
+| `test_counter_cap` | 到店付款 $30 上限的规则 | 34 |
 | `test_store_gate` | 渠道开关的服务端拦截（未知值 fail closed） | 14 |
 | `test_hours` | 营业时段徽章的 20 个边界 | 20 |
-| `test_printer` | 票据版式，**逐字节**（含样式不残留、折扣行） | 73 |
+| `test_printer` | 票据版式，**逐字节**（含样式不残留、折扣行） | 79 |
 | `test_discount` | 折扣的三种形式、税按折后价算、折扣不得超额 | 53 |
 | `test_loyalty` | 积分/盖章/回头券的规则：手机号拒绝而非猜测、基数不含税、盖章用计数器、四选一、退分只退一次 | 197 |
 | `test_member` | 月度会员的规则：四项权益互斥、续费按「日」幂等、配置缺失≠写坏（fail closed） | 144 |
 | `test_schedule` | 限时段配送的规则：只从明天起、时段在营业时间内、容量从订单推导、DST 安全 | 117 |
-| `test_print_auth` | 打印接口的鉴权边界（3 种密钥组合） | 16 |
+| `test_delivery_geo` | **外送 2 英里**：街道级/ZIP 兜底/故障开放三档，Haversine 精度（2026-10-18 新增） | 26 |
+| `test_print_auth` | 打印接口的鉴权边界（3 种密钥组合） | 17 |
 | `test_recheck_payment` | 补单：付费未报信的订单能被服务端结算（Stripe 用桩） | 34 |
-| `test_auto_prepare` | 自动下厨房：谁能自动、谁不能、开关落盘与重启后仍在 | 41 |
-| `test_backups` | 启动快照 + 变动即备份 + 硬杀不丢数据（含会员表） | 9 |
+| `test_auto_prepare` | 自动下厨房：谁能自动、谁不能、开关落盘与重启后仍在 | 50 |
+| `test_backups` | 启动快照 + 变动即备份 + 硬杀不丢数据（含会员表） | 10 |
 | `test_flush_survives_kill` | 定时刷盘（不依赖关闭钩子） | — |
-| `probe_counter_cap_http` | 上限真的被 `handleCreateOrder` 调用 | 6 |
+| `probe_counter_cap_http` | 上限真的被 `handleCreateOrder` 调用 | 11 |
 | `probe_discount_http` | 优惠码真的被解析/计价/只在落单时消耗；店员打折重开 | 27 |
-| `probe_loyalty` | 真服务端：到店付款**点了 Collected 才发分**、伪造 `paymentStatus` 会被打回、取消退分只退一次、后台/导出的鉴权 | 85 |
-| `probe_member` | 真服务端：会员权益真的接上了计价与发券、手动确认才生效、倍数不从 payload 读 | 39 |
+| `probe_loyalty` | 真服务端：到店付款**点了 Collected 才发分**、伪造 `paymentStatus` 会被打回、取消退分只退一次、后台/导出的鉴权 | 103 |
+| `probe_throttle_isolate` | 限流按接口分桶：重新计价不会把下单挤爆 | 7 |
+| `probe_member` | 真服务端：会员权益真的接上了计价与发券、手动确认才生效、倍数不从 payload 读 | 43 |
+| `probe_phone_rewards` | 真服务端：手机号就是凭证（裸号可查可花）的全部边界 | 41 |
 | `probe_schedule` | 真服务端：时段容量从实时订单推导、渠道关时 409、payload 校验、次日单不跳厨房 | 34 |
+| `probe_delivery_geo_http` | **外送 2 英里**：两道钱关口真的拦、桩 Stripe 上结账不 500（2026-10-18 新增） | 29 |
 | `probe_print_flow` | 真服务端 + 真代理 + 假打印机，整条打印链路（含「打印机失联时理由要写明地址」） | 24 |
-| `test_agent_discovery` | 打印代理能不能自己跟上换掉的网站地址 | 25 |
+| `test_agent_discovery` | 打印代理能不能自己跟上换掉的网站地址 | 27 |
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
 | `probe_guest_discount` | **真浏览器**里输优惠码：折扣行、总额、改数量后重新计价 | 19 |
+| `probe_delivery_pay` | **真浏览器**：外送免费行两处一致、到店付款被禁用且给出理由、切渠道自动换支付方式、日期/时间选择器能点 | 41 |
+| `probe_delivery_geo_ui` | **真浏览器**：超距红卡片 + 一键转自取 + 禁用 Place Order、范围内小绿字、查不到只提示不拦（2026-10-18 新增） | 16 |
+| `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |
 | `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因 | 29 |
 | `probe_cancel_settles` | 放弃付款的订单不会留在看板上（真实 Stripe） | 5 |
@@ -1313,12 +1370,25 @@ KPOT_MENU_FILE=...       # 店主改过的菜单（默认 menu.local.json）
 ORDERS_BACKUP_DIR=...    # 备份目录（默认 order-backups/）
 KPOT_SECRETS_FILE=...    # 密钥文件（默认 secrets.local.json）
 KPOT_DISCOUNTS_FILE=...  # 优惠码（默认 discounts.local.json）
+KPOT_HOURS_SPEC=...      # 营业时段覆盖（JSON）—— 2026-10-18 新增，见下
 ```
+
+> **`KPOT_HOURS_SPEC` 为什么存在**：营业时间 tick 把 `open` 严格按营业时钟
+> 驱动，店主的手动开关只用于提前打烊。于是**晚上关了店之后，浏览器套件
+> 全都推不动购物车**（客人页不接单）—— nightly 9:30 之后全红，而且红的
+> 原因和被测的东西毫无关系。给测试留一条缝：传一个 24 小时营业的时段
+> （`{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}`），店就在任何
+> 钟点都开着。**生产环境绝不能设**（设了启动时会大声警告）。
 
 > 指纹比对覆盖 **7 个文件**（订单 / 会员 / 开关 / 菜单 / 打印 / 密钥 / 优惠码），
 > 前后不一致就判整次失败。加新检查时先问一句：**除了我盯的这个文件，还有哪些
 > 文件会被写？** —— `store.local.json`、`menu.local.json` 和 2026-10-14 的
 > `customers.local.json` 曾经都是漏掉的那几个。
+>
+> **2026-10-18 又抓到一个**：营业时间 tick 每次开/关 Transition 都会
+> **落盘** store status（`saveStoreStatus`）。于是**没钉 `KPOT_STORE_FILE`
+> 的套件在晚上 9 点半之后跑，就会把店里真实的开关文件改写掉**——即使它
+> 从来没 POST 过 `/api/store`。现在所有起服务端的套件都钉上这一个变量。
 
 `run_all.sh` 会在跑之前和跑之后各取一次这些状态文件的指纹（md5 + 文件名），
 **不一致就判定失败**，并打印是哪个文件变了。
