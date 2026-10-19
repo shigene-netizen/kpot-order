@@ -521,6 +521,11 @@ img { max-width: 100%; display: block; }
    muted on purpose: it is the comparison, not the price. */
 .trow b.free { color: var(--green); }
 .trow b.free s { color: var(--cream-dim); font-weight: 600; opacity: .7; }
+/* The delivery-minimum gap line. Gold like .ia-state.warn's family, not red:
+   nothing is broken, the cart is just small — it reads as an invitation to
+   add one more dish, which is exactly what it is. */
+.trow.min-hint { font-size: 12.5px; }
+.trow.min-hint b { color: #F2A65A; font-weight: 800; }
 
 /* Tip selector */
 .tip-row { display: flex; gap: 7px; margin-top: 8px; }

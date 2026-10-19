@@ -114,6 +114,24 @@ const CONFIG = {
        Set this to true only if you really do collect on the doorstep. */
     allowCounter: false,
 
+    /* ---- Delivery minimum -------------------------------------------------
+       The smallest food subtotal that may be delivered. The 2-mile rule
+       (geo.js) decides WHERE we deliver; this decides HOW BIG an order has
+       to be to earn a run — a driver crossing town for a $6 bowl loses the
+       shop money, and "no minimum" was the one promise the old landing page
+       made that this setting now takes back (owner's decision, 2026-10-19).
+
+       Measured on the GROSS food subtotal: the line the guest's bill prints
+       as "Subtotal", before any coupon or reward, and before tax, tip and
+       the delivery fee. That is the number the guest can see and reconcile,
+       so a refusal never reads as a bait-and-switch.
+
+       Set to 0 (or delete the key) for no minimum. BOTH money gates enforce
+       it — POST /api/checkout and POST /api/orders, see deliveryMinVerdict()
+       in server.js — because the browser's warning is a courtesy and the
+       request that moves money arrives from the client. */
+    minSubtotal: 10,
+
     schedule: {
       /* Most orders per window per day. When a window is full the guest simply
          cannot pick it — no waiting list, no "we'll try". */

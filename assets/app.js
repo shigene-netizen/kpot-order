@@ -156,18 +156,43 @@
   }
   /* ONE renderer for the delivery line. The cart and the checkout used to
      build this row separately and drifted; a free delivery is exactly the
-     case where the two would disagree about whether to show the row at all. */
+     case where the two would disagree about whether to show the row at all.
+     The minimum hint rides along in here for the same reason — every totals
+     view already calls this once, so one place is one truth. */
   function deliveryRowHTML() {
     if (state.orderType !== 'delivery' || !deliveryOn()) return '';
     const fee = deliveryFee();
-    if (fee > 0) {
-      return '<div class="trow"><span>Delivery</span><b>' + money(fee) + '</b></div>';
+    const row = fee > 0
+      ? '<div class="trow"><span>Delivery</span><b>' + money(fee) + '</b></div>'
+      : '<div class="trow"><span>Delivery</span><b class="free">' +
+        (deliveryFeeWas() > 0 ? '<s>' + money(deliveryFeeWas()) + '</s> ' : '') + 'FREE</b></div>';
+    const short = deliveryShortfall();
+    if (short > 0) {
+      /* Gold, not red: nothing is broken — the cart is just small. Red is
+         for errors; this is an invitation to add one more thing. */
+      return row + '<div class="trow min-hint"><span>Delivery minimum ' +
+        money(deliveryMin()) + '</span><b>add ' + money(short) + ' more</b></div>';
     }
-    /* Free — and the row STAYS, because the saving is the message. The old
-       price is struck through when one is configured. */
-    const was = deliveryFeeWas();
-    return '<div class="trow"><span>Delivery</span><b class="free">' +
-      (was > 0 ? '<s>' + money(was) + '</s> ' : '') + 'FREE</b></div>';
+    return row;
+  }
+  /* ---- Delivery minimum (guest side) -------------------------------------
+     Mirrors deliveryMinVerdict() in server.js — that is the copy that
+     enforces it. This one exists so a guest building a small delivery cart
+     hears the size of the gap BEFORE checkout refuses the payment for the
+     same reason. Measured on the same number the server judges: the gross
+     food subtotal, before any reward or coupon — a $12 cart with a $3
+     reward still clears a $10 floor, on the page and on the server. */
+  function deliveryMin() {
+    const d = CONFIG.delivery || {};
+    const n = Number(d.minSubtotal);
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  function deliveryShortfall() {
+    if (state.orderType !== 'delivery' || !deliveryOn()) return 0;
+    const min = deliveryMin();
+    if (!min) return 0;
+    const gap = round2(min - cartSubtotal());
+    return gap > 0 ? gap : 0;
   }
 
   /* ---- Windowed delivery picker ----------------------------------------

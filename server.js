@@ -786,6 +786,32 @@ async function handleCheckout(req, res) {
     }
   }
 
+  /* ---- Delivery minimum — the second money gate --------------------------
+     Same rule, same order of business as handleCreateOrder: the radius
+     decides WHERE we deliver, this decides HOW BIG an order has to be. Runs
+     after the distance gate (a far-away small order is a distance problem,
+     and the guest fixes the address or the type before the cart) and before
+     Stripe, because there is no point taking a card for an order the kitchen
+     will refuse at the door.
+
+     Measured on `priced.subtotal` — the gross food line, which applyDiscount
+     leaves untouched (it only re-computes tax and total), so a guest at $12
+     who redeems a $3 reward still clears a $10 floor. */
+  const minVerdict = deliveryMinVerdict(priced.subtotal, order.orderType, ASSETS.CONFIG);
+  if (minVerdict.blocked) {
+    console.warn('[kpot] checkout refused — delivery below minimum — $' +
+      priced.subtotal.toFixed(2) + ' < $' + minVerdict.min.toFixed(2));
+    return sendJSON(res, 409, {
+      error: 'delivery_below_minimum',
+      min: minVerdict.min,
+      subtotal: minVerdict.subtotal,
+      short: minVerdict.short,
+      message: 'Delivery orders start at $' + minVerdict.min.toFixed(2) +
+        ' of food — add $' + minVerdict.short.toFixed(2) +
+        ' more, or choose Pickup or Dine-In.'
+    });
+  }
+
   try {
     const out = await createStripeSession(priced, order, requestBaseUrl(req));
     if (out.error) {
@@ -1858,6 +1884,34 @@ function counterDeliveryVerdict(payMethod, orderType, cfg) {
   return { blocked: true, code: 'counter_not_allowed_delivery' };
 }
 
+/* ---- Delivery minimum — the smallest order that earns a driver's trip ---
+   The 2-mile rule (geo.js) decides WHERE we deliver; this decides HOW BIG an
+   order has to be to be delivered at all. A run across town for a $6 bowl
+   loses the shop money, so the owner set a floor (2026-10-19, $10) — and the
+   landing page's old "NO MINIMUM" promise was retired with it.
+
+   Measured on the GROSS food subtotal — the line the guest's bill prints as
+   "Subtotal", before any coupon or reward and before tax, tip and the
+   delivery fee. That is the number the guest can see and reconcile, so a
+   refusal never reads as a bait-and-switch.
+
+   Applies to every delivery order regardless of payment method (a delivery
+   is prepaid anyway — see counterDeliveryVerdict), and unlike the counter
+   ceiling it needs no online fallback: the floor is legitimate with or
+   without card payments, because it is about the run, not the risk.
+
+   Pure, like its neighbours, so _dev/test_delivery_min.js can lift the real
+   rule out of this file instead of re-implementing it. */
+function deliveryMinVerdict(subtotal, orderType, cfg) {
+  if (orderType !== 'delivery') return { blocked: false };
+  const d = (cfg && cfg.delivery) || {};
+  const min = Number(d.minSubtotal);
+  if (!isFinite(min) || min <= 0) return { blocked: false };  // no floor configured
+  if (!isFinite(subtotal) || subtotal >= min) return { blocked: false };
+  const short = Math.round((min - subtotal) * 100) / 100;
+  return { blocked: true, code: 'delivery_below_minimum', min: min, subtotal: subtotal, short: short };
+}
+
 /* Is there a real online payment path on this server? Mirrors the guest
    page's own check (stripe enabled + a way to actually charge). */
 function onlinePaymentAvailable() {
@@ -2032,6 +2086,29 @@ async function handleCreateOrder(req, res) {
         source: geo.source
       };
     }
+  }
+  /* ---- Delivery minimum — the smallest order that earns a run ------------
+     The radius decides WHERE we deliver; this decides HOW BIG an order has
+     to be to be delivered at all. Runs before the payment-method rules so a
+     $6 delivery is reported for its size, not for how the guest meant to
+     pay for it — the first thing to fix is the cart, not the method.
+
+     Measured on the priced GROSS food subtotal (the printed "Subtotal"
+     line), so the number the guest sees on the bill is the number that was
+     judged. */
+  const minVerdict = deliveryMinVerdict(priced.subtotal, effectiveType, ASSETS.CONFIG);
+  if (minVerdict.blocked) {
+    console.warn('[kpot] refused delivery order under the minimum — $' +
+      priced.subtotal.toFixed(2) + ' < $' + minVerdict.min.toFixed(2));
+    return sendJSON(res, 409, {
+      error: 'delivery_below_minimum',
+      min: minVerdict.min,
+      subtotal: minVerdict.subtotal,
+      short: minVerdict.short,
+      message: 'Delivery orders start at $' + minVerdict.min.toFixed(2) +
+        ' of food — add $' + minVerdict.short.toFixed(2) +
+        ' more, or choose Pickup or Dine-In.'
+    });
   }
   /* Delivery must be prepaid — see counterDeliveryVerdict(). Checked against
      the EFFECTIVE type, so a tampered payload cannot dodge the rule by sending
