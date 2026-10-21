@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111014">
-<title>KPOT EXPRESS — LUCKY 66 · Win a $66 Gift Card</title>
-<meta name="description" content="Free to enter — no purchase necessary. One verified winner gets a $66 KPOT EXPRESS gift card.">
+<title>KPOT EXPRESS — LUCKY 66 · Win a $66 Store-Credit Code</title>
+<meta name="description" content="Free to enter — no purchase necessary. One verified winner gets a $66 KPOT EXPRESS store-credit code.">
 <link rel="apple-touch-icon" href="assets/icon-192.png">
 <style>
   :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
@@ -57,6 +57,19 @@
   .msg { font-size:13px; line-height:1.55; margin-top:10px; }
   .msg.err { color:#ff9b93; }
   .msg.ok { color:#6ee787; }
+  .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:50;
+    display:flex; align-items:center; justify-content:center; padding:16px; }
+  .modal-backdrop[hidden] { display:none; }
+  .modal { background:var(--card); border:1px solid var(--line); border-radius:16px;
+           max-width:520px; width:100%; max-height:88vh; overflow:auto; padding:18px; }
+  .modal h3 { margin:0 0 10px; font-size:17px; }
+  .modal-body { font-size:13px; color:var(--mut); line-height:1.6; }
+  .modal-body ul { padding-left:18px; margin:8px 0; }
+  .modal-body li { margin-bottom:6px; }
+  .modal-body b { color:var(--txt); }
+  .modal-body a { color:#8ab4ff; }
+  .modal-actions { display:flex; gap:8px; margin-top:14px; }
+  .modal-actions .btn { flex:1; }
 
   .refbox { text-align:center; padding:6px 0 2px; }
   .refbox .big { font-size:24px; font-weight:900; letter-spacing:.08em; color:var(--gold); }
@@ -90,8 +103,8 @@
     <!-- 1 + 2 + 3: title, prize, live count, status -->
     <section class="card prize">
       <div class="eyebrow">KPOT EXPRESS — LUCKY 66</div>
-      <h2>WIN A <em>$66</em><br>KPOT EXPRESS GIFT CARD</h2>
-      <p class="count"><b id="countNow">–</b> / <span id="countMax">100</span> verified entries</p>
+      <h2>WIN A <em>$66</em><br>KPOT EXPRESS CREDIT CODE</h2>
+      <p class="count"><b id="countNow">–</b> / <span id="countMax">200</span> verified entries</p>
       <span class="pill off" id="statusPill">Loading…</span>
       <p class="free">FREE TO ENTER — NO PURCHASE NECESSARY</p>
       <p class="tiny">One entry per person per round. The round closes on the date
@@ -184,6 +197,48 @@
       <a href="/">Back to the menu</a>
     </section>
   </main>
+
+  <!-- legal consent modal: shown before registration is submitted -->
+  <div class="modal-backdrop" id="legalModal" hidden role="dialog" aria-modal="true"
+       aria-labelledby="legalTitle">
+    <div class="modal">
+      <h3 id="legalTitle">Before you enter — please read and agree</h3>
+      <div class="modal-body">
+        <p>LUCKY 66 is a <b>free sweepstakes</b> — no purchase, payment, tip, or
+           restaurant visit is ever required. One entry per verified e-mail per round.
+           The winner is chosen by a cryptographically secure random draw on the
+           shop's server when the round closes.</p>
+        <ul>
+          <li><b>Eligibility.</b> You must be 18 or older and live in an eligible
+              area. Void where prohibited. See the Official Rules for the full
+              eligibility list.</li>
+          <li><b>One entry per person.</b> Duplicate or unverified e-mail addresses
+              do not count toward the 200-entry cap.</li>
+          <li><b>Prize.</b> One $66 KPOT EXPRESS store-credit code (no physical card is issued).\n              Each purchase deducts from the balance until it is used up. If the balance is\n              less than the order total, the difference is paid with another payment method.\n              Not redeemable for cash. No transfer or substitution except as stated in the rules.</li>
+          <li><b>Winner notice.</b> The winner is notified by e-mail and has 14 days
+              to claim; an alternate winner may be drawn if unclaimed.</li>
+          <li><b>Privacy.</b> Your e-mail is used only to verify your entry and to
+              contact you if you win. Marketing messages are optional and separate —
+              declining them never affects your entry.</li>
+          <li><b>No warranty.</b> KPOT EXPRESS is not responsible for lost, late, or
+              misdirected e-mail, or for technical failures beyond its control.</li>
+        </ul>
+        <p>Full text: <a href="/giveaway-rules.html" target="_blank" rel="noopener">Official Rules</a>
+           &middot; <a href="/giveaway-privacy.html" target="_blank" rel="noopener">Privacy Policy</a></p>
+        <label class="checks" style="margin-top:12px">
+          <input type="checkbox" id="legalAgreeIn">
+          <span>I have read and agree to the Official Rules, the Privacy Policy, and
+          the legal declarations above. I confirm I am 18 or older and eligible to
+          enter. I understand this is a free sweepstakes and no purchase is necessary.</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost" id="legalCancelBtn" type="button">Cancel</button>
+        <button class="btn primary" id="legalAgreeBtn" type="button" disabled>
+          Agree &amp; continue</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="assets/config.js"></script>
@@ -224,7 +279,7 @@
     $('#main').hidden = false;
 
     var r = j.round || {};
-    $('#countMax').textContent = r.maxEntries || 100;
+    $('#countMax').textContent = r.maxEntries || 200;
     $('#countNow').textContent = (r.verifiedCount == null ? '–' : r.verifiedCount);
     $('#closesLabel').textContent = r.closesAt ? fmtDate(r.closesAt) : 'see rules';
 
@@ -239,7 +294,7 @@
       pill.textContent = r.winnerAnnounced ? 'Winner selected' : 'Round closed';
     } else if (r.reason === 'full') {
       pill.classList.add('full');
-      pill.textContent = 'Full — 100 verified entries';
+      pill.textContent = 'Full — 200 verified entries';
     } else if (r.reason === 'deadline_passed' || r.status === 'CLOSED' || r.status === 'CANCELLED') {
       pill.classList.add('closed');
       pill.textContent = r.status === 'CANCELLED' ? 'Cancelled' : 'Closed';
@@ -261,12 +316,68 @@
       $('#closedTitle').textContent = r.status === 'CANCELLED' ? 'This round was cancelled'
         : (r.reason === 'full') ? 'This round is full' : 'This round is closed';
       $('#closedMsg').textContent = r.reason === 'full'
-        ? 'All 100 verified entries are taken. Thank you — watch for the next round!'
+        ? 'All 200 verified entries are taken. Thank you — watch for the next round!'
         : 'Thank you for your interest. Watch this page for the next round.';
     }
   }
 
+  /* ---- legal consent modal -------------------------------------------------- */
+  var legalPending = null;   // holds { email, ack, mkt } until user agrees
+  function openLegalModal() { $('#legalAgreeIn').checked = false;
+                              $('#legalAgreeBtn').disabled = true;
+                              $('#legalModal').hidden = false; }
+  function closeLegalModal() { $('#legalModal').hidden = true; legalPending = null; }
+  $('#legalAgreeIn').addEventListener('change', function () {
+    $('#legalAgreeBtn').disabled = !this.checked;
+  });
+  $('#legalCancelBtn').addEventListener('click', closeLegalModal);
+  $('#legalAgreeBtn').addEventListener('click', function () {
+    if (!$('#legalAgreeIn').checked || !legalPending) return;
+    $('#legalModal').hidden = true;
+    doRegister(legalPending.email, legalPending.ack, legalPending.mkt);
+    legalPending = null;
+  });
+
   /* ---- register ------------------------------------------------------------ */
+  function doRegister(email, ack, mkt) {
+    busy = true;
+    $('#submitBtn').disabled = true;
+    $('#submitBtn').textContent = 'Sending…';
+    msg($('#formMsg'), '', null);
+
+    fetch('/api/giveaway/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email, eligibilityAck: ack, marketingOptIn: mkt,
+        rulesVersion: window.__LUCKY66_RULES_VERSION__, source: 'giveaway-page'
+      })
+    }).then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+      .then(function (out) {
+        busy = false;
+        $('#submitBtn').disabled = false;
+        $('#submitBtn').textContent = 'Enter the giveaway';
+        var j = out.j || {};
+        if (out.s === 200 && j.ok) {
+          show('#formCard', false);
+          show('#sentCard', true);
+          $('#sentMsg').textContent = j.message ||
+            'Check your inbox to confirm your entry.';
+          load();
+        } else if (out.s === 429) {
+          msg($('#formMsg'), 'Too many attempts. Please wait a few minutes and try again.', 'err');
+        } else {
+          msg($('#formMsg'), j.message || 'Could not start your entry. Please try again.', 'err');
+        }
+      })
+      .catch(function () {
+        busy = false;
+        $('#submitBtn').disabled = false;
+        $('#submitBtn').textContent = 'Enter the giveaway';
+        msg($('#formMsg'), 'No connection — please try again.', 'err');
+      });
+  }
+
   $('#regForm').addEventListener('submit', function (ev) {
     ev.preventDefault();
     if (busy) return;
@@ -276,10 +387,9 @@
     if (!email) { msg($('#formMsg'), 'Enter your e-mail address first.', 'err'); return; }
     if (!ack) { msg($('#formMsg'), 'Please confirm the eligibility statement and the Official Rules.', 'err'); return; }
 
-    busy = true;
-    $('#submitBtn').disabled = true;
-    $('#submitBtn').textContent = 'Sending…';
-    msg($('#formMsg'), '', null);
+    // Show the legal consent modal first; registration only proceeds after agreement.
+    legalPending = { email: email, ack: ack, mkt: mkt };
+    openLegalModal();
 
     fetch('/api/giveaway/register', {
       method: 'POST',

@@ -11,10 +11,10 @@
         3. unverified addresses never count and never win
         4. duplicate e-mail never adds an entry
         5. marketing opt-OUT never blocks entry; opt-in records consent
-        6. 100 verified entries fill the round
-        7. concurrent verification cannot produce entry 101
-        8. the 101st verification is refused politely
-        9. a round can close short of 100 and still be drawn
+        6. 200 verified entries fill the round
+        7. concurrent verification cannot produce entry 201
+        8. the 201st verification is refused politely
+        9. a round can close short of 200 and still be drawn
        10. the draw selects exactly one verified entry, idempotently
        11. repeated draw requests cannot change the result
        12. the prize cannot be issued twice
@@ -118,7 +118,7 @@ const RULES = 'LUCKY66-2026-10-20';
 
 /* Synthetic guests each arrive from their own address, the way real guests
    arrive from their own phones on the shop wifi. The per-IP ceilings exist
-   for bots, so simulating 100 humans from one IP would prove nothing —
+   for bots, so simulating 200 humans from one IP would prove nothing —
    and the X-Forwarded-For header is what the proxy sets in production. */
 let guestSeq = 0;
 function guestH() {
@@ -205,7 +205,7 @@ async function main() {
   const opensAt = new Date(Date.now() - 60 * 1000).toISOString();
   const closesAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
   const mk = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds',
-    { opensAt: opensAt, closesAt: closesAt, maxEntries: 100, openNow: true }, adminH());
+    { opensAt: opensAt, closesAt: closesAt, maxEntries: 200, openNow: true }, adminH());
   check('an admin round is created and opened',
     mk.status === 200 && mk.j.ok && mk.j.round.status === 'OPEN' && mk.j.round.verifiedCount === 0);
   const ROUND = mk.j.round.id;
@@ -232,8 +232,8 @@ async function main() {
   const ver1 = await req(PORT_B, 'GET', '/api/giveaway/verify?token=' + token1);
   check('2/2. verification succeeds and returns a reference',
     ver1.status === 200 && ver1.j.ok === true && /^L66-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(ver1.j.ref));
-  check('the count is honest (1/100)',
-    ver1.j.verifiedCount === 1 && ver1.j.maxEntries === 100);
+  check('the count is honest (1/200)',
+    ver1.j.verifiedCount === 1 && ver1.j.maxEntries === 200);
   check('a confirmation e-mail was produced', newMails().some((m) => m.kind === 'entered' && m.text.indexOf(ver1.j.ref) >= 0));
 
   /* ---- 17: replay ---- */
@@ -315,12 +315,12 @@ async function main() {
     (await req(PORT_B, 'GET', '/api/giveaway/admin/consents', null, adminH())).j.consents
       .some((c) => c.unsubscribedAt));
 
-  /* ---- 6 + 7 + 8: fill the round to exactly 100, concurrently ---- */
+  /* ---- 6 + 7 + 8: fill the round to exactly 200, concurrently ---- */
   /* 96 registered so far (1+1 pending + 2 + …): recount from the server. */
   const beforeFill = await req(PORT_B, 'GET', '/api/giveaway/status');
   const already = beforeFill.j.round.verifiedCount;
-  const need = 100 - already;
-  check('6. the round needs exactly ' + need + ' more verified entries to fill', need > 0 && need < 100);
+  const need = 200 - already;
+  check('6. the round needs exactly ' + need + ' more verified entries to fill', need > 0 && need < 200);
 
   /* Register the remainder, then verify them ALL AT ONCE. This is the
      concurrency case that matters: N simultaneous verifications against
@@ -350,7 +350,7 @@ async function main() {
   /* ---- 7: SIX verifications racing for FIVE slots -----------------------
      Register 6 more, then verify all 6 at the same instant. Exactly 5 may
      win; the 6th must be refused politely and must NOT create an entry.
-     This is the test that proves the 101st entry cannot happen. */
+     This is the test that proves the 201st entry cannot happen. */
   const raceTokens = [];
   for (let i = 0; i < 6; i++) {
     const r = await req(PORT_B, 'POST', '/api/giveaway/register', {
@@ -366,16 +366,16 @@ async function main() {
   const refused = results.filter((r) => r.status === 409);
   const afterRace = await req(PORT_B, 'GET', '/api/giveaway/status');
   check('7. six concurrent verifications for five slots yield exactly five entries',
-    winners.length === 5 && refused.length === 1 && afterRace.j.round.verifiedCount === 100,
+    winners.length === 5 && refused.length === 1 && afterRace.j.round.verifiedCount === 200,
     'winners=' + winners.length + ', refused=' + refused.length +
       ', verifiedCount=' + afterRace.j.round.verifiedCount);
   check('the losing verification was refused politely (no entry created)',
     refused.length === 1 && /Thank you/.test(refused[0].j.message));
 
-  /* Fill whatever remains, one at a time, then try the 101st. */
+  /* Fill whatever remains, one at a time, then try the 201st. */
   const stNow = await req(PORT_B, 'GET', '/api/giveaway/status');
   let guard = 0;
-  while (stNow.j.round.verifiedCount < 100 && guard++ < 50) {
+  while (stNow.j.round.verifiedCount < 200 && guard++ < 50) {
     await req(PORT_B, 'POST', '/api/giveaway/register', {
       email: 'topup' + guard + '@example.com', eligibilityAck: true, rulesVersion: RULES
     });
@@ -385,30 +385,30 @@ async function main() {
     stNow.j.round.verifiedCount = s.j.round.verifiedCount;
   }
   const full = await req(PORT_B, 'GET', '/api/giveaway/status');
-  check('6/8. the round holds exactly 100 verified entries', full.j.round.verifiedCount === 100);
+  check('6/8. the round holds exactly 200 verified entries', full.j.round.verifiedCount === 200);
   check('and the page would say FULL', full.j.round.reason === 'full' && full.j.round.acceptsEntries === false);
 
-  /* 8: the 101st participant. Registration checks capacity too, so a full
+  /* 8: the 201st participant. Registration checks capacity too, so a full
      round refuses at the form — politely, and without sending a verification
      link that could only fail. The race above already proved the same refusal
      at the verification gate. */
-  const reg101 = await req(PORT_B, 'POST', '/api/giveaway/register', {
+  const reg201 = await req(PORT_B, 'POST', '/api/giveaway/register', {
     email: 'one-hundred-first@example.com', eligibilityAck: true, rulesVersion: RULES
   }, guestH());
-  check('8. the 101st registration is refused politely when the round is full',
+  check('8. the 201st registration is refused politely when the round is full',
     reg101.status === 409 && reg101.j.reason === 'full' && /Thank you/.test(reg101.j.message),
     JSON.stringify(reg101.j));
-  const pendingBefore101 = (await req(PORT_B, 'GET', '/api/giveaway/status')).j.round.pendingCount;
-  const after101 = await req(PORT_B, 'GET', '/api/giveaway/status');
-  check('the refusal did not create an entry', after101.j.round.verifiedCount === 100);
+  const pendingBefore201 = (await req(PORT_B, 'GET', '/api/giveaway/status')).j.round.pendingCount;
+  const after201 = await req(PORT_B, 'GET', '/api/giveaway/status');
+  check('the refusal did not create an entry', after101.j.round.verifiedCount === 200);
   /* The round already holds pending records from earlier steps, so an absolute
      zero would be the wrong assertion. What must be true is that the refused
      address added NOTHING: no new pending row, and no new verification mail. */
-  const mailFor101 = newMails().some((m) =>
+  const mailFor201 = newMails().some((m) =>
     m.kind === 'verify' && m.to === 'one-hundred-first@example.com');
   check('and no verification link was queued for it',
-    after101.j.round.pendingCount === pendingBefore101 && mailFor101 === false,
-    'pending ' + pendingBefore101 + ' -> ' + after101.j.round.pendingCount + ', mail=' + mailFor101);
+    after101.j.round.pendingCount === pendingBefore201 && mailFor201 === false,
+    'pending ' + pendingBefore201 + ' -> ' + after101.j.round.pendingCount + ', mail=' + mailFor201);
 
   /* ---- 10/11/12: close, draw, prize, redeem ---- */
   const close = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND + '/transition',
@@ -418,7 +418,7 @@ async function main() {
   const draw = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND + '/draw', {}, adminH());
   check('10. the draw selects exactly one winner',
     draw.status === 200 && draw.j.ok === true && /^L66-/.test(draw.j.draw.winnerRef) &&
-    draw.j.draw.entriesCount === 100);
+    draw.j.draw.entriesCount === 200);
   const winnerMail = newMails().find((m) => m.kind === 'winner');
   check('the winner is notified by e-mail',
     !!winnerMail && winnerMail.text.indexOf(draw.j.draw.winnerRef) >= 0);
@@ -449,11 +449,11 @@ async function main() {
     redeem.status === 200 && redeem.j.round.status === 'COMPLETED' &&
     redeem.j.round.redeemedAt !== null);
 
-  /* ---- 9: a round that closes short of 100 still draws ---- */
+  /* ---- 9: a round that closes short of 200 still draws ---- */
   const opens2 = new Date(Date.now() - 3600 * 1000).toISOString();
   const closes2 = new Date(Date.now() + 3600 * 1000).toISOString();
   const mk2 = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds',
-    { opensAt: opens2, closesAt: closes2, maxEntries: 100, openNow: true }, adminH());
+    { opensAt: opens2, closesAt: closes2, maxEntries: 200, openNow: true }, adminH());
   const ROUND2 = mk2.j.round.id;
   for (const e of ['short1@example.com', 'short2@example.com', 'short3@example.com']) {
     await req(PORT_B, 'POST', '/api/giveaway/register', { email: e, eligibilityAck: true, rulesVersion: RULES });
@@ -462,7 +462,7 @@ async function main() {
   }
   await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND2 + '/transition', { to: 'CLOSED' }, adminH());
   const draw3 = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND2 + '/draw', {}, adminH());
-  check('9. a round with 3 of 100 entries still draws one winner at its deadline',
+  check('9. a round with 3 of 200 entries still draws one winner at its deadline',
     draw3.status === 200 && draw3.j.draw.entriesCount === 3);
   const shortWinnerMail = newMails().find((m) => m.kind === 'winner');
   check('the short-round winner is one of its three verified entrants',
@@ -496,7 +496,7 @@ async function main() {
   check('even the admin export is masked (no raw address, masked shape everywhere)',
     expJson.status === 200 &&
     rawAddrs.every((a) => expText.indexOf(a) === -1) &&
-    expJson.j.entries.length === 100 &&
+    expJson.j.entries.length === 200 &&
     expJson.j.entries.every((e) => /^.\*\*\*@[^@]*$/.test(e.emailMasked)),
     'rawFound=' + rawAddrs.filter((a) => expText.indexOf(a) >= 0).join(',') +
       ', entries=' + (expJson.j.entries ? expJson.j.entries.length : 'n/a'));
@@ -506,7 +506,7 @@ async function main() {
   const csvLines = expCsv.split('\n');
   check('the CSV export is masked too (header + masked rows, no raw address)',
     csvLines[0] === 'ref,email_masked,verified_at,notice_version,marketing_opt_in' &&
-    csvLines.length === 101 &&
+    csvLines.length === 201 &&
     rawAddrs.every((a) => expCsv.indexOf(a) === -1) &&
     csvLines.slice(1).every((l) => /^.\*\*\*@[^@]*$/.test((l.split(',')[1] || ''))),
     csvLines.slice(0, 2).join(' | '));

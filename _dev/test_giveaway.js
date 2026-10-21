@@ -6,8 +6,8 @@
      · unverified addresses never take a slot
      · one entry per e-mail; duplicates never add an entry
      · marketing opt-out never blocks entry
-     · 100 verified fills a round; the 101st is refused politely
-     · a round closes at its deadline with fewer than 100
+     · 200 verified fills a round; the 201st is refused politely
+     · a round closes at its deadline with fewer than 200
      · the draw yields exactly one winner from the verified pool only
      · a repeated draw cannot change the result
      · a prize cannot be issued twice
@@ -29,7 +29,7 @@ function check(desc, ok, detail) {
 function section(t) { console.log('\n--- ' + t + ' ---'); }
 
 const CFG = GW.sanitizeGiveawayConfig({
-  enabled: true, maxEntries: 100, prizeValue: 66, rulesVersion: 'LUCKY66-TEST'
+  enabled: true, maxEntries: 200, prizeValue: 66, rulesVersion: 'LUCKY66-TEST'
 });
 const NOW = Date.parse('2026-10-25T12:00:00.000Z');
 
@@ -37,8 +37,8 @@ function round(over) {
   return Object.assign({
     id: 'L66-TEST-001',
     status: GW.STATUS.OPEN,
-    prize: { value: 66, currency: 'USD', desc: 'KPOT EXPRESS Gift Card' },
-    maxEntries: 100,
+    prize: { value: 66, currency: 'USD', desc: 'KPOT EXPRESS $66 Store-Credit Code' },
+    maxEntries: 200,
     opensAt: '2026-10-18T00:00:00.000Z',
     closesAt: '2026-11-15T00:00:00.000Z',
     entries: [], pending: [],
@@ -98,17 +98,17 @@ check('mask never shows the full address',
 section('capacity — judged at VERIFICATION time');
 
 let r = round();
-for (let i = 0; i < 99; i++) entry(r, 'guest' + i + '@example.com');
+for (let i = 0; i < 199; i++) entry(r, 'guest' + i + '@example.com');
 pendingOf(r, 'unverified@example.com');
 let v = GW.capacityVerdict(r, NOW);
 check('99 verified + 1 unverified still has room', v.ok && v.remaining === 1);
-check('the unverified address takes no slot', GW.entryCount(r) === 99 && GW.pendingCount(r) === 1);
+check('the unverified address takes no slot', GW.entryCount(r) === 199 && GW.pendingCount(r) === 1);
 
-entry(r, 'guest100@example.com');
+entry(r, 'guest199@example.com');
 v = GW.capacityVerdict(r, NOW);
-check('at 100 the round is full', !v.ok && v.reason === 'full');
+check('at 200 the round is full', !v.ok && v.reason === 'full');
 check('full is explained politely',
-  GW.reasonText('full').indexOf('100 verified entries') >= 0);
+  GW.reasonText('full').indexOf('200 verified entries') >= 0);
 
 /* ============================================================ */
 section('registration verdicts');
@@ -149,10 +149,10 @@ check('marketing opt-IN also passes (it is a separate choice)',
 section('verification — single use, expiring, capacity-at-verify');
 
 r = round();
-for (let i = 0; i < 100; i++) entry(r, 'fill' + i + '@example.com');
+for (let i = 0; i < 200; i++) entry(r, 'fill' + i + '@example.com');
 pendingOf(r, 'late@example.com');
 let vv = GW.verifyVerdict(r, 'token-for-late@example.com', NOW);
-check('the 101st verification is refused politely', !vv.ok && vv.reason === 'full');
+check('the 201st verification is refused politely', !vv.ok && vv.reason === 'full');
 check('the refusal message thanks them, not insults them',
   GW.reasonText('full').indexOf('Thank you') >= 0);
 
@@ -176,7 +176,7 @@ check('an expired token is refused as expired',
   GW.verifyVerdict(r, 'token-for-exp@example.com', NOW).reason === 'expired');
 
 /* ============================================================ */
-section('deadline closing short of 100');
+section('deadline closing short of 200');
 
 r = round();
 for (let i = 0; i < 7; i++) entry(r, 'early' + i + '@example.com');
@@ -196,14 +196,14 @@ check('an empty round cannot be drawn', GW.drawVerdict(empty).reason === 'no_ent
 section('drawing — one winner, equal odds, idempotent');
 
 r = round();
-for (let i = 0; i < 100; i++) entry(r, 'draw' + i + '@example.com');
+for (let i = 0; i < 200; i++) entry(r, 'draw' + i + '@example.com');
 r.status = GW.STATUS.CLOSED;
 check('draw verdict passes on a closed, non-empty round', GW.drawVerdict(r).ok);
 
 /* every index is reachable and maps to exactly that entry */
 let seen = {};
 let allDistinct = true;
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 200; i++) {
   const rec = GW.drawRecord(r, function (n) { return i; });
   if (i === 0) seen = {};
   const w = r.entries[i];
@@ -211,10 +211,10 @@ for (let i = 0; i < 100; i++) {
   seen[rec.winnerRef] = (seen[rec.winnerRef] || 0) + 1;
 }
 check('each index selects exactly that entry (uniform 1/n, no bias)',
-  allDistinct && Object.keys(seen).length === 100 && Object.keys(seen).every((k) => seen[k] === 1));
+  allDistinct && Object.keys(seen).length === 200 && Object.keys(seen).every((k) => seen[k] === 1));
 const rec0 = GW.drawRecord(r, function () { return 42; });
 check('the audit record carries the snapshot and the algorithm',
-  rec0.entriesCount === 100 && rec0.snapshot.length === 100 &&
+  rec0.entriesCount === 200 && rec0.snapshot.length === 200 &&
   rec0.algorithm.indexOf('crypto.randomInt') === 0);
 r.draw = rec0;
 check('a repeated draw is refused and the result is unchanged',
@@ -241,8 +241,8 @@ section('public views leak nothing');
 r = round();
 for (let i = 0; i < 45; i++) entry(r, 'view' + i + '@example.com');
 const view = GW.publicRound(r, NOW, CFG);
-check('the count is public and honest', view.verifiedCount === 45 && view.maxEntries === 100);
-check('the prize is a config fact', view.prizeValue === 66 && view.prizeDesc === 'KPOT EXPRESS Gift Card');
+check('the count is public and honest', view.verifiedCount === 45 && view.maxEntries === 200);
+check('the prize is a config fact', view.prizeValue === 66 && view.prizeDesc === 'KPOT EXPRESS $66 Store-Credit Code');
 const json = JSON.stringify(view);
 check('no e-mail address, hash or reference leaks to the customer page',
   json.indexOf('@example.com') === -1 && json.indexOf('sha') === -1 && json.indexOf('L66-') === -1);

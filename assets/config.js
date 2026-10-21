@@ -179,7 +179,7 @@ const CONFIG = {
     enabled: true,
     fee: 9.99,             // shown in the console; the money is collected by hand
     periodDays: 30,        // one renewal = this many days
-    percent: 5,            // % off every order. A garbage value means 0, not 100
+    percent: 5,            // % off every order. A garbage value means 0, not 200
     freeDelivery: true,    // waive the delivery fee on delivery orders
     pointsMultiplier: 2,   // points earned per dollar, multiplied
     couponValue: 5,        // one coupon per renewal period
@@ -360,8 +360,8 @@ const CONFIG = {
   },
 
   /* ---- LUCKY 66 giveaway -------------------------------------------------
-     FREE sweepstakes: e-mail verified entry, one entry per person, 100 per
-     round, one $66 gift card. No purchase, payment, tip or subscription is
+     FREE sweepstakes: e-mail verified entry, one entry per person, 200 per
+     round, one $66 store-credit code. No purchase, payment, tip or subscription is
      ever required or requested.
 
      ⛔ DISABLED BY DEFAULT. `enabled:false` keeps the customer page, the
@@ -382,9 +382,9 @@ const CONFIG = {
      giveaway copy is licensed from the Official Rules only. */
   giveaway: {
     enabled: false,
-    maxEntries: 100,
+    maxEntries: 200,
     prizeValue: 66,
-    prizeDesc: 'KPOT EXPRESS Gift Card',
+    prizeDesc: 'KPOT EXPRESS $66 Store-Credit Code',
     /* Bump this any time the Official Rules text changes in a way that
        matters to entrants — a stale acknowledgement must re-confirm. */
     rulesVersion: 'LUCKY66-2026-10-20',

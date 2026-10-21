@@ -112,9 +112,9 @@
         <div><label class="f" for="closesIn">Closes (local)</label>
           <input id="closesIn" type="datetime-local"></div>
         <div><label class="f" for="maxIn">Max entries</label>
-          <input id="maxIn" type="number" min="1" value="100"></div>
+          <input id="maxIn" type="number" min="1" value="200"></div>
         <div><label class="f" for="prizeIn">Prize description</label>
-          <input id="prizeIn" type="text" value="KPOT EXPRESS Gift Card"></div>
+          <input id="prizeIn" type="text" value="KPOT EXPRESS $66 Store-Credit Code"></div>
       </div>
       <div class="checks">
         <label><input type="checkbox" id="openNowIn"> Open immediately (skip DRAFT)</label>
@@ -237,7 +237,7 @@
     }
     if (r.status === 'DRAWN') {
       html += '<div class="row mt8" data-role="prize">' +
-        '<input type="text" data-f="code" placeholder="Gift card code" style="flex:1;min-width:180px">' +
+        '<input type="text" data-f="code" placeholder="Store-credit code" style="flex:1;min-width:180px">' +
         '<input type="text" data-f="note" placeholder="Note (optional)" style="flex:1;min-width:180px">' +
         '<button class="btn primary" data-act="prize">Issue prize & e-mail winner</button></div>';
     }
@@ -295,7 +295,7 @@
     if (act === 'prize') {
       var code = cardEl.querySelector('[data-f="code"]').value.trim();
       var pnote = cardEl.querySelector('[data-role="prize"] [data-f="note"]').value.trim();
-      if (code.length < 4) { showErr('Enter the gift card code (4+ characters).'); return; }
+      if (code.length < 4) { showErr('Enter the store-credit code (4+ characters).'); return; }
       btn.disabled = true;
       api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/prize', { code: code, note: pnote })
         .then(function (out) {
@@ -379,7 +379,7 @@
   document.getElementById('createBtn').addEventListener('click', function () {
     var opensAt = document.getElementById('opensIn').value;
     var closesAt = document.getElementById('closesIn').value;
-    var maxEntries = Number(document.getElementById('maxIn').value) || 100;
+    var maxEntries = Number(document.getElementById('maxIn').value) || 200;
     var prizeDesc = document.getElementById('prizeIn').value.trim();
     var openNow = document.getElementById('openNowIn').checked;
     if (!opensAt || !closesAt) { showErr('Set both the opening and the closing time.'); return; }

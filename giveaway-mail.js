@@ -7,7 +7,7 @@
 
        verify   "confirm your LUCKY 66 entry"   + single-use, 24h link
        entered  "you're in"                     + entry reference
-       winner   "you won the $66 gift card"     + claim instructions
+       winner   "you won the $66 store-credit code" + claim instructions
 
    Transport, in order:
      1. the shop's existing SMTP mailer (mailer.js / Gmail app password),
@@ -105,7 +105,7 @@ function body(kind, p) {
     ? 'Confirm your LUCKY 66 entry'
     : kind === 'entered'
       ? "You're in — LUCKY 66 entry " + (p.ref || '')
-      : 'You won the ' + (p.prizeDesc || 'KPOT EXPRESS gift card') + '!';
+      : 'You won a ' + (p.prizeDesc || 'KPOT EXPRESS $66 store-credit code') + '!';
   return { subject: subject, text: head + foot };
 }
 

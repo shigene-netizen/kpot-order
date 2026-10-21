@@ -528,7 +528,7 @@ async function adminRoute(rest, req, res, url, ctx) {
     }
     const code = String(body.code || '').trim();
     if (code.length < 4) {
-      return send(res, 400, { ok: false, reason: 'bad_code', message: 'Enter the gift card code (4+ characters).' });
+      return send(res, 400, { ok: false, reason: 'bad_code', message: 'Enter the store-credit code (4+ characters).' });
     }
     const winnerEmail = getPersonEmail(store, round, round.draw.winnerEntryId);
     round.prizeIssue = {

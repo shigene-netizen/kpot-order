@@ -18,12 +18,12 @@
   /* ---- Config normalisation -------------------------------------------------
      Fail CLOSED on garbage: an unreadable config must not open a paid lottery
      by accident. Unknown numbers fall back to the shipped conservative values
-     (100 entries, $66 prize), never to something bigger. */
+     (200 entries, $66 prize), never to something bigger. */
   var DEFAULTS = {
     enabled: false,            // production gate — see server.js giveawayEnabled()
-    maxEntries: 100,
+    maxEntries: 200,
     prizeValue: 66,
-    prizeDesc: 'KPOT EXPRESS Gift Card',
+    prizeDesc: 'KPOT EXPRESS $66 Store-Credit Code',
     rulesVersion: 'LUCKY66-2026-10-20',
     noticeVersion: '1',
     verifyHours: 24,
@@ -157,9 +157,9 @@
   }
 
   /* ---- Capacity & deadlines ---------------------------------------------------
-     The 100-person cap is judged at VERIFICATION time, not at registration:
+     The 200-person cap is judged at VERIFICATION time, not at registration:
      an unverified address takes nothing. That is what stops a bot filling the
-     round with junk e-mails, and what makes "rejected politely after 100" a
+     round with junk e-mails, and what makes "rejected politely after 200" a
      real, reachable state. */
   var REASONS = {
     bad_email: 'That e-mail address does not look right — please check it.',
@@ -172,7 +172,7 @@
     not_open: 'This giveaway is not taking entries right now.',
     not_started: 'This round has not opened yet.',
     deadline_passed: 'This round has closed. Thank you!',
-    full: 'This round is full — 100 verified entries. Thank you!',
+    full: 'This round is full — 200 verified entries. Thank you!',
     disabled: 'The Lucky 66 giveaway is not open yet.',
     rate_limited: 'Too many attempts. Please wait a few minutes and try again.',
     no_round: 'There is no active round right now.'

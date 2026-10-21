@@ -222,7 +222,7 @@ async function main() {
     const mk = await req(PORT, 'POST', '/api/giveaway/admin/rounds', {
       opensAt: new Date(Date.now() - 60000).toISOString(),
       closesAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
-      maxEntries: 100, openNow: true
+      maxEntries: 200, openNow: true
     }, adminH());
     if (!mk.j || !mk.j.ok) throw new Error('could not create a round: ' + JSON.stringify(mk.j));
     const ROUND = mk.j.round.id;
@@ -259,9 +259,9 @@ async function main() {
     check('the title and the prize are on the page',
       /KPOT EXPRESS — LUCKY 66/.test(await cdp.evalJs('document.querySelector(".eyebrow").textContent')) &&
       /\$66/.test(await cdp.evalJs('document.querySelector("#main h2").textContent')));
-    check('the live count reads 0 / 100',
+    check('the live count reads 0 / 200',
       (await cdp.evalJs('document.querySelector("#countNow").textContent')) === '0' &&
-      (await cdp.evalJs('document.querySelector("#countMax").textContent')) === '100');
+      (await cdp.evalJs('document.querySelector("#countMax").textContent')) === '200');
     check('the status pill says Open',
       /Open/.test(await cdp.evalJs('document.querySelector("#statusPill").textContent')));
     check('"free to enter — no purchase necessary" is stated',
@@ -306,8 +306,8 @@ async function main() {
     const refShown = await cdp.evalJs('document.querySelector("#refCode").textContent');
     check('verification confirms the entry and shows a reference number',
       /^L66-[0-9A-Z]{4}-[0-9A-Z]{4}$/.test(refShown), refShown);
-    check('the confirmation states the honest count (1 of 100)',
-      /1 of 100/.test(await cdp.evalJs('document.querySelector("#doneMsg").textContent')));
+    check('the confirmation states the honest count (1 of 200)',
+      /1 of 200/.test(await cdp.evalJs('document.querySelector("#doneMsg").textContent')));
     check('the token was consumed from the address bar',
       await cdp.evalJs('location.search.indexOf("verify=") === -1'));
     const enteredMail = newMails().find((m) => m.kind === 'entered');
