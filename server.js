@@ -1497,6 +1497,7 @@ let storeStatus = {
      ON would mean a re-publish starts cooking orders nobody checked, which is
      money, so the safe default is the one that needs a human to say yes. */
   autoPrepare: false,
+  giveaway: { enabled: false },
   updatedAt: new Date().toISOString()
 };
 
@@ -1511,6 +1512,9 @@ function loadStoreStatus() {
       }
     }
     if (typeof j.autoPrepare === 'boolean') storeStatus.autoPrepare = j.autoPrepare;
+    if (j.giveaway && typeof j.giveaway === 'object' && typeof j.giveaway.enabled === 'boolean') {
+      storeStatus.giveaway = { enabled: j.giveaway.enabled };
+    }
     if (j.updatedAt) storeStatus.updatedAt = j.updatedAt;
     console.log('[kpot] store status loaded from ' + path.basename(STORE_FILE) +
       ' (' + ORDER_TYPES.filter((k) => storeStatus.orderTypes[k]).join(', ') + ' on' +
