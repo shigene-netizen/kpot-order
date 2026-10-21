@@ -90,7 +90,9 @@ function body(kind, p) {
       'Your entry reference ' + p.ref + ' was selected at random from ' +
         (p.entriesCount || '') + ' verified entries.',
       '',
-      (p.prizeNote || 'The shop will follow up with your prize details.'),
+      (p.prizeNote || 'The shop will follow up with your prize details and your store-credit code. ' +
+        'Each time you use it, the remaining balance is shown to you; if the balance is ' +
+        'less than an order total, the difference is paid with another payment method.'),
       '',
       'Congratulations, and thank you for entering!',
       ''
