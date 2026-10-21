@@ -32,6 +32,7 @@ const MB = require('./member.js');
 const SC = require('./schedule.js');
 const G = require('./geo.js');
 const DISP = require('./dispatch.js');
+const GWAPI = require('./giveaway-api.js');
 let MAIL = null;
 try { MAIL = require('./mailer.js'); } catch (e) { MAIL = null; }
 
@@ -4152,6 +4153,27 @@ const server = http.createServer((req, res) => {
     return handleResetMenu(req, res).catch((e) => {
       console.error('[kpot] reset-menu unhandled:', e && e.message);
       sendJSON(res, 500, { error: 'internal_error' });
+    });
+  }
+
+  /* ---- LUCKY 66 giveaway ----
+     Feature-flagged OFF by default: while config.giveaway.enabled is false
+     every public endpoint answers 404 and the draw/prize endpoints refuse.
+     The pages themselves (giveaway.html, admin-giveaway.html,
+     giveaway-rules.html, giveaway-privacy.html) are static and contain no
+     shop data, so they may be served whatever the flag says — the banner in
+     the ordering page is the only entry point and it is flag-gated too. */
+  if (pathname.startsWith('/api/giveaway')) {
+    return GWAPI.handle(req, res, pathname, url, {
+      ASSETS: ASSETS,
+      sendJSON: sendJSON,
+      readBody: readBody,
+      adminAuthorized: adminAuthorized,
+      requestBaseUrl: requestBaseUrl,
+      getStoreStatus: function () { return storeStatus; }
+    }).catch((e) => {
+      console.error('[kpot] giveaway unhandled:', e && e.message);
+      sendJSON(res, 500, { ok: false, reason: 'internal_error' });
     });
   }
 

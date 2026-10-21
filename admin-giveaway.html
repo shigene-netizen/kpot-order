@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<title>KPOT EXPRESS — LUCKY 66 Admin</title>
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<style>
+  :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
+          --line:#322f3a; --txt:#F4F1EA; --mut:#9a93a0; --green:#2EA043; --amber:#E8B44A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family: Inter, -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+         -webkit-text-size-adjust:100%; }
+  a { color:#8ab4ff; text-decoration:none; }
+  .wrap { max-width: 860px; margin:0 auto; padding: 14px 12px 80px; }
+  header.bar { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+  .logo-k { width:38px; height:38px; border-radius:10px; background:var(--red);
+            color:#fff; font-weight:900; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  header.bar h1 { font-size:18px; margin:0; flex:1; }
+  header.bar .sub { font-size:12px; color:var(--mut); }
+  .navline { font-size:12px; color:var(--mut); margin:0 2px 14px; }
+  .navline a { margin-right:12px; }
+
+  .gate { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-top:18px; }
+  .gate h2 { font-size:15px; margin:0 0 6px; }
+  .gate p { font-size:13px; color:var(--mut); line-height:1.55; margin:0 0 12px; }
+  .gate .row { display:flex; gap:8px; }
+  .gate input { flex:1; background:var(--card2); color:var(--txt); border:1px solid var(--line);
+                border-radius:10px; padding:12px; font:inherit; }
+  .gate .note { font-size:12px; color:var(--mut); margin-top:10px; line-height:1.5; }
+  .btn { font:inherit; font-weight:700; border:none; border-radius:10px; padding:10px 13px; cursor:pointer; font-size:13px; }
+  .btn.primary { background:var(--red); color:#fff; }
+  .btn.ghost { background:var(--card2); color:var(--txt); border:1px solid var(--line); }
+  .btn.warn { background:rgba(232,180,74,.18); color:var(--amber); border:1px solid rgba(232,180,74,.4); }
+  .btn.danger { background:rgba(248,81,73,.15); color:#ff9b93; border:1px solid rgba(248,81,73,.4); }
+  .btn[disabled] { opacity:.5; cursor:default; }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:14px; margin-bottom:12px; }
+  .card h3 { font-size:14px; margin:0 0 4px; }
+  .meta { font-size:12px; color:var(--mut); line-height:1.7; }
+  .meta b { color:var(--txt); }
+  .pill { font-size:11px; padding:3px 9px; border-radius:99px; font-weight:700; white-space:nowrap; }
+  .pill.st { background:rgba(255,255,255,.1); color:#cfc9d6; }
+  .pill.st.OPEN { background:rgba(46,160,67,.2); color:#6ee787; }
+  .pill.st.CLOSED, .pill.st.PAUSED { background:rgba(232,180,74,.18); color:var(--amber); }
+  .pill.st.DRAWN { background:rgba(127,119,221,.25); color:#c9c4f5; }
+  .pill.st.CANCELLED { background:rgba(248,81,73,.18); color:#ff9b93; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .row .sp { flex:1; }
+  .mt8 { margin-top:8px; } .mt12 { margin-top:12px; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; }
+  td.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
+  .err { background:rgba(248,81,73,.12); border:1px solid rgba(248,81,73,.4); color:#ff9b93;
+         border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:12px; }
+  .okbox { background:rgba(46,160,67,.12); border:1px solid rgba(46,160,67,.4); color:#8ce0a0;
+         border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:12px; }
+  input[type=datetime-local], input[type=number], input[type=text] {
+    background:var(--card2); color:var(--txt); border:1px solid var(--line);
+    border-radius:10px; padding:10px; font:inherit; font-size:13px; width:100%; }
+  label.f { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
+  .checks label { display:flex; gap:8px; align-items:center; font-size:13px; color:var(--txt); margin-top:8px; }
+  .checks input { width:16px; height:16px; accent-color:var(--red); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:560px){ .grid2 { grid-template-columns:1fr; } }
+  .audit { font-size:11px; color:var(--mut); line-height:1.7; max-height:180px; overflow:auto;
+           background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:8px 10px; }
+  .flag { font-size:12px; color:var(--amber); line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <div class="logo-k">K</div>
+    <h1>LUCKY 66 — Admin</h1>
+    <span class="sub" id="mailState"></span>
+  </header>
+  <p class="navline">
+    <a href="/admin.html">Store console</a>
+    <a href="/admin-orders.html">Orders</a>
+    <a href="/admin-menu.html">Menu</a>
+    <a href="/">Guest page</a>
+  </p>
+
+  <div class="err" id="err" hidden></div>
+  <div class="okbox" id="ok" hidden></div>
+
+  <!-- key gate -->
+  <section class="gate" id="gate" hidden>
+    <h2>Admin key</h2>
+    <p>Same key as the store console. The giveaway admin controls the draw and the
+       prize — it does not share the driver key.</p>
+    <div class="row">
+      <input id="keyIn" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Admin key" enterkeyhint="go">
+      <button class="btn primary" id="keyGo">Open</button>
+    </div>
+    <div class="note" id="keyErr" style="color:#ff9b93"></div>
+  </section>
+
+  <main id="main" hidden>
+    <!-- create / prepare a round -->
+    <section class="card">
+      <h3>New round</h3>
+      <div class="grid2">
+        <div><label class="f" for="opensIn">Opens (local)</label>
+          <input id="opensIn" type="datetime-local"></div>
+        <div><label class="f" for="closesIn">Closes (local)</label>
+          <input id="closesIn" type="datetime-local"></div>
+        <div><label class="f" for="maxIn">Max entries</label>
+          <input id="maxIn" type="number" min="1" value="100"></div>
+        <div><label class="f" for="prizeIn">Prize description</label>
+          <input id="prizeIn" type="text" value="KPOT EXPRESS Gift Card"></div>
+      </div>
+      <div class="checks">
+        <label><input type="checkbox" id="openNowIn"> Open immediately (skip DRAFT)</label>
+      </div>
+      <button class="btn primary mt8" id="createBtn">Create round</button>
+    </section>
+
+    <div id="rounds"></div>
+
+    <section class="card">
+      <h3>Marketing consent ledger</h3>
+      <p class="meta">Giveaway entry and marketing consent are separate. This is the
+         opt-in list for FUTURE campaigns — no campaign is sent from here, and
+         unsubscribe status is always honored.</p>
+      <div class="mt8" id="consentBox"><table><thead><tr>
+        <th>E-mail (masked)</th><th>Opt-in</th><th>Since</th><th>Status</th>
+      </tr></thead><tbody id="consentRows"></tbody></table></div>
+    </section>
+  </main>
+</div>
+
+<script src="assets/giveaway.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var GW = window.GIVEAWAY;
+  var KEY = (function () { try { return sessionStorage.getItem('kpotAdminKey') || ''; } catch (e) { return ''; } })();
+  var busy = {};
+
+  function H(extra) {
+    var h = { 'Content-Type': 'application/json' };
+    if (KEY) h['X-Admin-Key'] = KEY;
+    return Object.assign(h, extra || {});
+  }
+  function api(method, route, body) {
+    return fetch(route, { method: method, headers: H(), body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) { return { s: r.status, j: j }; });
+      });
+  }
+  function showErr(t) { var e = $('#err'); e.textContent = t || ''; e.hidden = !t; }
+  function showOk(t) { var e = $('#ok'); e.textContent = t || ''; e.hidden = !t; }
+  function fmt(s) { var d = new Date(s); return isNaN(d.getTime()) ? '—' : d.toLocaleString(); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* ---- load ------------------------------------------------------------------ */
+  function load() {
+    showErr(''); showOk('');
+    api('GET', '/api/giveaway/admin/rounds').then(function (out) {
+      if (out.s === 401) { showGate('That key was not accepted.'); return; }
+      if (!out.j || !out.j.ok) { showErr('Could not load rounds.'); return; }
+      $('#mailState').textContent = 'mail: ' + (out.j.mail || '?');
+      $('#gate').hidden = true;
+      $('#main').hidden = false;
+      render(out.j.rounds || []);
+      loadConsents();
+    }).catch(function () { showErr('No connection — try again.'); });
+  }
+
+  function loadConsents() {
+    api('GET', '/api/giveaway/admin/consents').then(function (out) {
+      var rows = (out.j && out.j.consents) || [];
+      var tb = $('#consentRows');
+      tb.innerHTML = '';
+      if (!rows.length) {
+        tb.innerHTML = '<tr><td colspan="4" style="color:var(--mut)">No marketing consents yet.</td></tr>';
+        return;
+      }
+      rows.forEach(function (c) {
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td class="mono">' + esc(c.emailMasked) + '</td>' +
+          '<td>' + (c.marketingOptIn ? 'yes' : 'no') + '</td>' +
+          '<td>' + esc(fmt(c.at)) + '</td>' +
+          '<td>' + (c.unsubscribedAt ? 'unsubscribed ' + esc(fmt(c.unsubscribedAt)) : 'active') + '</td>';
+        tb.appendChild(tr);
+      });
+    });
+  }
+
+  /* ---- rounds ---------------------------------------------------------------- */
+  function render(rounds) {
+    var host = $('#rounds');
+    host.innerHTML = '';
+    if (!rounds.length) {
+      host.innerHTML = '<div class="card"><h3>No rounds yet</h3>' +
+        '<p class="meta">Create one above. Remember: the giveaway is flag-disabled until ' +
+        'legal review and owner approval are done.</p></div>';
+      return;
+    }
+    rounds.forEach(function (r) { host.appendChild(card(r)); });
+  }
+
+  function card(r) {
+    var d = document.createElement('div');
+    d.className = 'card';
+    d.setAttribute('data-id', r.id);
+
+    var html = '<div class="row"><h3>' + esc(r.id) + '</h3><span class="sp"></span>' +
+      '<span class="pill st ' + esc(r.status) + '">' + esc(r.statusLabel) + '</span></div>';
+    html += '<div class="meta mt8">' +
+      '<b>' + r.verifiedCount + '</b> verified · <b>' + r.pendingCount + '</b> awaiting e-mail · cap <b>' + r.maxEntries + '</b><br>' +
+      'Opens <b>' + esc(fmt(r.opensAt)) + '</b> · Closes <b>' + esc(fmt(r.closesAt)) + '</b><br>' +
+      'Prize: <b>$' + Number(r.prize.value).toFixed(2) + ' ' + esc(r.prize.desc) + '</b>' +
+      (r.winnerRef ? ' · winner ref <b>' + esc(r.winnerRef) + '</b>' : '') +
+      (r.prizeIssued ? ' · prize <b>issued</b>' : '') +
+      (r.redeemedAt ? ' · redeemed ' + esc(fmt(r.redeemedAt)) : '') +
+      '</div>';
+
+    html += '<div class="row mt12" data-role="transitions">' +
+      (r.nextStatuses || []).map(function (t) {
+        return '<button class="btn ghost" data-act="transition" data-to="' + esc(t) + '">→ ' + esc(GW.statusLabel(t)) + '</button>';      }).join('') + '</div>';
+
+    if (r.status === 'CLOSED') {
+      html += '<div class="row mt8"><button class="btn warn" data-act="draw">Draw winner (secure random)</button></div>';
+    }
+    if (r.status === 'DRAWN') {
+      html += '<div class="row mt8" data-role="prize">' +
+        '<input type="text" data-f="code" placeholder="Gift card code" style="flex:1;min-width:180px">' +
+        '<input type="text" data-f="note" placeholder="Note (optional)" style="flex:1;min-width:180px">' +
+        '<button class="btn primary" data-act="prize">Issue prize & e-mail winner</button></div>';
+    }
+    if (r.prizeIssued && !r.redeemedAt) {
+      html += '<div class="row mt8" data-role="redeem">' +
+        '<input type="number" data-f="bal" placeholder="Balance after (optional)" style="width:180px">' +
+        '<input type="text" data-f="note" placeholder="Note (optional)" style="flex:1;min-width:180px">' +
+        '<button class="btn primary" data-act="redeem">Record redemption</button></div>';
+    }
+    html += '<div class="row mt8">' +
+      '<a class="btn ghost" href="/api/giveaway/admin/rounds/' + encodeURIComponent(r.id) + '/export?format=json" target="_blank" rel="noopener">Export JSON</a>' +
+      '<a class="btn ghost" href="/api/giveaway/admin/rounds/' + encodeURIComponent(r.id) + '/export?format=csv" target="_blank" rel="noopener">Export CSV</a>' +
+      '<button class="btn ghost" data-act="detail">Details / audit</button></div>';
+    html += '<div data-role="detail" hidden></div>';
+
+    d.innerHTML = html;
+    /* Event delegation (pitfall 43): this card is redrawn after every action,
+       so handlers live on the card container, never on the buttons. */
+    return d;
+  }
+
+  /* ---- actions (delegated) ----------------------------------------------------- */
+  document.getElementById('rounds').addEventListener('click', function (ev) {
+    var cardEl = ev.target.closest('.card[data-id]');
+    if (!cardEl) return;
+    var id = cardEl.getAttribute('data-id');
+    var btn = ev.target.closest('button');
+    if (!btn) return;
+    var act = btn.getAttribute('data-act');
+
+    if (act === 'transition') {
+      var to = btn.getAttribute('data-to');
+      var note = prompt('Note for the audit log (optional):', '') || '';
+      btn.disabled = true;
+      api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/transition', { to: to, note: note })
+        .then(function (out) {
+          if (out.j && out.j.ok) { showOk(id + ' → ' + to); load(); }
+          else { showErr(out.j.message || 'Transition refused.'); btn.disabled = false; }
+        });
+      return;
+    }
+    if (act === 'draw') {
+      if (!confirm('Draw the winner now?\n\nThis selects one verified entry at random from a frozen snapshot. It cannot be undone.')) return;
+      btn.disabled = true;
+      api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/draw', {})
+        .then(function (out) {
+          if (out.j && out.j.ok) {
+            showOk('Winner: ' + (out.j.draw ? out.j.draw.winnerRef : '?') +
+              ' (drawn from ' + (out.j.draw ? out.j.draw.entriesCount : '?') + ' entries; notification mail: ' + out.j.mail + ')');
+            load();
+          } else { showErr(out.j.message || 'Draw refused.'); btn.disabled = false; }
+        });
+      return;
+    }
+    if (act === 'prize') {
+      var code = cardEl.querySelector('[data-f="code"]').value.trim();
+      var pnote = cardEl.querySelector('[data-role="prize"] [data-f="note"]').value.trim();
+      if (code.length < 4) { showErr('Enter the gift card code (4+ characters).'); return; }
+      btn.disabled = true;
+      api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/prize', { code: code, note: pnote })
+        .then(function (out) {
+          if (out.j && out.j.ok) { showOk('Prize issued and e-mailed to the winner (' + out.j.mail + ').'); load(); }
+          else { showErr(out.j.message || 'Issuance refused.'); btn.disabled = false; }
+        });
+      return;
+    }
+    if (act === 'redeem') {
+      var bal = cardEl.querySelector('[data-role="redeem"] [data-f="bal"]').value;
+      var rnote = cardEl.querySelector('[data-role="redeem"] [data-f="note"]').value.trim();
+      btn.disabled = true;
+      api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/redeem',
+        { balanceAfter: bal === '' ? null : Number(bal), note: rnote })
+        .then(function (out) {
+          if (out.j && out.j.ok) { showOk('Redemption recorded — round completed.'); load(); }
+          else { showErr(out.j.message || 'Redemption refused.'); btn.disabled = false; }
+        });
+      return;
+    }
+    if (act === 'detail') {
+      var box = cardEl.querySelector('[data-role="detail"]');
+      if (!box.hidden) { box.hidden = true; btn.textContent = 'Details / audit'; return; }
+      btn.disabled = true; btn.textContent = 'Loading…';
+      api('GET', '/api/giveaway/admin/rounds/' + encodeURIComponent(id)).then(function (out) {
+        btn.disabled = false; btn.textContent = 'Hide details';
+        var j = out.j || {};
+        if (!j.ok) { showErr('Could not load detail.'); return; }
+        var r = j.round || {};
+        var h = '';
+        h += '<div class="meta mt8">Next legal statuses: <b>' + (r.nextStatuses || []).join(', ') + '</b></div>';
+        h += '<div class="row mt8" data-role="transitions2">' +
+          (r.nextStatuses || []).map(function (t) {
+            return '<button class="btn ghost" data-act="transition" data-to="' + esc(t) + '">' + esc(t) + '</button>';
+          }).join('') + '</div>';
+        h += '<div class="meta mt12">Entries (' + (r.entries || []).length + ') — e-mails are masked on purpose:</div>';
+        h += '<table><thead><tr><th>Ref</th><th>E-mail</th><th>Verified</th><th>Rules</th><th>Marketing</th></tr></thead><tbody>' +
+          (r.entries || []).map(function (e) {
+            return '<tr><td class="mono">' + esc(e.ref) + '</td><td class="mono">' + esc(e.emailMasked) +
+              '</td><td>' + esc(fmt(e.verifiedAt)) + '</td><td>' + esc(e.noticeVersion) +
+              '</td><td>' + (e.marketingOptIn ? 'yes' : 'no') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        h += '<div class="meta mt12">Awaiting e-mail confirmation (' + (r.pending || []).length + '):</div>';
+        h += '<table><thead><tr><th>E-mail</th><th>Sent</th><th>Expires</th></tr></thead><tbody>' +
+          (r.pending || []).map(function (p) {
+            return '<tr><td class="mono">' + esc(p.emailMasked) + '</td><td>' + esc(fmt(p.sentAt)) +
+              '</td><td>' + esc(fmt(p.expiresAt)) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        if ((r.suspicion || []).length) {
+          h += '<div class="meta mt12">Suspicion flags:</div>' +
+            r.suspicion.map(function (f) {
+              return '<div class="flag">' + esc(f.kind) + ' ×' + f.count + ' — ' + esc((f.refs || []).join(', ')) + '</div>';
+            }).join('');
+        }
+        if (r.draw) {
+          h += '<div class="meta mt12">Draw: winner <b>' + esc(r.draw.winnerRef) + '</b> at ' + esc(fmt(r.draw.drawnAt)) +
+            ' from ' + r.draw.entriesCount + ' entries · ' + esc(r.draw.algorithm) + ' · snapshot ' +
+            (r.draw.snapshot || []).length + ' refs</div>';
+        }
+        h += '<div class="meta mt12">Audit trail:</div><div class="audit">' +
+          (r.audit || []).map(function (a) {
+            return esc(fmt(a.at)) + '  ' + esc(a.action) + ' — ' + esc(a.note || '') + '\n';
+          }).join('') + '</div>';
+        box.innerHTML = h;
+        box.hidden = false;
+        /* The detail panel's own transition buttons need the delegated handler
+           too — the live node list is on this container, one level down. */
+        var t2 = box.querySelector('[data-role="transitions2"]');
+        if (t2) {
+          t2.addEventListener('click', function (ev2) {
+            var b2 = ev2.target.closest('button[data-act="transition"]');
+            if (b2) b2.click();
+          });
+        }
+      });
+      return;
+    }
+  });
+
+  /* ---- create round ------------------------------------------------------------- */
+  document.getElementById('createBtn').addEventListener('click', function () {
+    var opensAt = document.getElementById('opensIn').value;
+    var closesAt = document.getElementById('closesIn').value;
+    var maxEntries = Number(document.getElementById('maxIn').value) || 100;
+    var prizeDesc = document.getElementById('prizeIn').value.trim();
+    var openNow = document.getElementById('openNowIn').checked;
+    if (!opensAt || !closesAt) { showErr('Set both the opening and the closing time.'); return; }
+    this.disabled = true;
+    var self = this;
+    api('POST', '/api/giveaway/admin/rounds', {
+      opensAt: new Date(opensAt).toISOString(),
+      closesAt: new Date(closesAt).toISOString(),
+      maxEntries: maxEntries, prizeDesc: prizeDesc, openNow: openNow
+    }).then(function (out) {
+      self.disabled = false;
+      if (out.j && out.j.ok) { showOk('Round created: ' + out.j.round.id); load(); }
+      else { showErr(out.j.message || 'Could not create the round.'); }
+    });
+  });
+
+  /* ---- gate ---------------------------------------------------------------------- */
+  function showGate(msg) {
+    document.getElementById('main').hidden = true;
+    document.getElementById('gate').hidden = false;
+    document.getElementById('keyErr').textContent = msg || '';
+    document.getElementById('keyIn').value = '';
+    document.getElementById('keyIn').focus();
+  }
+  document.getElementById('keyGo').addEventListener('click', function () {
+    var v = document.getElementById('keyIn').value.trim();
+    if (!v) { document.getElementById('keyErr').textContent = 'Enter the key.'; return; }
+    KEY = v;
+    try { sessionStorage.setItem('kpotAdminKey', KEY); } catch (e) {}
+    load();
+  });
+  document.getElementById('keyIn').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') document.getElementById('keyGo').click();
+  });
+
+  if (KEY) { load(); } else { showGate(''); }
+})();
+</script>
+</body>
+</html>

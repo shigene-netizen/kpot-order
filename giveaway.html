@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111014">
+<title>KPOT EXPRESS — LUCKY 66 · Win a $66 Gift Card</title>
+<meta name="description" content="Free to enter — no purchase necessary. One verified winner gets a $66 KPOT EXPRESS gift card.">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<style>
+  :root { --red:#D7263D; --red-d:#A81B2E; --bg:#111014; --card:#1b1a20; --card2:#222128;
+          --line:#322f3a; --txt:#F4F1EA; --mut:#9a93a0; --green:#2EA043; --gold:#E8B44A; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font-family: Inter, -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+         -webkit-text-size-adjust:100%; }
+  a { color:inherit; }
+  .wrap { max-width: 560px; margin:0 auto; padding: 16px 14px 60px; }
+  header.bar { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .logo-k { width:38px; height:38px; border-radius:10px; background:var(--red);
+            color:#fff; font-weight:900; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  header.bar h1 { font-size:16px; margin:0; flex:1; letter-spacing:.02em; }
+  header.bar a.back { font-size:12px; color:var(--mut); text-decoration:none; }
+
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px;
+          padding:16px; margin-bottom:12px; }
+  .prize { text-align:center; padding:22px 16px 18px;
+           background:linear-gradient(180deg, #241d20 0%, var(--card) 100%); }
+  .eyebrow { font-size:12px; letter-spacing:.18em; color:var(--gold); font-weight:700; }
+  .prize h2 { font-size:30px; line-height:1.12; margin:8px 0 4px; font-weight:900; }
+  .prize h2 em { color:var(--gold); font-style:normal; }
+  .count { font-size:15px; color:var(--mut); margin:8px 0 2px; }
+  .count b { color:var(--txt); font-size:19px; }
+  .pill { display:inline-block; font-size:12px; font-weight:700; padding:5px 12px;
+          border-radius:99px; margin-top:8px; }
+  .pill.open { background:rgba(46,160,67,.18); color:#6ee787; }
+  .pill.full, .pill.closed { background:rgba(248,81,73,.16); color:#ff9b93; }
+  .pill.drawn { background:rgba(232,180,74,.16); color:var(--gold); }
+  .pill.off { background:var(--card2); color:var(--mut); }
+  .free { font-size:13px; font-weight:800; letter-spacing:.05em; color:var(--txt); margin:12px 0 2px; }
+  .tiny { font-size:12px; color:var(--mut); line-height:1.55; }
+
+  label.f { display:block; font-size:13px; font-weight:700; margin:0 0 6px; }
+  input[type=email] { width:100%; background:var(--card2); color:var(--txt); border:1px solid var(--line);
+          border-radius:10px; padding:13px 12px; font:inherit; }
+  input[type=email]:focus { outline:2px solid var(--red); outline-offset:1px; }
+  .checks { margin:12px 0 4px; }
+  .checks label { display:flex; gap:9px; align-items:flex-start; font-size:13px;
+                  color:var(--mut); line-height:1.5; margin-bottom:9px; }
+  .checks input { margin-top:2px; width:17px; height:17px; flex:none; accent-color:var(--red); }
+  .checks label { color:var(--txt); }
+  .btn { font:inherit; font-weight:800; border:none; border-radius:10px; padding:14px 16px;
+         cursor:pointer; width:100%; }
+  .btn.primary { background:var(--red); color:#fff; }
+  .btn.primary[disabled] { opacity:.55; cursor:default; }
+  .btn.ghost { background:var(--card2); color:var(--txt); border:1px solid var(--line); margin-top:8px; }
+  .msg { font-size:13px; line-height:1.55; margin-top:10px; }
+  .msg.err { color:#ff9b93; }
+  .msg.ok { color:#6ee787; }
+
+  .refbox { text-align:center; padding:6px 0 2px; }
+  .refbox .big { font-size:24px; font-weight:900; letter-spacing:.08em; color:var(--gold); }
+  h3.sec { font-size:14px; margin:0 0 8px; }
+  .steps { font-size:13px; color:var(--mut); line-height:1.7; padding-left:20px; margin:0; }
+  .steps b { color:var(--txt); }
+  .links { display:flex; gap:8px; flex-wrap:wrap; font-size:13px; }
+  .links a { color:#8ab4ff; text-decoration:none; padding:6px 0; }
+  .links .sep { color:var(--line); }
+  .disabled-note { text-align:center; color:var(--mut); font-size:14px; line-height:1.6; }
+  @media (max-width:400px) { .prize h2 { font-size:26px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="bar">
+    <div class="logo-k">K</div>
+    <h1>LUCKY 66</h1>
+    <a class="back" href="/">← Menu</a>
+  </header>
+
+  <!-- shown when the feature flag is OFF (the default until legal + owner approval) -->
+  <section class="card disabled-note" id="offState" hidden>
+    <p><b>LUCKY 66 is not open yet.</b></p>
+    <p>This giveaway opens after its Official Rules are approved.
+       Check back soon — or ask at the counter.</p>
+    <p><a class="back" href="/">← Back to the menu</a></p>
+  </section>
+
+  <main id="main" hidden>
+    <!-- 1 + 2 + 3: title, prize, live count, status -->
+    <section class="card prize">
+      <div class="eyebrow">KPOT EXPRESS — LUCKY 66</div>
+      <h2>WIN A <em>$66</em><br>KPOT EXPRESS GIFT CARD</h2>
+      <p class="count"><b id="countNow">–</b> / <span id="countMax">100</span> verified entries</p>
+      <span class="pill off" id="statusPill">Loading…</span>
+      <p class="free">FREE TO ENTER — NO PURCHASE NECESSARY</p>
+      <p class="tiny">One entry per person per round. The round closes on the date
+        below whether or not it fills — <span id="closesLabel">see rules</span>.</p>
+    </section>
+
+    <!-- 4: registration form -->
+    <section class="card" id="formCard">
+      <h3 class="sec">Enter with your e-mail</h3>
+      <form id="regForm" novalidate>
+        <label class="f" for="emailIn">E-mail address</label>
+        <input id="emailIn" type="email" inputmode="email" autocomplete="email"
+               spellcheck="false" placeholder="you@example.com" enterkeyhint="go" required>
+        <div class="checks">
+          <label>
+            <input type="checkbox" id="ackIn">
+            <span>I am 18 or older, I live in an eligible area, and I have read the
+            <a href="/giveaway-rules.html" style="color:#8ab4ff">Official Rules</a> and
+            <a href="/giveaway-privacy.html" style="color:#8ab4ff">Privacy Policy</a>.</span>
+          </label>
+          <label>
+            <input type="checkbox" id="mktIn">
+            <span>I would also like to receive special offers, menu updates, and
+            promotions from KPOT EXPRESS. <b>Optional</b> — declining does not affect
+            your entry, and you can unsubscribe any time.</span>
+          </label>
+        </div>
+        <button class="btn primary" id="submitBtn" type="submit">Enter the giveaway</button>
+      </form>
+      <p class="msg" id="formMsg" hidden></p>
+    </section>
+
+    <!-- 5: verification instructions -->
+    <section class="card" id="sentCard" hidden>
+      <h3 class="sec">Check your inbox</h3>
+      <p class="msg" id="sentMsg"></p>
+      <ol class="steps">
+        <li>Open the e-mail from <b>KPOT EXPRESS</b>.</li>
+        <li>Tap the confirmation link — it works <b>once</b> and expires in
+            <b id="verifyHours">24</b> hours.</li>
+        <li>Your entry is confirmed on the spot and your reference number appears.</li>
+      </ol>
+      <button class="btn ghost" id="resendBtn" type="button">Send a new link</button>
+    </section>
+
+    <!-- 6: confirmation -->
+    <section class="card" id="doneCard" hidden>
+      <h3 class="sec">You're in!</h3>
+      <div class="refbox">
+        <div class="tiny" style="margin-bottom:4px">Your entry reference</div>
+        <div class="big" id="refCode">—</div>
+      </div>
+      <p class="msg ok" id="doneMsg"></p>
+      <p class="tiny">Keep the reference: it is how you claim the prize if you win.
+        The winner is drawn at random from all verified entries when the round closes.</p>
+    </section>
+
+    <!-- full / closed states -->
+    <section class="card" id="closedCard" hidden>
+      <h3 class="sec" id="closedTitle">This round is closed</h3>
+      <p class="msg" id="closedMsg"></p>
+    </section>
+    <section class="card" id="verifyErrCard" hidden>
+      <h3 class="sec">That link didn't work</h3>
+      <p class="msg err" id="verifyErrMsg"></p>
+      <button class="btn ghost" id="retryBtn" type="button">Request a new link</button>
+    </section>
+
+    <!-- 8: how the winner is selected and notified -->
+    <section class="card">
+      <h3 class="sec">How the winner is picked</h3>
+      <ol class="steps">
+        <li>Every <b>verified</b> e-mail address becomes one entry — unverified
+            addresses never count.</li>
+        <li>When the round closes, one entry is selected by a
+            <b>cryptographically secure random draw on the shop's server</b>.
+            Every entry has exactly the same chance. No staff member can pick or
+            steer the winner.</li>
+        <li>The winner is <b>notified by e-mail</b> at the address that entered, with
+            the entry reference and how to claim the prize.</li>
+        <li>If the winner cannot be reached within 14 days, an alternate winner is
+            drawn under the terms in the Official Rules.</li>
+      </ol>
+    </section>
+
+    <!-- 7: legal links -->
+    <section class="card links">
+      <a href="/giveaway-rules.html">Official Rules</a><span class="sep">·</span>
+      <a href="/giveaway-privacy.html">Privacy Policy</a><span class="sep">·</span>
+      <a href="/">Back to the menu</a>
+    </section>
+  </main>
+</div>
+
+<script src="assets/config.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var busy = false;
+
+  function show(id, on) { $(id).hidden = !on; }
+  function msg(el, text, kind) {
+    el.textContent = text || '';
+    el.className = 'msg' + (kind ? ' ' + kind : '');
+    el.hidden = !text;
+  }
+  function fmtDate(s) {
+    var d = new Date(s);
+    if (isNaN(d.getTime())) return 'see rules';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  /* ---- status ------------------------------------------------------------- */
+  function load() {
+    return fetch('/api/giveaway/status').then(function (r) { return r.json(); })
+      .then(function (j) { render(j); })
+      .catch(function () {
+        $('#statusPill').textContent = 'Could not load giveaway status';
+      });
+  }
+
+  function render(j) {
+    if (!j || j.enabled !== true) {
+      show('#offState', true);
+      $('#main').hidden = true;
+      return;
+    }
+    show('#offState', false);
+    $('#main').hidden = false;
+
+    var r = j.round || {};
+    $('#countMax').textContent = r.maxEntries || 100;
+    $('#countNow').textContent = (r.verifiedCount == null ? '–' : r.verifiedCount);
+    $('#closesLabel').textContent = r.closesAt ? fmtDate(r.closesAt) : 'see rules';
+
+    var pill = $('#statusPill');
+    pill.className = 'pill';
+    var accepting = r.acceptsEntries === true;
+    if (accepting) {
+      pill.classList.add('open');
+      pill.textContent = 'Open — ' + (r.maxEntries - r.verifiedCount) + ' spots left';
+    } else if (r.status === 'DRAWN' || r.status === 'PRIZE_ISSUED' || r.status === 'COMPLETED') {
+      pill.classList.add('drawn');
+      pill.textContent = r.winnerAnnounced ? 'Winner selected' : 'Round closed';
+    } else if (r.reason === 'full') {
+      pill.classList.add('full');
+      pill.textContent = 'Full — 100 verified entries';
+    } else if (r.reason === 'deadline_passed' || r.status === 'CLOSED' || r.status === 'CANCELLED') {
+      pill.classList.add('closed');
+      pill.textContent = r.status === 'CANCELLED' ? 'Cancelled' : 'Closed';
+    } else if (r.reason === 'not_started') {
+      pill.classList.add('off');
+      pill.textContent = 'Opens ' + fmtDate(r.opensAt);
+    } else {
+      pill.classList.add('off');
+      pill.textContent = 'Not taking entries';
+    }
+
+    var entryBlocked = !accepting;
+    show('#formCard', !entryBlocked);
+    var closed = entryBlocked && (r.reason === 'full' || r.reason === 'deadline_passed' ||
+      r.status === 'CLOSED' || r.status === 'CANCELLED' ||
+      r.status === 'DRAWN' || r.status === 'PRIZE_ISSUED' || r.status === 'COMPLETED');
+    if (closed) {
+      show('#closedCard', true);
+      $('#closedTitle').textContent = r.status === 'CANCELLED' ? 'This round was cancelled'
+        : (r.reason === 'full') ? 'This round is full' : 'This round is closed';
+      $('#closedMsg').textContent = r.reason === 'full'
+        ? 'All 100 verified entries are taken. Thank you — watch for the next round!'
+        : 'Thank you for your interest. Watch this page for the next round.';
+    }
+  }
+
+  /* ---- register ------------------------------------------------------------ */
+  $('#regForm').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    if (busy) return;
+    var email = $('#emailIn').value.trim();
+    var ack = $('#ackIn').checked;
+    var mkt = $('#mktIn').checked;
+    if (!email) { msg($('#formMsg'), 'Enter your e-mail address first.', 'err'); return; }
+    if (!ack) { msg($('#formMsg'), 'Please confirm the eligibility statement and the Official Rules.', 'err'); return; }
+
+    busy = true;
+    $('#submitBtn').disabled = true;
+    $('#submitBtn').textContent = 'Sending…';
+    msg($('#formMsg'), '', null);
+
+    fetch('/api/giveaway/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email, eligibilityAck: ack, marketingOptIn: mkt,
+        rulesVersion: window.__LUCKY66_RULES_VERSION__, source: 'giveaway-page'
+      })
+    }).then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+      .then(function (out) {
+        busy = false;
+        $('#submitBtn').disabled = false;
+        $('#submitBtn').textContent = 'Enter the giveaway';
+        var j = out.j || {};
+        if (out.s === 200 && j.ok) {
+          show('#formCard', false);
+          show('#sentCard', true);
+          $('#sentMsg').textContent = j.message ||
+            'Check your inbox to confirm your entry.';
+          load();
+        } else if (out.s === 429) {
+          msg($('#formMsg'), 'Too many attempts. Please wait a few minutes and try again.', 'err');
+        } else {
+          msg($('#formMsg'), j.message || 'Could not start your entry. Please try again.', 'err');
+        }
+      })
+      .catch(function () {
+        busy = false;
+        $('#submitBtn').disabled = false;
+        $('#submitBtn').textContent = 'Enter the giveaway';
+        msg($('#formMsg'), 'No connection — please try again.', 'err');
+      });
+  });
+
+  /* ---- resend -------------------------------------------------------------- */
+  function resend() {
+    var email = $('#emailIn').value.trim();
+    if (!email) { show('#formCard', true); show('#sentCard', false); $('#emailIn').focus(); return; }
+    msg($('#sentMsg'), 'Sending a new link…', null);
+    fetch('/api/giveaway/resend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, rulesVersion: window.__LUCKY66_RULES_VERSION__, source: 'giveaway-page' })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      msg($('#sentMsg'), j.message || 'A new link is on its way.', 'ok');
+    }).catch(function () {
+      msg($('#sentMsg'), 'No connection — please try again.', 'err');
+    });
+  }
+  $('#resendBtn').addEventListener('click', resend);
+  $('#retryBtn').addEventListener('click', function () {
+    show('#verifyErrCard', false);
+    show('#formCard', true);
+  });
+
+  /* ---- verification from the e-mail link -------------------------------------
+     GET /api/giveaway/verify?token=… — the token is single-use, so a refresh
+     after a successful confirm shows the polite "already used" style error. */
+  function verify() {
+    var token = new URLSearchParams(location.search).get('verify');
+    if (!token) return;
+    show('#formCard', false);
+    fetch('/api/giveaway/verify?token=' + encodeURIComponent(token))
+      .then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+      .then(function (out) {
+        var j = out.j || {};
+        if (out.s === 200 && j.ok) {
+          show('#doneCard', true);
+          $('#refCode').textContent = j.ref;
+          $('#doneMsg').textContent = 'Entry ' + j.ref + ' confirmed — ' +
+            j.verifiedCount + ' of ' + j.maxEntries + ' verified entries so far.';
+          history.replaceState(null, '', location.pathname);
+          load();
+        } else {
+          show('#verifyErrCard', true);
+          $('#verifyErrMsg').textContent = j.message ||
+            'That confirmation link is not valid. Request a new one below.';
+        }
+      })
+      .catch(function () {
+        show('#verifyErrCard', true);
+        $('#verifyErrMsg').textContent = 'No connection — try the link again.';
+      });
+  }
+
+  /* The rules version the server will accept comes from the shipped config so
+     a stale page can never acknowledge an outdated notice. */
+  var CFG = null;
+  try { if (typeof CONFIG !== 'undefined' && CONFIG) CFG = CONFIG; } catch (e) { CFG = null; }
+  window.__LUCKY66_RULES_VERSION__ = (CFG && CFG.giveaway && CFG.giveaway.rulesVersion)
+    || 'LUCKY66-2026-10-20';
+  $('#verifyHours').textContent = (CFG && CFG.giveaway && CFG.giveaway.verifyHours) || 24;
+
+  load();
+  verify();
+})();
+</script>
+</body>
+</html>

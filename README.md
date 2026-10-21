@@ -575,6 +575,67 @@ more`**，加着加着就消失了。客人页的提示和服务器判的是同�
 
 ---
 
+## 四点十、LUCKY 66 抽奖（默认关闭，未上线）
+
+免费邮件验证制抽奖：**100 个已验证名额 / 每轮 / 每个邮箱一次**，截止时间固定（不足
+100 也照常开奖），服务器端 CSPRNG 抽 1 位，奖品 **$66 KPOT EXPRESS 礼品卡**。
+全程**不收费、不要求消费、不碰支付**，Stripe 调用计数为 0（测试里有断言）。
+
+### ⛔ 上线闸门（三道，缺一不可）
+
+1. **`assets/config.js` 的 `giveaway.enabled` 默认 `false`** —— 出厂即关，
+   公开注册、开奖、发奖端点在关闭时一律 404 / 拒绝。
+2. **店主运行时开关** `store.local.json` 的 `giveaway.enabled`（后台可切，不用重部署）。
+   服务端测试缝 `KPOT_GIVEAWAY_ENABLED` 只给测试用，启动会打警告。
+3. **法律门**：`giveaway-rules.html` 是**草稿**（含 `SPONSOR LEGAL NAME` 占位符），
+   须经**佐治亚州律师审核 + 店主签字同意**后才能开。上线前不得开启第 1 条。
+
+### 结构（独立文件，不碰订单/顾客数据）
+
+| 文件 | 职责 |
+|---|---|
+| `assets/giveaway.js` | 纯规则（UMD）：状态机、容量、判定、抽签、脱敏 —— 服务器与浏览器共用 |
+| `giveaway-store.js` | 独立 JSON（`KPOT_GIVEAWAY_FILE`，默认 `giveaway.local.json`），原子写 0600 |
+| `giveaway-mail.js` | 只发 3 封事务信（验证/入选/中奖）；有 SMTP 用 `mailer.js`，否则落本地 outbox |
+| `giveaway-api.js` | `/api/giveaway/*` 公开端点 + `/api/giveaway/admin/*`（admin key 守门） |
+| `giveaway.html` | 客人页：名额进度、报名表单、验证回执、规则/隐私链接 |
+| `giveaway-rules.html` / `giveaway-privacy.html` | 草稿官方规则 + 抽奖专用隐私声明 |
+| `admin-giveaway.html` | 后台：轮次、脱敏名单、暂停/关闭、开奖审批、发奖、导出 |
+
+状态机：`DRAFT → OPEN → CLOSED → DRAWN → PRIZE_ISSUED → COMPLETED`
+（另有 `PAUSED` / `CANCELLED`；`COMPLETED`/`CANCELLED` 终态）。审计日志不可变。
+
+### 关键规矩
+
+- **容量在「验证通过」时占用**，不是报名时 —— 垃圾邮箱占不满位，第 101 位是
+  礼貌的 409（`giveaway_full`），并发验证不会超过 100（有 6 争 5 的并发测试）。
+- 身份 = 邮箱 SHA-256；令牌 256-bit、只存哈希、单次使用、24h 过期；
+  参考号 `L66-XXXX-XXXX`（Crockford base32）。
+- 限流：同邮箱 5 次/小时（防轰炸）、同 IP 50 报名/小时、60 验证/小时
+  （餐厅 wifi/运营商 NAT 共享 IP，故意放得宽）。
+- **营销同意独立、默认不勾**，且**永远不影响参赛资格**。
+- 横幅 `#lucky66Banner` 由 `syncLucky66Banner()` 从 `/api/giveaway/status` 拉取，
+  **失败即隐藏**（服务端权威）；不干扰菜单/二维码/点单/支付主流程。
+- 不复用 SARANG Rewards / 顾客数据；不自动部署；`giveaway.local.json` 等
+  9 个店铺数据文件在测试里逐字节比对（密封性）。
+
+### 测试（3 套，计入总表 40 → 43）
+
+- `_dev/test_giveaway.js`（57 项纯逻辑）
+- `_dev/probe_giveaway_http.js`（64 项，双服务器：flag off/on，离线跑，Stripe 桩 0 调用）
+- `_dev/probe_giveaway_ui.js`（36 项，真 Chrome CDP：桌面/移动/后台截图
+  `_dev/screens/giveaway-*.png`、`menu-with-banner.png`）
+
+### 回滚
+
+1. 快速：把 `giveaway.enabled` 设回 `false`（config 或 store.local.json）——横幅消失、
+   端点 404，数据文件原地保留。
+2. 彻底：`git revert` 该 commit，删除 8 个 giveaway 文件 + 恢复 `server.js`/
+   `config.js`/`app.js`/`styles.css`/`index.html`/`run_all.sh`；
+   可选删除 `giveaway.local.json` 与 outbox（**删除前先备份**）。
+
+---
+
 ## 五、把订单送到厨房
 
 默认情况下，客人手机上会显示订单票据，出示给柜台即可，**不需要任何服务器**。
@@ -1458,7 +1519,7 @@ bash _dev/run_all.sh
 STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 ```
 
-当前 **40 个套件，全绿**：
+当前 **43 个套件，全绿**：
 
 | 套件 | 覆盖 | 项数 |
 |---|---|---|
@@ -1472,6 +1533,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `test_schedule` | 限时段配送的规则：只从明天起、时段在营业时间内、容量从订单推导、DST 安全 | 117 |
 | `test_delivery_geo` | **外送 2 英里**：街道级/ZIP 兜底/故障开放三档，Haversine 精度（2026-10-18 新增） | 26 |
 | `test_delivery_min` | **外送满 $10 才送**：只卡外送、恰好 $10 放行、`$9.99` 差 `$0.01` 的浮点边界、门槛配错都当没有（2026-10-19 新增） | 22 |
+| `test_giveaway` | **LUCKY 66 纯规则**：状态机、容量在验证时占用、单次验证/过期、截止即关、抽签均匀且幂等、发奖一次性、公开视图零 PII、限流与可疑标记（2026-10-20 新增） | 57 |
 | `test_print_auth` | 打印接口的鉴权边界（3 种密钥组合） | 17 |
 | `test_recheck_payment` | 补单：付费未报信的订单能被服务端结算（Stripe 用桩） | 34 |
 | `test_auto_prepare` | 自动下厨房：谁能自动、谁不能、开关落盘与重启后仍在 | 50 |
@@ -1489,6 +1551,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_closed_orders_http` | **打烊后不接单**：到店付款单被拒且不上看板、在线支付中的单一律放行、店主暂停接单也拦（2026-10-18 新增） | 13 |
 | `test_dispatch` | **外送派送顺序**：进不进队列、窗口优先、同窗就近、异常单垫底、排序稳定（2026-10-18 新增） | 32 |
 | `probe_driver_http` | **司机队列**：钥匙矩阵（没/错/打印钥匙 401，司机与店主 200）、司机只能「送达」、没配 driverKey 就是锁的、坐标存进订单（2026-10-18 新增） | 47 |
+| `probe_giveaway_http` | **LUCKY 66 真服务端**：flag off/on 双服务器、验证信走 outbox、6 争 5 并发验证只成 5、第 101 位礼貌 409、开奖幂等、导出全脱敏、Stripe 桩 0 调用（2026-10-20 新增） | 64 |
 | `probe_print_flow` | 真服务端 + 真代理 + 假打印机，整条打印链路（含「打印机失联时理由要写明地址」） | 24 |
 | `test_agent_discovery` | 打印代理能不能自己跟上换掉的网站地址 | 27 |
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
@@ -1499,6 +1562,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |
 | `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因 | 29 |
 | `probe_driver_ui` | **真浏览器**里的司机页：钥匙门、按顺序的卡片、点 Delivered 卡片消失并重排队号、送完的空状态、Forget this phone（2026-10-18 新增） | 28 |
+| `probe_giveaway_ui` | **真浏览器**里的 LUCKY 66：桌面/移动报名全流程、验证链接回执、营销同意默认不勾且不影响资格、菜单页横幅出现且点单流程完好、后台脱敏、flag off 暗态、零控制台异常（2026-10-20 新增） | 36 |
 | `probe_cancel_settles` | 放弃付款的订单不会留在看板上（真实 Stripe） | 5 |
 | `e2e_real_stripe` | 整条真实支付链路（真实 Stripe 测试模式） | 17 |
 
@@ -1533,14 +1597,15 @@ KPOT_HOURS_SPEC=...      # 营业时段覆盖（JSON）—— 2026-10-18 新增�
 >
 > **2026-10-18 白天补一刀**：`/api/orders` 开始拦打烊后的到店付款单之后，
 > **所有会 POST 到店付款单的套件**（不止浏览器那批）都得钉上这个变量——
-> 现在共 **23 个套件**带 24 小时时段（2026-10-19 又加了
-> `probe_delivery_min_http`）。注意 tick 是**每个 `FLUSH_MS`（测试里
+> 现在共 **25 个套件**带 24 小时时段（2026-10-19 加了
+> `probe_delivery_min_http`，2026-10-20 加了 `probe_giveaway_http`
+> 和 `probe_giveaway_ui`）。注意 tick 是**每个 `FLUSH_MS`（测试里
 > 500ms）就用时钟刷新 `open`**，所以套件里用 `/api/store` 把店「打开」是
 > **不够的**，一个 flush 之后就被改回去：`probe_delivery_geo_http` 原先靠
 > 手动开门，于是**时红时绿**（单独跑全绿、整套跑飞了）——典型的时钟竞态，
 > 红的原因和被测的 2 英里规则毫无关系。钉上时段之后它才稳定。
 
-> 指纹比对覆盖 **7 个文件**（订单 / 会员 / 开关 / 菜单 / 打印 / 密钥 / 优惠码），
+> 指纹比对覆盖 **9 个文件**（订单 / 会员 / 开关 / 菜单 / 打印 / 密钥 / 优惠码 / LUCKY 66 数据 / LUCKY 66 邮件 outbox），
 > 前后不一致就判整次失败。加新检查时先问一句：**除了我盯的这个文件，还有哪些
 > 文件会被写？** —— `store.local.json`、`menu.local.json` 和 2026-10-14 的
 > `customers.local.json` 曾经都是漏掉的那几个。
@@ -1565,7 +1630,7 @@ KPOT_HOURS_SPEC=...      # 营业时段覆盖（JSON）—— 2026-10-18 新增�
 > ⚠️ **同一个坑在 2026-10-14 又踩了一次**，这次是 `customers.local.json`：
 > 新增会员功能之后，**15 个会启动服务端的套件里只有新写的那个设了
 > `KPOT_CUSTOMERS_FILE`**。`probe_board_print_ui` 于是把一条测试会员写进了
-> 店里的真实会员表。指纹比对现在覆盖 **7 个文件**（多了会员表）。
+> 店里的真实会员表。指纹比对现在覆盖 **7 个文件**（多了会员表）。2026-10-20 加 LUCKY 66 后扩到 **9 个**（`giveaway.local.json` / `giveaway-mail-outbox.jsonl`）。
 > 规律：**每加一份新的持久化数据，就要回来把这条清单和所有套件的环境变量
 > 一起补上**——新数据刚上线的那几天，没人会想到去看它。
 

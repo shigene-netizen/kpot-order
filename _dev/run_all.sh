@@ -78,7 +78,7 @@ run() {                       # run <name> <path> [VAR=val...]
 # server were writing their test awards into the shop's member list, and one of
 # them ("Board UI", 125 points) had already done it. Every server-spawning suite
 # now pins KPOT_CUSTOMERS_FILE, and this list is what proves it stays true.
-SHOP_FILES=(orders.local.json store.local.json menu.local.json print.local.json secrets.local.json discounts.local.json customers.local.json)
+SHOP_FILES=(orders.local.json store.local.json menu.local.json print.local.json secrets.local.json discounts.local.json customers.local.json giveaway.local.json giveaway-mail-outbox.jsonl)
 
 fingerprint() {
   local f
@@ -108,6 +108,7 @@ run test_schedule           _dev/test_schedule.js
 run test_delivery_geo       _dev/test_delivery_geo.js
 run test_dispatch           _dev/test_dispatch.js
 run test_delivery_min        _dev/test_delivery_min.js
+run test_giveaway          _dev/test_giveaway.js
 
 echo
 echo "--- page syntax (the inline scripts in the owner's own pages) ---"
@@ -146,6 +147,7 @@ run probe_closed_orders_http _dev/probe_closed_orders_http.js
 run probe_driver_http      _dev/probe_driver_http.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
+run probe_giveaway_http    _dev/probe_giveaway_http.js
 
 echo
 echo "--- real browser (headless Chrome) ---"
@@ -157,6 +159,7 @@ run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js
 run probe_board_print_ui   _dev/probe_board_print_ui.js
 run probe_driver_ui        _dev/probe_driver_ui.js
+run probe_giveaway_ui      _dev/probe_giveaway_ui.js
 
 if [ -n "${STRIPE_TEST_KEY:-}" ]; then
   echo

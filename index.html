@@ -59,6 +59,16 @@
     </div>
   </section>
 
+  <!-- ============ LUCKY 66 BANNER ============ -->
+  <!-- Hidden unless the feature flag is on. The giveaway is OFF by default until
+       legal review + owner approval; app.js reveals this banner from
+       CONFIG.giveaway.enabled, so production stays untouched while disabled. -->
+  <a class="lucky66" id="lucky66Banner" href="/giveaway.html" hidden>
+    <span class="l66-ic">🎁</span>
+    <span class="l66-txt"><b>LUCKY 66</b> — win a $66 KPOT EXPRESS gift card</span>
+    <span class="l66-cta">Free to enter ›</span>
+  </a>
+
   <!-- ============ ORDER TYPE ============ -->
   <section class="ordertype">
     <div class="section-label">How would you like it?</div>

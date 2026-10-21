@@ -746,11 +746,52 @@
     $('#tableWrap').classList.toggle('on', state.orderType === 'dinein' && CONFIG.features.qrTableNumbers);
     if (state.table) $('#tableNo').value = state.table;
 
+    /* LUCKY 66 banner — the giveaway is a feature flag (default OFF).
+       The shipped config has it off, and the OWNER can enable it at runtime
+       (store.local.json) without a redeploy — so the browser cannot decide
+       this alone. The server's /api/giveaway/status is the authority: it
+       answers enabled:false while the feature is dark (the production
+       default) and enabled:true only for a round that is actually open.
+       Nothing here can advertise a round the server has not opened. */
+    syncLucky66Banner();
+
     // tabs
     $('#tabs').innerHTML = CATEGORIES.map((c) =>
       '<button class="tab ' + (state.cat === c.id ? 'on' : '') + '" data-cat="' + c.id + '">' + esc(c.n) + '</button>').join('');
 
     renderStoreFooter();
+
+    syncLucky66Banner();
+  }
+
+  /* LUCKY 66 banner — the giveaway is a feature flag, and the SERVER is the
+     authority on whether a round is actually open.
+
+     Two independent reasons the banner must be gated here rather than left in
+     the HTML:
+
+       1. The shipped config has giveaway.enabled = false, so by default the
+          ordering page must not advertise a giveaway that does not exist.
+       2. The owner can switch the giveaway on at runtime (store.local.json)
+          without a redeploy, so the browser's own copy of the flag is only a
+          hint; /api/giveaway/status is what decides. A round that is full,
+          closed or cancelled is not advertised either — the entry page says
+          so instead of sending guests to a dead form.
+
+     Fails CLOSED: no response, or an error, or enabled:false all hide it. */
+  function syncLucky66Banner() {
+    const l66 = $('#lucky66Banner');
+    if (!l66) return;
+    /* Server-authoritative, fail-closed. The shipped config's own
+       giveaway.enabled is the DEFAULT the server reads; the owner can raise it
+       at runtime (store.local.json) without a redeploy, so the browser must not
+       decide from its own copy of the flag — that copy is stale the moment the
+       switch moves. If the status call fails for any reason the banner stays
+       hidden: an unreachable API must never advertise a round. */
+    fetch('/api/giveaway/status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { l66.hidden = !(j && j.enabled === true); })
+      .catch(() => { l66.hidden = true; });
   }
 
   /* Store address / phone / hours at the bottom of the menu, with tap-to-call

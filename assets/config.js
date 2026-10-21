@@ -359,6 +359,41 @@ const CONFIG = {
     sounds: true               // little confirmation chime
   },
 
+  /* ---- LUCKY 66 giveaway -------------------------------------------------
+     FREE sweepstakes: e-mail verified entry, one entry per person, 100 per
+     round, one $66 gift card. No purchase, payment, tip or subscription is
+     ever required or requested.
+
+     ⛔ DISABLED BY DEFAULT. `enabled:false` keeps the customer page, the
+     banner and every public API endpoint dark. Turning it on is a two-key
+     decision, not a deploy detail:
+
+        1. the Georgia legal review in LUCKY66_OFFICIAL_RULES.md is signed off
+        2. the owner says go
+
+     The draw and the prize issuance additionally refuse to run while this is
+     off (see giveaway-api.js). A runtime switch lives in store.local.json
+     (giveaway.enabled) so the owner can flip it without a redeploy; the file
+     wins over this static default, and the KPOT_GIVEAWAY_ENABLED test seam
+     wins over both.
+
+     Do NOT re-add the "no minimum" or "no tips" banners to this feature —
+     those marketing lines were ruled out by the owner (2026-10-19); the
+     giveaway copy is licensed from the Official Rules only. */
+  giveaway: {
+    enabled: false,
+    maxEntries: 100,
+    prizeValue: 66,
+    prizeDesc: 'KPOT EXPRESS Gift Card',
+    /* Bump this any time the Official Rules text changes in a way that
+       matters to entrants — a stale acknowledgement must re-confirm. */
+    rulesVersion: 'LUCKY66-2026-10-20',
+    /* Version of the short eligibility/privacy notice shown at entry. */
+    noticeVersion: '1',
+    verifyHours: 24,
+    pagePath: '/giveaway.html'
+  },
+
   /* ---- Brand ----------------------------------------------------------- */
   brand: {
     red: '#D7263D',
