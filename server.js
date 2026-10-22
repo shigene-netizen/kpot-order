@@ -1944,6 +1944,12 @@ async function handleCreateOrder(req, res) {
   let body;
   try { body = JSON.parse(raw); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
 
+  /* The order object from the client carries `tip` (the dollar amount),
+     but priceOrder reads `tipAmount`. Without this mapping the server
+     recomputes tip as 0, the priced total drops the tip, and any order
+     with a tip fails the total-mismatch check below. */
+  if (body.tip != null && body.tipAmount == null) body.tipAmount = body.tip;
+
   /* Recompute the price here, just like checkout — a guest can't sneak a
      cheaper total past the kitchen board. */
   const basePriced = priceOrder(body, ASSETS.MENU, ASSETS.CONFIG, deliveryPricingOpts());

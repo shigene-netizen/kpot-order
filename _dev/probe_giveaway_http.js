@@ -344,7 +344,7 @@ async function main() {
   const bulkOk = bulkResults.filter((r) => r.status === 200).length;
   const midFill = await req(PORT_B, 'GET', '/api/giveaway/status');
   check('the bulk burst verified ' + bulkOk + ' of ' + tokens.length + ' and left the round 5 short',
-    bulkOk === tokens.length && midFill.j.round.verifiedCount === 95,
+    bulkOk === tokens.length && midFill.j.round.verifiedCount === 195,
     'bulkOk=' + bulkOk + '/' + tokens.length + ', verifiedCount=' + midFill.j.round.verifiedCount);
 
   /* ---- 7: SIX verifications racing for FIVE slots -----------------------
@@ -396,19 +396,19 @@ async function main() {
     email: 'one-hundred-first@example.com', eligibilityAck: true, rulesVersion: RULES
   }, guestH());
   check('8. the 201st registration is refused politely when the round is full',
-    reg101.status === 409 && reg101.j.reason === 'full' && /Thank you/.test(reg101.j.message),
-    JSON.stringify(reg101.j));
+    reg201.status === 409 && reg201.j.reason === 'full' && /Thank you/.test(reg201.j.message),
+    JSON.stringify(reg201.j));
   const pendingBefore201 = (await req(PORT_B, 'GET', '/api/giveaway/status')).j.round.pendingCount;
   const after201 = await req(PORT_B, 'GET', '/api/giveaway/status');
-  check('the refusal did not create an entry', after101.j.round.verifiedCount === 200);
+  check('the refusal did not create an entry', after201.j.round.verifiedCount === 200);
   /* The round already holds pending records from earlier steps, so an absolute
      zero would be the wrong assertion. What must be true is that the refused
      address added NOTHING: no new pending row, and no new verification mail. */
   const mailFor201 = newMails().some((m) =>
     m.kind === 'verify' && m.to === 'one-hundred-first@example.com');
   check('and no verification link was queued for it',
-    after101.j.round.pendingCount === pendingBefore201 && mailFor201 === false,
-    'pending ' + pendingBefore201 + ' -> ' + after101.j.round.pendingCount + ', mail=' + mailFor201);
+    after201.j.round.pendingCount === pendingBefore201 && mailFor201 === false,
+    'pending ' + pendingBefore201 + ' -> ' + after201.j.round.pendingCount + ', mail=' + mailFor201);
 
   /* ---- 10/11/12: close, draw, prize, redeem ---- */
   const close = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND + '/transition',
