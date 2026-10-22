@@ -131,6 +131,7 @@ echo
 echo "--- server integration ---"
 run test_print_auth        _dev/test_print_auth.js
 run test_recheck_payment   _dev/test_recheck_payment.js
+run test_apple_pay_file    _dev/test_apple_pay_file.js
 run test_auto_prepare      _dev/test_auto_prepare.js
 run test_backups           _dev/test_backups.js
 run test_flush_survives_kill _dev/test_flush_survives_kill.js

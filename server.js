@@ -206,6 +206,11 @@ const MIME = {
 // Never served, whatever the path says.
 const BLOCKED = /^(secrets.*\.json|orders.*\.json|orders.*\.csv|menu.*\.json|store.*\.json|server\.js|pricing\.js|package(-lock)?\.json|make_qr\.py|README\.md|url\.txt)$/i;
 
+/* The one dot-path that IS served: Apple Pay domain verification. */
+const APPLE_PAY_VERIFICATION_PATH = '/.well-known/apple-developer-merchantid-domain-association';
+const APPLE_PAY_FILE = process.env.KPOT_APPLE_PAY_FILE
+  || path.join(ROOT, '.well-known', 'apple-developer-merchantid-domain-association');
+
 /* Whole directories that must never be reachable over HTTP. order-backups/
    holds a full copy of every order — served, it would leak customer names and
    phone numbers to anyone who guessed the path. */
@@ -223,6 +228,25 @@ function sendJSON(res, code, obj) {
 
 function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
+
+  /* ---- Apple Pay domain verification ------------------------------------
+     Stripe will not render the Apple Pay button on a web domain until that
+     domain serves this one exact file (Dashboard → Settings → Payment method
+     domains → "Add domain" hands you the file). It lives under a dot
+     directory, which the hidden-segment rule below would reject like every
+     other dot-path — so the exception is written for this filename and
+     nothing else. Every other .well-known path still 404s.
+
+     The path is overridable so a test can point it at a scratch file: the
+     real one only exists on the VM after the owner downloads it from Stripe
+     and is committed to the repo. Absent file → 404, exactly as before. */
+  if (rel === APPLE_PAY_VERIFICATION_PATH) {
+    return fs.readFile(APPLE_PAY_FILE, (err, buf) => {
+      if (err) return send(res, 404, 'Not found');
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(buf);
+    });
+  }
 
   const segments = rel.split('/').filter(Boolean);
 
