@@ -282,10 +282,41 @@ async function main() {
     /* ==================================================================== */
     section('B. the real registration + verification flow');
 
+    /* The legal consent modal GATES registration: nothing may be sent to the
+       server until the guest has read the declarations, checked the agreement
+       box and clicked Agree. Cancel must leave the guest exactly where they
+       were — no entry, no mail. */
     await cdp.evalJs(`(() => {
       document.querySelector('#emailIn').value = 'Browser.Guest@Example.com';
       document.querySelector('#ackIn').checked = true;
       document.querySelector('#submitBtn').click(); return 1; })()`);
+    await cdp.waitFor('document.querySelector("#legalModal").hidden === false', 10000, 'the legal consent modal');
+    check('the legal consent modal appears before anything is registered',
+      await cdp.evalJs('document.querySelector("#legalModal").hidden === false'));
+    check('no registration mail exists yet — nothing was sent to the server',
+      newMails().filter((m) => m.kind === 'verify').length === 0);
+    check('the Agree button is disabled until the agreement box is checked',
+      await cdp.evalJs('document.querySelector("#legalAgreeBtn").disabled === true'));
+
+    /* Cancel: the modal closes, the form is still there, still nothing sent. */
+    await cdp.evalJs('document.querySelector("#legalCancelBtn").click()');
+    check('Cancel closes the modal and leaves the entry form in place',
+      await cdp.evalJs('document.querySelector("#legalModal").hidden === true') &&
+      await cdp.evalJs('document.querySelector("#formCard").hidden === false') &&
+      await cdp.evalJs('document.querySelector("#sentCard").hidden === true'));
+    check('and Cancel still sent nothing',
+      newMails().filter((m) => m.kind === 'verify').length === 0);
+
+    /* Try again and this time agree. */
+    await cdp.evalJs('document.querySelector("#submitBtn").click()');
+    await cdp.waitFor('document.querySelector("#legalModal").hidden === false', 10000, 'the modal again');
+    await cdp.evalJs(`(() => {
+      document.querySelector('#legalAgreeIn').checked = true;
+      document.querySelector('#legalAgreeIn').dispatchEvent(new Event('change'));
+      return 1; })()`);
+    check('checking the agreement box enables the Agree button',
+      await cdp.evalJs('document.querySelector("#legalAgreeBtn").disabled === false'));
+    await cdp.evalJs('document.querySelector("#legalAgreeBtn").click()');
     await cdp.waitFor('document.querySelector("#sentCard").hidden === false', 15000, 'the check-your-inbox state');
     check('submitting shows the verification instructions',
       /Check your inbox/.test(await cdp.evalJs('document.querySelector("#sentCard h3").textContent')));
@@ -336,6 +367,14 @@ async function main() {
       document.querySelector('#ackIn').checked = true;
       document.querySelector('#mktIn').checked = true;
       document.querySelector('#submitBtn').click(); return 1; })()`);
+    /* Same gate as section B — the marketing choice does not bypass it. */
+    await cdp.waitFor('document.querySelector("#legalModal").hidden === false', 10000, 'the legal consent modal');
+    check('the consent modal gates the opt-in registration too',
+      await cdp.evalJs('document.querySelector("#legalModal").hidden === false'));
+    await cdp.evalJs(`(() => {
+      document.querySelector('#legalAgreeIn').checked = true;
+      document.querySelector('#legalAgreeIn').dispatchEvent(new Event('change'));
+      document.querySelector('#legalAgreeBtn').click(); return 1; })()`);
     await cdp.waitFor('document.querySelector("#sentCard").hidden === false', 15000, 'the sent state');
     const optMail = newMails().find((m) => m.kind === 'verify' && m.to === 'opt.in@example.com');
     await cdp.send('Page.navigate', { url: BASE + '/giveaway.html?verify=' + tokenFrom(optMail) });
@@ -440,6 +479,25 @@ async function main() {
     await cleanup();
   } catch (e) {
     console.error('\nprobe crashed: ' + (e && e.message));
+    /* Diagnostics for exactly this situation: a waitFor that timed out. The
+       browser console and the page's own error message are what tell you
+       whether the page broke or the expectation did. */
+    try {
+      if (cdp) {
+        const errs = cdp.logs.filter((l) => l.indexOf('[EXCEPTION]') === 0 || l.indexOf('[error]') === 0);
+        if (errs.length) console.error('browser console:\n  ' + errs.join('\n  '));
+        const state = await cdp.evalJs(`(() => {
+          const g = (s) => { const el = document.querySelector(s); return el ? (el.hidden ? 'hidden' : 'shown') : 'missing'; };
+          return JSON.stringify({
+            formCard: g('#formCard'), sentCard: g('#sentCard'),
+            formMsg: (document.querySelector('#formMsg') || {}).textContent || '',
+            legalModal: g('#legalModal'),
+            legalAgreeBtnDisabled: (document.querySelector('#legalAgreeBtn') || {}).disabled
+          });
+        })()`);
+        console.error('page state: ' + state);
+      }
+    } catch (x) {}
     try { await cleanup(); } catch (x) {}
     process.exit(1);
   }

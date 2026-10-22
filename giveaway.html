@@ -214,7 +214,12 @@
               eligibility list.</li>
           <li><b>One entry per person.</b> Duplicate or unverified e-mail addresses
               do not count toward the 200-entry cap.</li>
-          <li><b>Prize.</b> One $66 KPOT EXPRESS store-credit code (no physical card is issued).\n              Each purchase deducts from the balance until it is used up. If the balance is\n              less than the order total, the difference is paid with another payment method.\n              After every successful payment the remaining balance is shown to you.\n              Not redeemable for cash. No transfer or substitution except as stated in the rules.</li>
+          <li><b>Prize.</b> One $66 KPOT EXPRESS store-credit code — no physical card
+              is issued. Each purchase deducts from the balance until it is used up.
+              If the balance is less than the order total, the difference is paid with
+              another payment method. After every successful payment the remaining
+              balance is shown to you. Not redeemable for cash. No transfer or
+              substitution except as stated in the rules.</li>
           <li><b>Winner notice.</b> The winner is notified by e-mail and has 14 days
               to claim; an alternate winner may be drawn if unclaimed.</li>
           <li><b>Privacy.</b> Your e-mail is used only to verify your entry and to
@@ -387,41 +392,13 @@
     if (!email) { msg($('#formMsg'), 'Enter your e-mail address first.', 'err'); return; }
     if (!ack) { msg($('#formMsg'), 'Please confirm the eligibility statement and the Official Rules.', 'err'); return; }
 
-    // Show the legal consent modal first; registration only proceeds after agreement.
+    /* Show the legal consent modal first. Registration happens ONLY when the
+       guest agrees — doRegister below is the single path that calls the API.
+       (This handler used to fire the register fetch itself as well, which
+       entered the guest WITHOUT their agreement and then entered them a
+       SECOND time when they clicked Agree.) */
     legalPending = { email: email, ack: ack, mkt: mkt };
     openLegalModal();
-
-    fetch('/api/giveaway/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: email, eligibilityAck: ack, marketingOptIn: mkt,
-        rulesVersion: window.__LUCKY66_RULES_VERSION__, source: 'giveaway-page'
-      })
-    }).then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
-      .then(function (out) {
-        busy = false;
-        $('#submitBtn').disabled = false;
-        $('#submitBtn').textContent = 'Enter the giveaway';
-        var j = out.j || {};
-        if (out.s === 200 && j.ok) {
-          show('#formCard', false);
-          show('#sentCard', true);
-          $('#sentMsg').textContent = j.message ||
-            'Check your inbox to confirm your entry.';
-          load();
-        } else if (out.s === 429) {
-          msg($('#formMsg'), 'Too many attempts. Please wait a few minutes and try again.', 'err');
-        } else {
-          msg($('#formMsg'), j.message || 'Could not start your entry. Please try again.', 'err');
-        }
-      })
-      .catch(function () {
-        busy = false;
-        $('#submitBtn').disabled = false;
-        $('#submitBtn').textContent = 'Enter the giveaway';
-        msg($('#formMsg'), 'No connection — please try again.', 'err');
-      });
   });
 
   /* ---- resend -------------------------------------------------------------- */
