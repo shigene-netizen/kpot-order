@@ -39,10 +39,13 @@ const BASE = 'http://127.0.0.1:' + PORT;
 const ADMIN = 'probe-credit-admin-key';
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-credit-http-'));
 
-/* The winner's code and a nearly-empty one, so partial coverage is exercised
-   too. Seeded through the module itself. */
+/* The winner's code, a nearly-empty one, and two more that exist only for the
+   shortfall journey below: one the guest PAYS the rest of online, and one they
+   walk away from. Seeded through the module itself. */
 const CODE_FULL = 'KPOT-PROBE-AAAA-BBBB';
 const CODE_SMALL = 'KPOT-PROBE-SMALL-1';
+const CODE_MID = 'KPOT-PROBE-MID-CCCC';
+const CODE_BACK = 'KPOT-PROBE-BACK-DDDD';
 const CREDITS_FILE = path.join(SCRATCH, 'credits.local.json');
 
 /* One 'Hot Pot To Go' bowl: $15.99 base, 6% tax, $16.95 total. */
@@ -51,9 +54,41 @@ const SUBTOTAL = 15.99;
 const TAX = 0.96;
 const TOTAL = 16.95;
 
-/* ---- the Stripe stub: counts calls so "no session was created" is provable */
+/* A $5 code against that bowl: the whole $5 comes off (appliedFor is
+   min(balance, subtotal), and $5 is the smaller number), the tax is recomputed
+   on what is left, and $11.65 still has to be paid by some other means. */
+const MID_APPLIED = 5;
+const MID_TAX = 0.66;
+const MID_TOTAL = 11.65;
+
+/* ---- the Stripe stub ----------------------------------------------------
+   Two jobs. It counts calls, so "no session was created" is provable; and it
+   answers the one question /api/verify-session asks — was THIS session paid?
+   Sessions are registered here by the probe, the way a real Stripe account
+   holds them: the server only ever READS them. Without that second job the
+   verify leg is untestable, which is how the shortfall journey went unproven
+   for so long: this stub used to answer EVERY request with a fresh session,
+   so a lookup came back with no payment_status and no order number, and
+   settleBoardFromStripe quietly found nothing to settle. */
 let stripeCalls = 0;
 let stripeBodies = [];
+let stubSessions = [];      // {id, client_reference_id, payment_status, ...}
+
+const registerSession = (id, orderNo, paymentStatus) => {
+  const s = {
+    id: id,
+    object: 'checkout.session',
+    client_reference_id: orderNo,
+    payment_status: paymentStatus,
+    status: paymentStatus === 'paid' ? 'complete' : 'open',
+    amount_total: Math.round(MID_TOTAL * 100),
+    currency: 'usd',
+    created: Math.floor(Date.now() / 1000)
+  };
+  stubSessions.push(s);
+  return s;
+};
+
 const stripeStub = http.createServer((req, res) => {
   stripeCalls++;
   let body = '';
@@ -61,6 +96,13 @@ const stripeStub = http.createServer((req, res) => {
   req.on('end', () => {
     stripeBodies.push(body);
     res.setHeader('Content-Type', 'application/json');
+    /* GET /v1/checkout/sessions/:id — the lookup verify-session makes. */
+    const one = req.url.match(/^\/v1\/checkout\/sessions\/([^/?]+)/);
+    if (one) {
+      const s = stubSessions.find((x) => x.id === decodeURIComponent(one[1]));
+      if (s) return res.end(JSON.stringify(s));
+      return res.end(JSON.stringify({ error: { message: 'No such checkout session: ' + one[1] } }));
+    }
     res.end(JSON.stringify({ id: 'cs_test_stub_' + stripeCalls, url: 'https://stub.invalid/pay/' + stripeCalls }));
   });
 });
@@ -139,6 +181,8 @@ function waitForHealth(tries) {
 const seed = CR.blankStore();
 CR.issue(seed, CODE_FULL, 66, { roundId: 'probe-round', now: new Date().toISOString() });
 CR.issue(seed, CODE_SMALL, 1.5, { roundId: 'probe-round', now: new Date().toISOString() });
+CR.issue(seed, CODE_MID, MID_APPLIED, { roundId: 'probe-round', now: new Date().toISOString() });
+CR.issue(seed, CODE_BACK, MID_APPLIED, { roundId: 'probe-round', now: new Date().toISOString() });
 CR.saveCredits(CREDITS_FILE, seed);
 
 const server = spawn(process.execPath, ['server.js'], {
@@ -182,9 +226,11 @@ stripeStub.listen(STRIPE_PORT, '127.0.0.1', () => {
 
     check('the server did NOT start with the shop\'s live key',
       !/live mode/i.test(serverLog), 'log had "live mode" — KPOT_SECRETS_FILE is not set');
-    check('the ledger booted with the two seeded codes',
-      ledgerBalance(CODE_FULL) === 66 && ledgerBalance(CODE_SMALL) === 1.5,
-      'full=' + ledgerBalance(CODE_FULL) + ' small=' + ledgerBalance(CODE_SMALL));
+    check('the ledger booted with the four seeded codes',
+      ledgerBalance(CODE_FULL) === 66 && ledgerBalance(CODE_SMALL) === 1.5 &&
+      ledgerBalance(CODE_MID) === MID_APPLIED && ledgerBalance(CODE_BACK) === MID_APPLIED,
+      'full=' + ledgerBalance(CODE_FULL) + ' small=' + ledgerBalance(CODE_SMALL) +
+      ' mid=' + ledgerBalance(CODE_MID) + ' back=' + ledgerBalance(CODE_BACK));
 
     /* A real coupon, so "a credit and a coupon together" exercises the
        three-way XOR rather than tripping over an unknown code first. */
@@ -395,9 +441,125 @@ stripeStub.listen(STRIPE_PORT, '127.0.0.1', () => {
       r.j && r.j.total === TOTAL && r.j.discountAmount === 0,
       'total=' + (r.j && r.j.total) + ' discount=' + (r.j && r.j.discountAmount));
 
+    /* ---- H. the shortfall, paid another way ------------------------------
+       The owner's promise about the prize: when the balance is not enough for
+       the order, the guest pays the rest by another method. That is two more
+       steps than anything above has covered, and they are the steps where
+       money can go missing:
+
+         the order is created BEFORE Stripe is involved — it has to be, that is
+         how the number gets reserved — so the credit is already SPENT by the
+         time the guest is looking at a card form. The board only learns the
+         outcome when somebody asks Stripe.
+
+       So the question is not "does the discount work" (proved above) but: what
+       happens to a spent code when the guest never pays? If the answer is
+       "nothing", the prize quietly eats itself — a guest who opens the card
+       page and changes their mind has paid $5 of store credit for nothing. */
+    return post('/api/orders', orderFor(9, {
+      creditCode: CODE_MID,
+      subtotal: SUBTOTAL,
+      tax: MID_TAX,
+      total: MID_TOTAL,
+      payMethod: 'stripe',
+      paymentStatus: 'unverified',
+      paid: false
+    }));
+  }).then((r) => {
+    check('a partly covered order the guest will finish online is accepted',
+      r.status === 200 && r.j && r.j.ok === true,
+      'status=' + r.status + ' ' + JSON.stringify(r.j).slice(0, 140));
+    check('it is NOT paid — Stripe has not been asked yet',
+      ledgerBalance(CODE_MID) === 0, 'balance=' + ledgerBalance(CODE_MID));
+    return getOrder('KP-PROBE-CREDIT-9');
+  }).then((r) => {
+    check('it lands UNPAID, waiting on the card payment',
+      r.j && r.j.paymentStatus === 'unverified',
+      'paymentStatus=' + (r.j && r.j.paymentStatus));
+    check('the pay method is the card, not the credit',
+      r.j && r.j.payMethod === 'stripe', 'payMethod=' + (r.j && r.j.payMethod));
+    check('the board shows the split: $5 credit, $11.65 to collect',
+      r.j && r.j.discountAmount === MID_APPLIED && r.j.total === MID_TOTAL &&
+      r.j.tax === MID_TAX,
+      'discount=' + (r.j && r.j.discountAmount) + ' total=' + (r.j && r.j.total) +
+      ' tax=' + (r.j && r.j.tax));
+    check('the order carries the credit it spent, still unreleased',
+      r.j && r.j.credit && r.j.credit.applied === MID_APPLIED &&
+      r.j.credit.balanceAfter === 0 && r.j.credit.released === false,
+      JSON.stringify(r.j && r.j.credit));
+
+    /* Stripe says the money arrived. The credit must NOT come back — the guest
+       paid the shortfall, they did not cancel. */
+    registerSession('cs_test_probepaid0001', 'KP-PROBE-CREDIT-9', 'paid');
+    return get('/api/verify-session?id=cs_test_probepaid0001');
+  }).then((r) => {
+    check('verify-session confirms the payment',
+      r.status === 200 && r.j && r.j.verified === true,
+      'status=' + r.status + ' ' + JSON.stringify(r.j).slice(0, 140));
+    check('…and it names the order it settled',
+      r.j && r.j.orderNo === 'KP-PROBE-CREDIT-9', 'orderNo=' + (r.j && r.j.orderNo));
+    return getOrder('KP-PROBE-CREDIT-9');
+  }).then((r) => {
+    check('the board shows it PAID',
+      r.j && r.j.paymentStatus === 'verified',
+      'paymentStatus=' + (r.j && r.j.paymentStatus));
+    check('and it stays on the active board — a paid order is not a cancelled one',
+      r.j && r.j.status === 'received', 'status=' + (r.j && r.j.status));
+    check('the credit STAYS SPENT: paying the rest is not a refund',
+      ledgerBalance(CODE_MID) === 0, 'balance=' + ledgerBalance(CODE_MID));
+    check('the split survives the settlement, still unreleased',
+      r.j && r.j.credit && r.j.credit.applied === MID_APPLIED &&
+      r.j.credit.released === false,
+      JSON.stringify(r.j && r.j.credit));
+
+    /* …and now the other outcome, the one that costs the guest money if it is
+       wrong: same order shape, but the guest backs out of the card form. */
+    return post('/api/orders', orderFor(10, {
+      creditCode: CODE_BACK,
+      subtotal: SUBTOTAL,
+      tax: MID_TAX,
+      total: MID_TOTAL,
+      payMethod: 'stripe',
+      paymentStatus: 'unverified',
+      paid: false
+    }));
+  }).then((r) => {
+    check('a second partly covered order is accepted',
+      r.status === 200 && r.j && r.j.ok === true, 'status=' + r.status);
+    check('the $5 is spent before the guest has paid a cent',
+      ledgerBalance(CODE_BACK) === 0, 'balance=' + ledgerBalance(CODE_BACK));
+    registerSession('cs_test_probeunpaid01', 'KP-PROBE-CREDIT-10', 'unpaid');
+    return get('/api/verify-session?id=cs_test_probeunpaid01');
+  }).then((r) => {
+    check('verify-session says the money never arrived',
+      r.status === 200 && r.j && r.j.verified === false,
+      'status=' + r.status + ' verified=' + (r.j && r.j.verified));
+    return getOrder('KP-PROBE-CREDIT-10');
+  }).then((r) => {
+    check('the order is taken off the active board',
+      r.j && r.j.status === 'cancelled', 'status=' + (r.j && r.j.status));
+    check('the $5 is back on the code — the guest who walked away loses nothing',
+      ledgerBalance(CODE_BACK) === MID_APPLIED,
+      'balance=' + ledgerBalance(CODE_BACK));
+    check('the order records the release, so it cannot happen twice',
+      r.j && r.j.credit && r.j.credit.released === true &&
+      r.j.credit.balanceAfter === MID_APPLIED,
+      JSON.stringify(r.j && r.j.credit));
+
+    /* A retried lookup (flaky connection, staff re-check) must not pay the
+       guest a second time. */
+    return get('/api/verify-session?id=cs_test_probeunpaid01');
+  }).then(() => getOrder('KP-PROBE-CREDIT-10')).then((r) => {
+    check('asking Stripe again does not refund the same dollars twice',
+      ledgerBalance(CODE_BACK) === MID_APPLIED, 'balance=' + ledgerBalance(CODE_BACK));
+    check('the order is still cancelled, not revived',
+      r.j && r.j.status === 'cancelled', 'status=' + (r.j && r.j.status));
+
     console.log('\n--- ledger at the end ---');
     console.log('  ' + CODE_FULL + ' → $' + ledgerBalance(CODE_FULL) + ' (started $66, one order cancelled)');
     console.log('  ' + CODE_SMALL + ' → $' + ledgerBalance(CODE_SMALL) + ' (started $1.50, one order placed)');
+    console.log('  ' + CODE_MID + ' → $' + ledgerBalance(CODE_MID) + ' (started $5, $5 spent, shortfall PAID)');
+    console.log('  ' + CODE_BACK + ' → $' + ledgerBalance(CODE_BACK) + ' (started $5, $5 spent, shortfall NEVER paid)');
     console.log('\n' + pass + ' passed, ' + fail + ' failed');
     finish(fail === 0 ? 0 : 1);
   }).catch((e) => {

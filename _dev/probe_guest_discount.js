@@ -22,6 +22,7 @@
 'use strict';
 
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -136,9 +137,130 @@ const CODES = [
 const CR = require(path.join(ROOT, 'credits.js'));
 const CREDITS_FILE = path.join(SCRATCH, 'credits.local.json');
 const CREDIT_CODE = 'KPOT-PROBE-GUEST-01';
+/* Two more, for the shortfall journey at the bottom: one whose balance the
+   guest PAYS the rest of online, and one they walk away from. Both $5 against
+   $31.98 of food, so neither covers the order. */
+const CREDIT_SMALL = 'KPOT-PROBE-GUEST-02';
+const CREDIT_BACK = 'KPOT-PROBE-GUEST-03';
 const seedCredits = CR.blankStore();
 CR.issue(seedCredits, CREDIT_CODE, 66, { roundId: 'probe-guest', now: new Date().toISOString() });
+CR.issue(seedCredits, CREDIT_SMALL, 5, { roundId: 'probe-guest', now: new Date().toISOString() });
+CR.issue(seedCredits, CREDIT_BACK, 5, { roundId: 'probe-guest', now: new Date().toISOString() });
 CR.saveCredits(CREDITS_FILE, seedCredits);
+
+const creditBalance = (code) => {
+  const r = CR.balanceOf(CR.loadCredits(CREDITS_FILE), code);
+  return r.ok ? r.balance : null;
+};
+
+/* ---- a Stripe stub, so the shortfall can actually be paid ----------------
+   The guest page will not offer a card payment the server cannot create a
+   session for, and a test must not call the real api.stripe.com. So a stub
+   stands in for both halves the app needs:
+
+     POST /v1/checkout/sessions      — create one, and hand back a URL;
+     GET  /v1/checkout/sessions/:id  — "was this one paid?" (/api/verify-session);
+     GET  /pay/:id                   — the page the browser is handed to.
+
+   The pay URL is LOCAL rather than https://stub.invalid/… because the browser
+   has to be able to navigate there: the redirect is the real thing, only the
+   card form at the end of it is a stub. `stubWillPay` is what a real Stripe
+   decides — the guest either pays or backs out, and the probe sets it. */
+const STRIPE_PORT = parseInt(process.env.STRIPE_PORT || '8954', 10);
+const STRIPE_BASE = 'http://127.0.0.1:' + STRIPE_PORT;
+let stubSessions = [];     // {id, orderNo, payment_status, amount_total, body}
+let stubCoupons = [];      // {id, amount_off} — what a coupon takes off
+let stubWillPay = true;
+let stripeBodies = [];
+
+const stripeStub = http.createServer((req, res) => {
+  const u = new URL(req.url, STRIPE_BASE);
+  const send = (code, body, type) => {
+    res.writeHead(code, { 'Content-Type': type || 'application/json' });
+    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  };
+
+  /* The card form the guest lands on. Deliberately plain: nothing here is
+     under test, it only has to exist so the redirect is real. */
+  if (u.pathname.indexOf('/pay/') === 0) {
+    return send(200, '<!doctype html><meta charset="utf-8"><title>Stripe (stub)</title>' +
+      '<body style="font:16px system-ui;padding:40px;text-align:center">' +
+      '<h2>Stripe — stub</h2><p>This is where the card form would be.</p>' +
+      '<script>window.__stubSession = ' + JSON.stringify(u.pathname.slice(5)) + ';</script>' +
+      '</body>', 'text/html');
+  }
+
+  if (req.method === 'POST' && u.pathname === '/v1/coupons') {
+    /* Stripe has no "take $1.38 off" other than a coupon, so the server mints
+       a one-shot coupon for the exact amount. It fails CLOSED if this call
+       fails, so the stub has to answer or the whole card path is refused. */
+    let body = '';
+    req.on('data', (c) => { body += c.toString(); });
+    req.on('end', () => {
+      stripeBodies.push(body);
+      const params = new URLSearchParams(body);
+      const c = {
+        id: 'coupon_stub' + Math.random().toString(36).slice(2, 10),
+        object: 'coupon',
+        amount_off: parseInt(params.get('amount_off') || '0', 10) || 0,
+        currency: 'usd',
+        duration: 'once',
+        max_redemptions: 1
+      };
+      stubCoupons.push(c);
+      send(200, c);
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/v1/checkout/sessions') {
+    let body = '';
+    req.on('data', (c) => { body += c.toString(); });
+    req.on('end', () => {
+      stripeBodies.push(body);
+      /* client_reference_id is the order number we put there; the server reads
+         it back off the session to find the board entry. */
+      const params = new URLSearchParams(body);
+      const orderNo = params.get('client_reference_id') || '';
+      /* What the guest is actually charged, computed the way Stripe computes
+         it: every line item's unit_amount × quantity, less any coupon applied.
+         The store credit reaches the guest through that coupon, so this number
+         IS the shortfall — which is the whole point of the check below. */
+      let gross = 0;
+      for (const [k, v] of params) {
+        const m = k.match(/^line_items\[(\d+)\]\[price_data\]\[unit_amount\]$/);
+        if (!m) continue;
+        const q = parseInt(params.get('line_items[' + m[1] + '][quantity]') || '1', 10) || 1;
+        gross += (parseInt(v, 10) || 0) * q;
+      }
+      const couponId = params.get('discounts[0][coupon]') || '';
+      const coupon = stubCoupons.find((x) => x.id === couponId);
+      const s = {
+        id: 'cs_test_stub' + Math.random().toString(36).slice(2, 12),
+        object: 'checkout.session',
+        client_reference_id: orderNo,
+        payment_status: stubWillPay ? 'paid' : 'unpaid',
+        status: stubWillPay ? 'complete' : 'open',
+        amount_total: Math.max(0, gross - (coupon ? coupon.amount_off : 0)),
+        coupon_off: coupon ? coupon.amount_off : 0,
+        currency: 'usd',
+        created: Math.floor(Date.now() / 1000),
+        body: body
+      };
+      stubSessions.push(s);
+      send(200, { id: s.id, url: STRIPE_BASE + '/pay/' + s.id });
+    });
+    return;
+  }
+
+  const one = u.pathname.match(/^\/v1\/checkout\/sessions\/([^/]+)$/);
+  if (one) {
+    const s = stubSessions.find((x) => x.id === decodeURIComponent(one[1]));
+    if (!s) return send(404, { error: { message: 'No such checkout session' } });
+    return send(200, s);
+  }
+  return send(404, { error: { message: 'stub: nothing at ' + u.pathname } });
+});
 
 /* Read one row out of the cart's totals block by its label. */
 const ROW = (label) => `(() => {
@@ -183,6 +305,23 @@ const CREDIT_BOX_TEXT = `(() => {
   const c = box && box.closest('.coupon');
   return c ? Array.from(c.querySelectorAll('.small')).map((x) => x.textContent).join(' | ') : '';
 })()`;
+
+/* The guest's details, typed the way a guest types them, then the button that
+   actually places the order. All three are required by placeOrder() — a missing
+   one is a toast, not a silent no-op, so the probe would hang rather than
+   fail confusingly. */
+async function fillGuestAndPay(cdp) {
+  await cdp.evalJs(`(() => {
+    const set = (sel, v) => {
+      const e = document.querySelector(sel);
+      if (e) { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); }
+    };
+    set('#cName', 'Probe Guest');
+    set('#cPhone', '4045550111');
+    set('#cEmail', 'probe@example.invalid');
+  })()`);
+  await cdp.evalJs(`document.querySelector('#placeOrder').click()`);
+}
 const COUPON_BOX_TEXT = `(() => {
   const box = document.querySelector('#couponInput');
   const c = box && box.closest('.coupon');
@@ -198,8 +337,13 @@ async function main() {
   const profile = path.join(os.tmpdir(), 'kpot-guest-discount-chrome-' + Date.now());
 
   const cleanup = async () => {
+    try { stripeStub.closeAllConnections(); } catch (e) {}
+    try { stripeStub.close(); } catch (e) {}
     await teardown([chrome, server], [SCRATCH, profile]);
   };
+
+  /* Listening before the server boots, so the first checkout finds it. */
+  await new Promise((r) => stripeStub.listen(STRIPE_PORT, '127.0.0.1', r));
 
   try {
     server = spawn(process.execPath, ['server.js'], {
@@ -223,6 +367,9 @@ async function main() {
         KPOT_MENU_FILE: path.join(SCRATCH, 'menu.local.json'),
         KPOT_SECRETS_FILE: path.join(SCRATCH, 'secrets.local.json'),
         ORDERS_BACKUP_DIR: path.join(SCRATCH, 'order-backups'),
+        /* Without this the server would call the REAL api.stripe.com with the
+           fake key below, and the card path could never be driven. */
+        KPOT_STRIPE_API_BASE: STRIPE_BASE + '/v1/checkout/sessions',
         STRIPE_SECRET_KEY: 'sk_test_guest_discount_not_a_real_key'
       }),
       stdio: ['ignore', 'pipe', 'pipe']
@@ -413,6 +560,117 @@ async function main() {
       await cdp.evalJs(CREDIT_BOX_TEXT));
     check('and no discount row appears for it', (await cdp.evalJs(DISC_ROW)) === null);
     check('the total is untouched', (await cdp.evalJs(ROW('Total'))) === '$33.90');
+
+    /* ---- the shortfall: the credit runs out, the card pays the rest -------
+       The owner's promise about the prize, end to end in a real browser. A $5
+       code against $31.98 of food does not cover the order, so the guest pays
+       the difference another way. Everything here is the real thing except the
+       card form at the very end of the redirect: the server prices the
+       shortfall, creates the session, the browser is handed over, and the
+       ticket that comes back has to show BOTH halves of the payment. */
+    await typeCredit(cdp, CREDIT_SMALL);
+    await cdp.waitFor(`((document.querySelector('#cartTotals .trow.disc')||{}).textContent||'').indexOf('Store credit') >= 0`,
+      10000, 'the store credit to take its share');
+    check('a $5 code against $31.98 of food takes $5.00, not the whole subtotal',
+      /-\$5\.00/.test((await cdp.evalJs(DISC_ROW)) || ''),
+      'row=' + (await cdp.evalJs(DISC_ROW)));
+    check('tax is recomputed on what is left ($1.62)',
+      (await cdp.evalJs(ROW('Tax'))) === '$1.62', 'tax=' + (await cdp.evalJs(ROW('Tax'))));
+    check('the TOTAL is what the card still has to collect: $28.60',
+      (await cdp.evalJs(ROW('Total'))) === '$28.60', 'total=' + (await cdp.evalJs(ROW('Total'))));
+    check('the page says the code will be empty afterwards',
+      /\$0\.00 will be left/.test(await cdp.evalJs(CREDIT_BOX_TEXT)),
+      await cdp.evalJs(CREDIT_BOX_TEXT));
+
+    /* Pay it. The cart sheet only carries the button that OPENS the checkout
+       sheet — #placeOrder lives there, next to the guest's details. */
+    stubWillPay = true;
+    stubSessions = [];
+    await cdp.evalJs(`document.querySelector('#toCheckout').click()`);
+    await cdp.waitFor('!!document.querySelector("#placeOrder")', 10000, 'the checkout sheet');
+    /* The checkout sheet keeps its own totals block (#checkoutTotals, not
+       #cartTotals) — the cart sheet is still in the DOM behind it, so reading
+       the wrong one would answer for the wrong sheet. */
+    const CO_TOTAL = `(() => { const r = Array.from(document.querySelectorAll('#checkoutTotals .trow'))
+      .find((x) => x.querySelector('span') && x.querySelector('span').textContent.indexOf('Total') === 0);
+      return r ? (r.querySelector('b') ? r.querySelector('b').textContent : r.textContent) : null; })()`;
+    check('the shortfall survives the move to the checkout sheet',
+      (await cdp.evalJs(CO_TOTAL)) === '$28.60', 'total=' + (await cdp.evalJs(CO_TOTAL)));
+    await fillGuestAndPay(cdp);
+    await cdp.waitFor(`location.href.indexOf(${JSON.stringify(STRIPE_BASE + '/pay/')}) === 0`,
+      25000, 'the browser to be handed to the Stripe stub');
+
+    check('the session was created for the SHORTFALL, not the whole order',
+      stubSessions.length === 1 && stubSessions[0].amount_total === 2860,
+      'sessions=' + stubSessions.length + ' charged=' +
+        (stubSessions[0] && stubSessions[0].amount_total) + ' coupon_off=' +
+        (stubSessions[0] && stubSessions[0].coupon_off));
+    check('…and it carries our order number, so the board can be found again',
+      /^KP-/.test((stubSessions[0] && stubSessions[0].client_reference_id) || ''),
+      'ref=' + (stubSessions[0] && stubSessions[0].client_reference_id));
+    check('the $5 was spent the moment the order was created — before any card',
+      creditBalance(CREDIT_SMALL) === 0, 'balance=' + creditBalance(CREDIT_SMALL));
+
+    /* The guest pays at the stub (the probe flips the session, which is what a
+       real Stripe decides), then comes back the way Stripe sends them. */
+    await cdp.send('Page.navigate', { url: BASE + '/?paid=1' });
+    await cdp.waitFor('!!document.querySelector(".tk-tot")', 25000, 'the ticket to come back');
+
+    const TICKET = `(() => { const t = document.querySelector('.ticket');
+      return t ? t.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`;
+    const ticket = await cdp.evalJs(TICKET);
+    check('the ticket confirms the CARD payment, by Stripe',
+      /Payment confirmed by Stripe/.test(ticket) && /Pay Online/.test(ticket),
+      ticket.slice(0, 220));
+    check('it shows the store-credit half: -$5.00 off',
+      /-\$5\.00/.test(ticket), ticket.slice(0, 260));
+    check('it says what is left on the code: $0.00',
+      /Store credit left\s*\$0\.00/.test(ticket), ticket.slice(0, 300));
+    check('and the total is the shortfall the card paid: $28.60',
+      /Total\s*\$28\.60/.test(ticket), ticket.slice(0, 320));
+    check('the credit is still spent — paying the rest is not a refund',
+      creditBalance(CREDIT_SMALL) === 0, 'balance=' + creditBalance(CREDIT_SMALL));
+
+    /* ---- and the guest who changes their mind at the card form ------------
+       Same order, same spent credit, but the money never arrives. The credit
+       has to come back, or the prize quietly costs the guest $5 for nothing.
+
+       The paid order above cleared the cart, so seed it again the way a
+       returning guest gets it — the same trick this probe used at the start. */
+    await cdp.evalJs(`localStorage.setItem('kpot.cart.v1', ${JSON.stringify(JSON.stringify(CART))})`);
+    await cdp.send('Page.navigate', { url: BASE + '/' });
+    await cdp.waitFor('!!document.querySelector("#cartBar.on")', 20000, 'the cart bar to show an item');
+    await cdp.evalJs(`document.querySelector('#cartBtn').click()`);
+    await cdp.waitFor('!!document.querySelector("#creditInput")', 10000, 'the cart sheet again');
+    await typeCredit(cdp, CREDIT_BACK);
+    await cdp.waitFor(`((document.querySelector('#cartTotals .trow.disc')||{}).textContent||'').indexOf('Store credit') >= 0`,
+      10000, 'the second code to take its share');
+    check('the second $5 code is applied the same way',
+      /-\$5\.00/.test((await cdp.evalJs(DISC_ROW)) || ''), 'row=' + (await cdp.evalJs(DISC_ROW)));
+
+    stubWillPay = false;      // the guest backs out of the card form
+    stubSessions = [];
+    await cdp.evalJs(`document.querySelector('#toCheckout').click()`);
+    await cdp.waitFor('!!document.querySelector("#placeOrder")', 10000, 'the checkout sheet again');
+    await fillGuestAndPay(cdp);
+    await cdp.waitFor(`location.href.indexOf(${JSON.stringify(STRIPE_BASE + '/pay/')}) === 0`,
+      25000, 'to be handed to the Stripe stub again');
+    check('the $5 is spent before the guest has paid anything',
+      creditBalance(CREDIT_BACK) === 0, 'balance=' + creditBalance(CREDIT_BACK));
+
+    await cdp.send('Page.navigate', { url: BASE + '/?canceled=1' });
+    await cdp.waitFor(`!!document.querySelector("#cartBar")`, 25000, 'the app to come back');
+
+    /* The client's cancel notice is fire-and-forget, so poll the ledger rather
+       than assume the request landed. */
+    let given = null;
+    for (let i = 0; i < 40; i++) {
+      given = creditBalance(CREDIT_BACK);
+      if (given === 5) break;
+      await sleep(250);
+    }
+    check('the $5 is back on the code — walking away costs the guest nothing',
+      given === 5, 'balance=' + given);
 
     const errs = cdp.logs.filter((l) => /EXCEPTION|\[error\]/.test(l));
     check('the page logged no JavaScript errors', errs.length === 0, errs.slice(0, 3).join('\n         '));
