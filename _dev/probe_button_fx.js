@@ -97,12 +97,24 @@ function connectCdp(wsUrl) {
   async function waitFor(expr, timeoutMs, label) {
     const until = Date.now() + timeoutMs;
     let last;
+    let lastErr = null;
     while (Date.now() < until) {
-      try { last = await evalJs(expr); } catch (e) { last = '(ctx) ' + e.message; }
+      /* An expression that THROWS has NOT succeeded. It nearly always means
+         the element it reads is not in the DOM yet — which is the entire
+         point of waiting. Turning the error into a truthy string made
+         waitFor return early on a condition that was never met: for about
+         one run in ten, probe_guest_discount's discount-row expression threw
+         for the ~10 ms the row was absent while the credit re-price was in
+         flight, so the wait "passed" instantly and the next check read a row
+         that was not there. Keep polling; the error is reported only if we
+         genuinely time out. */
+      try { last = await evalJs(expr); lastErr = null; }
+      catch (e) { last = null; lastErr = e.message; }
       if (last) return last;
       await sleep(350);
     }
-    throw new Error('timed out waiting for ' + label + ' — last: ' + JSON.stringify(last));
+    throw new Error('timed out waiting for ' + label + ' — last: ' + JSON.stringify(last) +
+      (lastErr ? ' (last error: ' + lastErr + ')' : ''));
   }
 
   return { ws, send, evalJs, waitFor, logs };

@@ -322,7 +322,11 @@ async function handle(req, res, pathname, url, ctx) {
   if (pathname.indexOf('/api/giveaway/admin/') === 0) {
     if (!adminAuthorized(req)) return send(res, 401, { ok: false, reason: 'unauthorized' });
     const rest = pathname.slice('/api/giveaway/admin'.length);
-    return adminRoute(rest, req, res, url, { send: send, readBody: readBody, enabled: enabled, C: C, baseUrl: baseUrl });
+    return adminRoute(rest, req, res, url, {
+      send: send, readBody: readBody, enabled: enabled, C: C, baseUrl: baseUrl,
+      /* the store-credit ledger — prize issuance must create a real balance */
+      credits: P.credits
+    });
   }
 
   return send(res, 404, { ok: false, reason: 'not_found' });
@@ -526,19 +530,47 @@ async function adminRoute(rest, req, res, url, ctx) {
     if (!verdict.ok) {
       return send(res, 409, { ok: false, reason: verdict.reason, message: 'A prize has already been issued for this round.' });
     }
-    const code = String(body.code || '').trim();
-    if (code.length < 4) {
-      return send(res, 400, { ok: false, reason: 'bad_code', message: 'Enter the store-credit code (4+ characters).' });
+    /* The prize is a store-credit code, and the code is the credential: it must
+       exist as a real, spendable balance in the ledger (credits.js), or the
+       e-mail below would promise money the shop never created. No adapter = no
+       issuance — fail closed rather than send a dead code. */
+    const CRED = ctx.credits;
+    if (!CRED) {
+      return send(res, 500, { ok: false, reason: 'credit_unavailable', message: 'The store-credit ledger is unavailable; nothing was issued.' });
+    }
+    const prizeValue = Number(round.prize && round.prize.value) || 0;
+    if (!isFinite(prizeValue) || prizeValue <= 0) {
+      return send(res, 409, { ok: false, reason: 'bad_value', message: 'This round has no prize value configured.' });
+    }
+    /* Admin may paste a code they chose, or leave it blank and get a strong one. */
+    let code = CRED.normalizeCode(body.code);
+    if (!code) code = CRED.generateCode();
+    if (!CRED.isValidCode(code)) {
+      return send(res, 400, { ok: false, reason: 'bad_code', message: 'Enter the store-credit code (' + CRED.minLength + '+ characters), or leave it blank to generate one.' });
+    }
+    const issued = CRED.issue(code, prizeValue, {
+      roundId: round.id,
+      note: String(body.note || '').slice(0, 200)
+    });
+    if (!issued.ok) {
+      return send(res, 409, {
+        ok: false, reason: 'credit_' + issued.reason,
+        message: issued.reason === 'duplicate'
+          ? 'That code is already in the credit ledger — pick another one.'
+          : 'Could not create the store-credit entry (' + issued.reason + ').'
+      });
     }
     const winnerEmail = getPersonEmail(store, round, round.draw.winnerEntryId);
     round.prizeIssue = {
       issuedAt: new Date().toISOString(),
       by: by,
-      codeRef: code.slice(0, 4) + '…' + code.slice(-2),   /* never the full code in the store */
+      codeRef: issued.entry.codeRef,        /* never the full code in the store */
+      creditHash: issued.entry.codeHash,    /* the ledger entry, addressed */
+      creditValue: issued.entry.value,
       note: String(body.note || '').slice(0, 200),
       revokedAt: null
     };
-    audit(round, 'prize_issued', 'code ' + round.prizeIssue.codeRef);
+    audit(round, 'prize_issued', 'code ' + round.prizeIssue.codeRef + ' ($' + prizeValue.toFixed(2) + ' store credit)');
     if (GW.canTransition(round.status, GW.STATUS.PRIZE_ISSUED)) round.status = GW.STATUS.PRIZE_ISSUED;
     STORE.save(store);
 
@@ -565,7 +597,15 @@ async function adminRoute(rest, req, res, url, ctx) {
     if (round.prizeRedeem) {
       return send(res, 409, { ok: false, reason: 'already_redeemed', message: 'This prize is already marked redeemed.' });
     }
-    const bal = Number(body.balanceAfter);
+    /* The balance can be typed by hand (the owner may have spent it across
+       several orders) or read straight off the ledger when the code is pasted
+       in — the ledger is the authority, so prefer it when both are given. */
+    let bal = Number(body.balanceAfter);
+    const CRED = ctx.credits;
+    if (CRED && body.code && (!isFinite(bal) || bal < 0)) {
+      const v = CRED.balanceOf(String(body.code));
+      if (v.ok) bal = v.balance;
+    }
     round.prizeRedeem = {
       redeemedAt: new Date().toISOString(),
       by: by,

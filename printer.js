@@ -218,12 +218,22 @@ function buildTicket(order, opts) {
 
   /* Shown as a negative amount right under the subtotal, which is the only way
      the kitchen can tell why TOTAL is smaller than the menu price. Named, so a
-     staff discount and a guest's code are not the same thing on paper. */
+     staff discount, a guest's code and a store-credit code are not the same
+     thing on paper — the last one is the winner's $66 code being spent down,
+     and the kitchen should be able to see that at a glance. */
   const disc = Number(ord.discountAmount) || 0;
   if (disc > 0) {
     const d = ord.discount || {};
-    const tag = d.code ? String(d.code) : (d.source === 'staff' ? 'STAFF' : '');
+    const tag = d.code ? String(d.code)
+      : d.source === 'credit' ? 'STORE CREDIT'
+        : d.source === 'staff' ? 'STAFF' : '';
     line(twoCol(tag ? 'DISCOUNT ' + tag : 'DISCOUNT', '-' + money(disc), cols));
+  }
+  /* What is left on the store-credit code after this order. The counter gets
+     asked "how much is left on my code?" while the guest is standing there,
+     and the answer is on the order — no phone call to the owner. */
+  if (ord.credit && Number(ord.credit.applied) > 0) {
+    line(twoCol('CREDIT LEFT', money(Number(ord.credit.balanceAfter) || 0), cols));
   }
 
   if (tax != null) line(twoCol('TAX', money(tax), cols));

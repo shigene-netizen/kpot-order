@@ -73,6 +73,7 @@ function spawnServer(port, giveawayEnabled) {
     KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
     KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
     KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
+    KPOT_CREDITS_FILE: path.join(SCRATCH, 'credits.local.json'),
     KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
     KPOT_MENU_FILE: path.join(SCRATCH, 'menu.local.json'),
     KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
@@ -443,6 +444,23 @@ async function main() {
   check('the prize code was e-mailed to the winner exactly once',
     prizeMail.length === 1 && prizeMail[0].text.indexOf('GW-1234-5678-ABCD') >= 0);
 
+  /* ---- 12b: the prize is a REAL balance in the credit ledger ---- */
+  const creditsFile = path.join(SCRATCH, 'credits.local.json');
+  let ledger = null;
+  try { ledger = JSON.parse(fs.readFileSync(creditsFile, 'utf8')); } catch (e) { /* not written */ }
+  check('issuing the prize created a store-credit entry',
+    !!ledger && Object.keys(ledger.codes || {}).length === 1);
+  const ledgerEntry = ledger ? Object.values(ledger.codes)[0] : null;
+  check('the entry carries the round prize value, untouched',
+    !!ledgerEntry && ledgerEntry.value === 66 && ledgerEntry.balance === 66 &&
+    ledgerEntry.roundId === ROUND && !ledgerEntry.revokedAt,
+    ledgerEntry ? 'value=' + ledgerEntry.value + ' balance=' + ledgerEntry.balance : 'no entry');
+  check('the code itself never reaches the disk — only its sha256',
+    !!ledgerEntry && ledgerEntry.codeHash.length === 64 &&
+    fs.readFileSync(creditsFile, 'utf8').indexOf('GW-1234-5678-ABCD') === -1);
+  check('the stored ref is a mask, not the code',
+    !!ledgerEntry && ledgerEntry.codeRef === 'GW-1…CD', ledgerEntry ? ledgerEntry.codeRef : 'no entry');
+
   const redeem = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND + '/redeem',
     { balanceAfter: 20.5, note: 'spent at counter' }, adminH());
   check('the redemption is recorded and completes the round',
@@ -469,6 +487,34 @@ async function main() {
     !!shortWinnerMail && ['short1@example.com', 'short2@example.com', 'short3@example.com']
       .indexOf(shortWinnerMail.to) >= 0,
     shortWinnerMail ? shortWinnerMail.to : 'no mail');
+
+  /* ---- 12c: a blank code is generated, and redeem reads the ledger ---- */
+  const issueGen = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND2 + '/prize',
+    { note: 'generated code' }, adminH());
+  check('a blank code field generates a code instead of refusing',
+    issueGen.status === 200 && issueGen.j.round.prizeIssued === true,
+    issueGen.status + ' ' + JSON.stringify(issueGen.j).slice(0, 120));
+  const genMail = newMails().filter((m) => m.kind === 'winner' && /code: /.test(m.text)).pop();
+  const genCode = genMail ? (/code: ([A-Z0-9-]+)/.exec(genMail.text) || [])[1] : '';
+  check('the generated code was e-mailed in full and is strong',
+    /^KPOT-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(genCode || ''), genCode || 'no code');
+  const redeemGen = await req(PORT_B, 'POST', '/api/giveaway/admin/rounds/' + ROUND2 + '/redeem',
+    { code: genCode, note: 'spent at counter' }, adminH());
+  check('redeem with the code completes the round',
+    redeemGen.status === 200 && redeemGen.j.round.status === 'COMPLETED');
+  let gwStore = null;
+  try { gwStore = JSON.parse(fs.readFileSync(GIVEAWAY_FILE, 'utf8')); } catch (e) { /* not written */ }
+  const r2 = gwStore && Array.isArray(gwStore.rounds)
+    ? gwStore.rounds.find((x) => x.id === ROUND2) : null;
+  check('the recorded balance came from the ledger, not the form',
+    !!r2 && r2.prizeRedeem && r2.prizeRedeem.balanceAfter === 66,
+    r2 && r2.prizeRedeem ? String(r2.prizeRedeem.balanceAfter) : 'no redeem');
+  let ledger2 = null;
+  try { ledger2 = JSON.parse(fs.readFileSync(creditsFile, 'utf8')); } catch (e) { /* not written */ }
+  const genHash = require('crypto').createHash('sha256').update(genCode || 'x').digest('hex');
+  check('the generated code exists as a second ledger entry',
+    !!ledger2 && Object.keys(ledger2.codes).length === 2 &&
+    !!ledger2.codes[genHash] && ledger2.codes[genHash].roundId === ROUND2);
 
   /* ---- 13: unauthorized admin ---- */
   const noKey = await req(PORT_B, 'GET', '/api/giveaway/admin/rounds');

@@ -156,12 +156,20 @@ function connectCdp(wsUrl) {
   async function waitFor(expr, timeoutMs, label) {
     const until = Date.now() + timeoutMs;
     let last;
+    let lastErr = null;
     while (Date.now() < until) {
-      try { last = await evalJs(expr); } catch (e) { last = '(ctx) ' + e.message; }
+      /* An expression that THROWS has NOT succeeded — it nearly always means
+         the element it reads is not in the DOM yet, which is the whole point
+         of waiting. Turning the error into a truthy string made waitFor
+         return early on a condition that was never met. Keep polling; the
+         error is reported only if we genuinely time out. */
+      try { last = await evalJs(expr); lastErr = null; }
+      catch (e) { last = null; lastErr = e.message; }
       if (last) return last;
       await sleep(400);
     }
-    throw new Error('timed out waiting for ' + label + ' — last value: ' + JSON.stringify(last));
+    throw new Error('timed out waiting for ' + label + ' — last value: ' + JSON.stringify(last) +
+      (lastErr ? ' (last error: ' + lastErr + ')' : ''));
   }
 
   async function shot(name) {

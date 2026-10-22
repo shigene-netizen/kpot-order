@@ -356,7 +356,11 @@ const CONFIG = {
     orderAgain: true,          // remember last order on this device
     allergenNotes: true,       // let guests add a note per item
     orderNotes: true,          // let guests add a note to the whole order
-    sounds: true               // little confirmation chime
+    sounds: true,              // little confirmation chime
+    /* Store-credit codes (the LUCKY 66 prize, and any code the owner issues
+       by hand) are spent in the checkout sheet. The server enforces them
+       whatever this says — this only decides whether the guest sees the box. */
+    storeCredit: true
   },
 
   /* ---- LUCKY 66 giveaway -------------------------------------------------

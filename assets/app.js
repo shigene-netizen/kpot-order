@@ -64,6 +64,17 @@
     discountSource: '',
     couponMsg: '',
     couponState: '',   // '' | 'ok' | 'err' | 'busy'
+    /* Store credit. A winner's code is a BALANCE, not a one-shot coupon: it
+       comes off order after order until it runs out, and the server says how
+       much is left after this one. Same discipline as the coupon above — the
+       code is only ever validated by the server, which also enforces that a
+       credit, a coupon and a reward never stack. */
+    creditInput: '',
+    creditCode: '',
+    creditMsg: '',
+    creditState: '',    // '' | 'ok' | 'err' | 'busy'
+    creditApplied: 0,   // what came off THIS order (the server's number)
+    creditLeft: null,   // what the ledger will hold after this order
     /* Rewards. `loyalty` is the SERVER's answer for the phone the guest typed
        — points balance, usable coupons, progress to the next stamp reward —
        and `loyaltyChoice` is what they picked to spend on this bill. Like the
@@ -1323,6 +1334,7 @@
       '<div class="tip-row">' + tips + '</div>' +
     '</div>' +
     couponHTML() +
+    creditHTML() +
     '<div class="totals" id="cartTotals">' + cartTotalsHTML() + '</div>';
   }
 
@@ -1372,6 +1384,37 @@
       '</div>';
   }
 
+  /* Store credit — a balance, not a one-shot code. Shown under the coupon box
+     with the same shape, because the rules are the same from out here: the
+     server decides what it is worth, and only one discount may apply. What is
+     different is the answer: this one can come off part of the bill and leave
+     the rest on the code, so the remaining balance is shown while the guest is
+     still deciding — the rules promise it after payment, and there is no
+     reason to make them wait for the ticket to learn it. */
+  function creditHTML() {
+    if (!CONFIG.features.storeCredit) return '';
+    const applied = state.creditApplied > 0;
+    const busy = state.creditState === 'busy';
+    const msg = state.creditMsg
+      ? '<div class="small ' + (state.creditState === 'ok' ? 'ok' : 'err') + '" style="margin-top:6px">' + esc(state.creditMsg) + '</div>'
+      : '';
+    const left = (applied && state.creditLeft != null)
+      ? '<div class="small ok" style="margin-top:6px">' + money(state.creditLeft) +
+        ' will be left on this code after this order.</div>'
+      : '';
+    return '<div class="coupon">' +
+        '<div class="section-label" style="margin-top:6px">Store Credit</div>' +
+        '<div class="coupon-row">' +
+          '<input id="creditInput" type="text" autocomplete="off" spellcheck="false" ' +
+            'placeholder="e.g. KPOT-AB12-CD34-EF56" value="' + esc(state.creditInput) + '">' +
+          (applied
+            ? '<button class="btn btn-ghost btn-sm" id="creditRemove" type="button">Remove</button>'
+            : '<button class="btn btn-ghost btn-sm" id="creditApply" type="button"' + (busy ? ' disabled' : '') + '>' +
+                (busy ? 'Checking…' : 'Apply') + '</button>') +
+        '</div>' + msg + left +
+      '</div>';
+  }
+
   /* ------------------------------------------------------------------ */
   /* Rewards and discount codes share ONE price request                  */
   /* ------------------------------------------------------------------
@@ -1395,6 +1438,12 @@
     'points_unavailable', 'coupon_unavailable', 'order_too_small',
     'unknown_customer', 'bad_phone', 'one_reward_only'
   ];
+  /* Store-credit refusals. 'one_discount_only' is shared with the loyalty list
+     above (it fires when a credit meets a coupon OR a reward), so the caller
+     decides which box it lands on from what the request actually carried. */
+  const CREDIT_ERRORS = [
+    'credit_not_found', 'credit_revoked', 'credit_expired', 'credit_insufficient'
+  ];
 
   /* Any price change has to be VISIBLE.
 
@@ -1415,6 +1464,7 @@
   async function reprice(silent, opts) {
     if (!state.cart.length) return false;
     const code = (opts && opts.code != null) ? String(opts.code) : String(state.discountCode || '');
+    const credit = (opts && opts.credit != null) ? String(opts.credit) : String(state.creditCode || '');
     const loyalty = (opts && opts.loyalty !== undefined) ? opts.loyalty : loyaltyPayload();
 
     try {
@@ -1426,6 +1476,7 @@
           items: cartPayload(),
           tipAmount: tipAmount(),
           couponCode: code,
+          creditCode: credit,
           loyalty: loyalty
         })
       });
@@ -1435,12 +1486,26 @@
         const err = String(data.error || '');
         const msg = data.message || 'That discount is not valid.';
         clearDiscounts();
-        if (LOYALTY_ERRORS.indexOf(err) !== -1) {
+        clearCredit();
+        /* Which box the message lands on. A store-credit refusal always names
+           the credit; the shared "one discount only" refusal lands on whichever
+           kind of code the request actually carried (the setters clear the
+           other kinds, so normally only one can). */
+        const creditBox = CREDIT_ERRORS.indexOf(err) !== -1 ||
+          (err === 'one_discount_only' && !!credit);
+        if (LOYALTY_ERRORS.indexOf(err) !== -1 && !creditBox) {
           state.loyaltyChoice = '';
           state.loyaltyMsg = msg;
           state.loyaltyState = 'err';
           state.couponMsg = '';
           state.couponState = '';
+        } else if (creditBox) {
+          state.creditMsg = msg;
+          state.creditState = 'err';
+          state.couponMsg = '';
+          state.couponState = '';
+          state.loyaltyMsg = '';
+          state.loyaltyState = '';
         } else {
           state.couponMsg = msg;
           state.couponState = 'err';
@@ -1456,19 +1521,41 @@
       state.discountCode = String(data.discountCode || '');
       state.discountLabel = String(data.discountLabel || '');
       state.discountSource = String(data.discountSource || '');
+      /* What the store credit is doing on THIS order, and what the ledger will
+         hold once it is recorded. balanceAfter is the server's arithmetic —
+         the same number handleCreateOrder will leave behind — not a promise. */
+      const cr = data.credit || null;
+      state.creditApplied = cr ? (Number(cr.applied) || 0) : 0;
+      state.creditLeft = cr && cr.balanceAfter != null ? Number(cr.balanceAfter) : null;
+      state.creditRef = cr ? String(cr.codeRef || '') : '';
 
       if (state.discountAmount > 0) {
-        if (state.discountSource === 'loyalty') {
+        if (state.discountSource === 'credit') {
+          state.creditMsg = 'Applied — ' + money(state.discountAmount) + ' off this order' +
+            (state.creditLeft != null ? ', ' + money(state.creditLeft) + ' left' : '') + '.';
+          state.creditState = 'ok';
+          state.couponMsg = '';
+          state.couponState = '';
+          state.loyaltyMsg = '';
+          state.loyaltyState = '';
+        } else if (state.discountSource === 'loyalty') {
           state.loyaltyMsg = 'Applied — you save ' + money(state.discountAmount) + '.';
           state.loyaltyState = 'ok';
           state.couponMsg = '';
           state.couponState = '';
+          state.creditMsg = '';
+          state.creditState = '';
         } else {
           state.couponMsg = 'Code applied — you save ' + money(state.discountAmount) + '.';
           state.couponState = 'ok';
           state.loyaltyMsg = '';
           state.loyaltyState = '';
+          state.creditMsg = '';
+          state.creditState = '';
         }
+      } else if (credit) {
+        state.creditMsg = 'Code accepted, but it does not apply to this order.';
+        state.creditState = 'err';
       } else if (code) {
         state.couponMsg = 'Code accepted, but it does not apply to this order.';
         state.couponState = 'err';
@@ -1480,6 +1567,7 @@
       return true;
     } catch (e) {
       clearDiscounts();
+      clearCredit();
       state.couponMsg = 'Could not check that discount. Try again.';
       state.couponState = 'err';
       if (silent) toast('Could not re-check your discount.', 'err');
@@ -1501,10 +1589,15 @@
     state.couponState = 'busy';
     state.couponMsg = '';
     /* A code and a reward are alternatives, so picking up the code puts the
-       reward down — otherwise the server refuses the whole request. */
+       reward down — otherwise the server refuses the whole request. Same for
+       a store credit: one discount per order, whichever kind it is. */
     state.loyaltyChoice = '';
     state.loyaltyMsg = '';
     state.loyaltyState = '';
+    state.creditInput = '';
+    clearCredit();
+    state.creditMsg = '';
+    state.creditState = '';
     state.discountCode = code;
     renderCartSheet();
 
@@ -1522,6 +1615,67 @@
     clearDiscounts();
     state.couponMsg = '';
     state.couponState = '';
+    renderCartSheet();
+    syncCartUI();
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Store credit                                                       */
+  /* ------------------------------------------------------------------
+     A balance, not a one-shot code. Everything the coupon flow does, this
+     does too — ask the server, adopt its number, never decide an amount —
+     with two differences: it can cover only PART of a bill (the rest stays
+     on the code), and the server tells us what will be left afterwards.
+     ------------------------------------------------------------------ */
+  function clearCredit() {
+    state.creditApplied = 0;
+    state.creditLeft = null;
+    state.creditRef = '';
+    state.creditCode = '';
+  }
+
+  async function applyCredit() {
+    const code = String(state.creditInput || '').trim();
+    if (!code) {
+      state.creditMsg = 'Enter your store-credit code first.';
+      state.creditState = 'err';
+      renderCartSheet();
+      return;
+    }
+    if (!state.cart.length) return;
+
+    state.creditState = 'busy';
+    state.creditMsg = '';
+    /* One discount per order — the owner's standing rule, now enforced for
+       the prize code too. Picking up the credit puts the coupon AND the
+       reward down, or the server refuses the whole request. */
+    state.couponInput = '';
+    state.discountCode = '';
+    clearDiscounts();
+    state.couponMsg = '';
+    state.couponState = '';
+    state.loyaltyChoice = '';
+    state.loyaltyMsg = '';
+    state.loyaltyState = '';
+    state.creditCode = code;
+    renderCartSheet();
+
+    const ok = await reprice(false, { credit: code, code: '', loyalty: '' });
+    if (!ok) clearCredit();
+
+    renderCartSheet();
+    syncCartUI();
+  }
+
+  function removeCredit() {
+    state.creditInput = '';
+    /* The discount amount is part of the credit's display state, so it goes
+       too — otherwise the row would keep showing money that is no longer
+       coming off, which is the stale-discount bug in a new coat. */
+    clearDiscounts();
+    clearCredit();
+    state.creditMsg = '';
+    state.creditState = '';
     renderCartSheet();
     syncCartUI();
   }
@@ -1870,12 +2024,18 @@
     state.loyaltyChoice = value;
     state.loyaltyMsg = '';
     state.loyaltyState = '';
-    /* Picking a reward puts the typed code down — the server allows one. */
+    /* Picking a reward puts the typed code down — the server allows one. The
+       same goes for a store credit: it is money off, so it cannot ride along
+       with points or a coupon. */
     state.couponMsg = '';
     state.couponState = '';
     state.discountCode = '';
+    state.creditInput = '';
+    clearCredit();
+    state.creditMsg = '';
+    state.creditState = '';
     renderLoyaltyBox();
-    await reprice(false, { code: '', loyalty: loyaltyPayload() });
+    await reprice(false, { code: '', credit: '', loyalty: loyaltyPayload() });
     renderLoyaltyBox();
     renderTotalsInCheckout();
     syncCartUI();
@@ -1908,7 +2068,7 @@
      re-price. */
   let couponTimer = null;
   function revalidateCoupon() {
-    if (!state.discountCode && !state.couponInput && !state.loyaltyChoice) return;
+    if (!state.discountCode && !state.couponInput && !state.loyaltyChoice && !state.creditCode) return;
     if (couponTimer) clearTimeout(couponTimer);
     couponTimer = setTimeout(async () => {
       couponTimer = null;
@@ -1957,6 +2117,19 @@
       coupInp.oninput = () => { state.couponInput = coupInp.value; };
       coupInp.onkeydown = (e) => {
         if (e.key === 'Enter') { e.preventDefault(); applyCoupon(); }
+      };
+    }
+    /* Store credit — same wiring, same reasoning: the sheet is rebuilt around
+       these controls, so handlers are re-attached every render. */
+    const cApply = $('#creditApply');
+    if (cApply) cApply.onclick = () => applyCredit();
+    const cRemove = $('#creditRemove');
+    if (cRemove) cRemove.onclick = removeCredit;
+    const cInp = $('#creditInput');
+    if (cInp) {
+      cInp.oninput = () => { state.creditInput = cInp.value; };
+      cInp.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); applyCredit(); }
       };
     }
     $$('#sheetBody [data-tip-mode]').forEach((btn) => btn.onclick = (e) => {
@@ -2534,6 +2707,16 @@
          guest's balance — an order that is never recorded must not burn
          either. `loyalty` is a WISH ("use my points"), never an amount. */
       couponCode: state.discountCode || '',
+      creditCode: state.creditCode || '',
+      /* The store-credit side of this order, for the ticket: what came off and
+         what the ledger will hold afterwards. The server re-decides both when
+         it records the order — these are only the numbers it already gave us,
+         so the guest never sees a balance the shop did not compute. */
+      credit: state.creditApplied > 0 ? {
+        applied: state.creditApplied,
+        balanceAfter: state.creditLeft,
+        codeRef: state.creditRef || ''
+      } : null,
       loyalty: loyaltyPayload(),
       discountAmount: discountAmount(),
       discountCode: state.discountCode || '',
@@ -2573,13 +2756,14 @@
             })),
             tipAmount: tipAmount(),
             couponCode: state.discountCode || '',
+            creditCode: state.creditCode || '',
             loyalty: loyaltyPayload(),
             customer: order.customer,
             schedule: schedulePayload()
           })
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.url) throw new Error(data.message || 'Could not start checkout');
+        if (!res.ok) throw new Error(data.message || 'Could not start checkout');
 
         /* The server is the source of truth for money. Adopt its numbers so the
            ticket we show on return matches, to the cent, what Stripe charged. */
@@ -2591,8 +2775,53 @@
           order.discountAmount = data.breakdown.discount || 0;
           order.discountCode = data.breakdown.discountCode || '';
           order.discountLabel = data.breakdown.discountLabel || '';
+          if (data.breakdown.credit) {
+            order.credit = {
+              applied: data.breakdown.credit.applied || 0,
+              balanceAfter: data.breakdown.credit.balanceAfter,
+              codeRef: data.breakdown.credit.codeRef || ''
+            };
+          }
         }
         if (typeof data.total === 'number') order.total = data.total;
+
+        /* ---- Covered by store credit: there is nothing to pay -------------
+           The server priced this order at $0.00 and deliberately did NOT start
+           a Stripe session for it. So there is no redirect and nothing to
+           verify later: record it like a counter order and show the ticket.
+           The server marks it paid itself (payMethod 'credit' plus its own
+           $0 total), so nothing here claims a status a browser could forge —
+           the same discipline as every other payment path. */
+        if (data.covered) {
+          order.payMethod = 'credit';
+          order.paymentStatus = 'verified';
+          order.paid = true;
+          order.sessionId = '';
+          order.paymentIntent = null;
+          try { localStorage.setItem(LS_PENDING, JSON.stringify(order)); } catch (e) {}
+          try { localStorage.setItem(LS_LAST, JSON.stringify(order)); } catch (e) {}
+          btnBusy(btn, 'Placing order…');
+          await withTimeout(recordOrder(order), 6000);
+          if (order.__rejected) {
+            btnRestore(btn);
+            toast(order.__rejected.message || 'Could not place that order.', 'err');
+            return;
+          }
+          dispatchOrder(order);
+          saveHistory(order);
+          state.cart = [];
+          saveCart();
+          closeSheet();
+          renderShell();
+          renderMenu();          // -> renderTicket(), because state.order is set
+          syncCartUI();
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          toast('Order ' + order.no + ' placed — paid with store credit.', 'ok');
+          return;
+        }
+
+        if (!data.url) throw new Error(data.message || 'Could not start checkout');
+
         order.payMethod = 'stripe';
         /* Still NOT paid — the guest is about to be handed to Stripe. The
            status is settled when they come back and we verify the session. */
@@ -3268,7 +3497,11 @@
   function renderTicket() {
     const o = state.order;
     const otName = (CONFIG.orderTypes.find((x) => x.id === o.orderType) || {}).n || o.orderType;
-    const payName = (CONFIG.payment[o.payMethod] || {}).n || 'Pay at Counter';
+    /* 'credit' is not a payment method in config.js — it is the answer to
+       "how was this paid?", and the only honest answer for a fully covered
+       order is the store credit itself. */
+    const payName = o.payMethod === 'credit' ? 'Store Credit'
+      : (CONFIG.payment[o.payMethod] || {}).n || 'Pay at Counter';
 
     /* Payment status is explicit and comes from the server's check with Stripe.
        It is never inferred from the payment method name — "they chose Pay
@@ -3285,10 +3518,13 @@
     }[ps] || (payName + ' · unconfirmed');
 
     /* A guest who is not confirmed as paid must be told plainly, on the ticket
-       itself, so the counter conversation is easy. */
+       itself, so the counter conversation is easy. A credit-covered order never
+       went near Stripe, so it must not claim Stripe confirmed anything. */
     const payBanner =
       paidOK
-        ? '<div class="pay-flag ok">✓ Payment confirmed by Stripe</div>'
+        ? (o.payMethod === 'credit'
+            ? '<div class="pay-flag ok">✓ Paid with store credit</div>'
+            : '<div class="pay-flag ok">✓ Payment confirmed by Stripe</div>')
         : ps === 'unpaid'
           ? '<div class="pay-flag warn">⚠️ We could not confirm an online payment for this order. Please pay at the counter.</div>'
           : ps === 'unverified'
@@ -3331,6 +3567,12 @@
           (Number(o.discountAmount) > 0
             ? '<div><span>' + esc(o.discountLabel || ('Discount' + (o.discountCode ? ' · ' + o.discountCode : ''))) +
               '</span><span>-' + money(o.discountAmount) + '</span></div>'
+            : '') +
+          /* What is left on the store-credit code, per the rules — promised
+             after every successful payment, and here it is before the guest
+             even leaves the screen. */
+          (o.credit && Number(o.credit.applied) > 0
+            ? '<div><span>Store credit left</span><span>' + money(Number(o.credit.balanceAfter) || 0) + '</span></div>'
             : '') +
           '<div><span>Tax</span><span>' + money(o.tax) + '</span></div>' +
           (o.tip ? '<div><span>Tip</span><span>' + money(o.tip) + '</span></div>' : '') +
@@ -3385,6 +3627,14 @@
     $('#printTicket').onclick = () => window.print();
     $('#newOrder').onclick = () => {
       state.order = null;
+      /* The finished order's credit numbers belong to THAT order — leaving
+         them on screen would be the stale-discount bug in a new coat. The
+         code itself stays in the box: the next order re-validates it against
+         the ledger's current balance the moment the cart changes. */
+      state.creditApplied = 0;
+      state.creditLeft = null;
+      state.creditMsg = '';
+      state.creditState = '';
       $('#tabsWrap').classList.remove('hide');
       renderMenu();
     };

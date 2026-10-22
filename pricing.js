@@ -253,11 +253,13 @@ function applyDiscount(priced, discount, CONFIG) {
          "$10 reward"). A loyalty give-away and an owner's code can both be a
          plain dollar amount, and the guest deserves to see which one it was. */
       label: discount.label ? String(discount.label).slice(0, 60) : '',
-      /* Four sources, never guessed: an owner's code, a staff discount, a
-         loyalty reward, or a monthly member perk. Anything unrecognised is
-         treated as a code — an unknown source on a money-off object is not
-         something to be generous about. */
-      source: (discount.source === 'staff' || discount.source === 'loyalty' || discount.source === 'member')
+      /* Five sources, never guessed: an owner's code, a staff discount, a
+         loyalty reward, a monthly member perk, or a store-credit code (the
+         sweepstakes prize). Anything unrecognised is treated as a code — an
+         unknown source on a money-off object is not something to be generous
+         about. */
+      source: (discount.source === 'staff' || discount.source === 'loyalty'
+        || discount.source === 'member' || discount.source === 'credit')
         ? discount.source : 'code',
       amount
     }

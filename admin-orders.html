@@ -487,6 +487,17 @@ function discBadge(o) {
   return '<span class="pill disc">🏷️ ' + label + ' −' + money(amt) + '</span>';
 }
 
+/* What is LEFT on the store-credit code this order spent. The counter gets
+   asked "how much is left on my code?" with the guest standing there, and the
+   answer is on the order — the same number the guest's ticket shows. */
+function creditBadge(o) {
+  const c = o.credit;
+  if (!c || !(Number(c.applied) > 0)) return '';
+  return '<span class="pill disc" title="Store credit: ' + money(c.applied) +
+    ' spent, ' + money(Number(c.balanceAfter) || 0) + ' left on the code">💳 ' +
+    money(Number(c.balanceAfter) || 0) + ' credit left</span>';
+}
+
 /* Is there money still to take on this order?
 
    True for a pay-at-counter order — the normal case — and also for a card
@@ -578,7 +589,9 @@ function orderCard(o) {
     /* The discount is shown as its own line rather than folded into the total:
        a server that says "$18.10" when the menu says "$20.00" looks like a bug
        unless you can see why. */
-    (discBadge(o) ? '<div class="o-total">' + discBadge(o) + '</div>' : '') +
+    (discBadge(o) || creditBadge(o)
+      ? '<div class="o-total">' + discBadge(o) + (discBadge(o) && creditBadge(o) ? ' ' : '') + creditBadge(o) + '</div>'
+      : '') +
     '<div class="o-total">Total: ' + money(o.total) + ' · Tip: ' + money(o.tip) + '</div>' +
     '<div class="o-actions">' + actions +
       '<button class="discount" data-disc="'+esc(o.id)+'" title="Discount this order">🏷️ Discount</button>' +

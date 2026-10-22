@@ -93,12 +93,24 @@ function connectCdp(wsUrl) {
   async function waitFor(expr, timeoutMs, label) {
     const until = Date.now() + timeoutMs;
     let last;
+    let lastErr = null;
     while (Date.now() < until) {
-      try { last = await evalJs(expr); } catch (e) { last = '(ctx) ' + e.message; }
+      /* An expression that THROWS has NOT succeeded. It nearly always means
+         the element it reads is not in the DOM yet — which is the entire
+         point of waiting. Turning the error into a truthy string made
+         waitFor return early on a condition that was never met: for about
+         one run in ten, probe_guest_discount's discount-row expression threw
+         for the ~10 ms the row was absent while the credit re-price was in
+         flight, so the wait "passed" instantly and the next check read a row
+         that was not there. Keep polling; the error is reported only if we
+         genuinely time out. */
+      try { last = await evalJs(expr); lastErr = null; }
+      catch (e) { last = null; lastErr = e.message; }
       if (last) return last;
       await sleep(350);
     }
-    throw new Error('timed out waiting for ' + label + ' — last: ' + JSON.stringify(last));
+    throw new Error('timed out waiting for ' + label + ' — last: ' + JSON.stringify(last) +
+      (lastErr ? ' (last error: ' + lastErr + ')' : ''));
   }
 
   return { ws, send, evalJs, waitFor, logs };
@@ -117,6 +129,16 @@ const CODES = [
   { code: 'SHIPFREE', type: 'freeship', value: 0, active: true },
   { code: 'BIGSPEND', type: 'amount', value: 5, active: true, minSubtotal: 30 }
 ];
+
+/* A store-credit code — the LUCKY 66 prize, as the guest meets it. Seeded
+   through credits.js itself so the on-disk format is the module's own, not a
+   hand-written guess about it. */
+const CR = require(path.join(ROOT, 'credits.js'));
+const CREDITS_FILE = path.join(SCRATCH, 'credits.local.json');
+const CREDIT_CODE = 'KPOT-PROBE-GUEST-01';
+const seedCredits = CR.blankStore();
+CR.issue(seedCredits, CREDIT_CODE, 66, { roundId: 'probe-guest', now: new Date().toISOString() });
+CR.saveCredits(CREDITS_FILE, seedCredits);
 
 /* Read one row out of the cart's totals block by its label. */
 const ROW = (label) => `(() => {
@@ -141,6 +163,31 @@ async function typeCode(cdp, code) {
     return true;
   })()`);
 }
+
+/* Same shape, the other box. The two boxes share the .coupon class, so every
+   read below is scoped through #creditInput's own container — otherwise the
+   coupon box's messages would answer for the credit box's. */
+async function typeCredit(cdp, code) {
+  await cdp.evalJs(`(() => {
+    const i = document.querySelector('#creditInput');
+    if (!i) return false;
+    i.value = ${JSON.stringify(code)};
+    i.dispatchEvent(new Event('input', { bubbles: true }));
+    const b = document.querySelector('#creditApply');
+    if (b) b.click();
+    return true;
+  })()`);
+}
+const CREDIT_BOX_TEXT = `(() => {
+  const box = document.querySelector('#creditInput');
+  const c = box && box.closest('.coupon');
+  return c ? Array.from(c.querySelectorAll('.small')).map((x) => x.textContent).join(' | ') : '';
+})()`;
+const COUPON_BOX_TEXT = `(() => {
+  const box = document.querySelector('#couponInput');
+  const c = box && box.closest('.coupon');
+  return c ? Array.from(c.querySelectorAll('.small')).map((x) => x.textContent).join(' | ') : '';
+})()`;
 
 async function main() {
   console.log('guest discount box — real browser + real server');
@@ -169,6 +216,7 @@ async function main() {
         KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
         KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
         KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
+        KPOT_CREDITS_FILE: CREDITS_FILE,
         KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
         KPOT_DISCOUNTS_FILE: path.join(SCRATCH, 'discounts.local.json'),
         KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
@@ -282,7 +330,7 @@ async function main() {
     await cdp.evalJs(`document.querySelector('#sheetBody [data-q="1"][data-u="probedish1"]').click()`);
     await cdp.waitFor('!!document.querySelector("#cartTotals .trow.disc")', 10000, 'the discount row to survive');
     /* Subtotal is now $31.98, so 10% off is $3.20. */
-    await cdp.waitFor(`(document.querySelector('#cartTotals .trow.disc b')||{}).textContent === '-$3.20'`,
+    await cdp.waitFor(`((document.querySelector('#cartTotals .trow.disc b')||{}).textContent||'') === '-$3.20'`,
       12000, 'the discount to be re-priced for the new quantity');
     check('after the quantity changes, the discount is re-priced to $3.20',
       (await cdp.evalJs(DISC_STYLE)) === '-$3.20', 'discount=' + (await cdp.evalJs(DISC_STYLE)));
@@ -304,6 +352,67 @@ async function main() {
     check('an unknown code is refused',
       /not valid/i.test(await cdp.evalJs(`(document.querySelector('.coupon .small')||{}).textContent||''`)),
       await cdp.evalJs(`(document.querySelector('.coupon .small')||{}).textContent||''`));
+
+    /* ---- store credit: a balance, not a one-shot code ------------------
+       Two bowls ($31.98 of food, $33.90 with tax) against a $66 code: the
+       whole food subtotal comes off, the tax follows it down to nothing, and
+       the page says what will be LEFT on the code — the rules promise that
+       after payment, and there is no reason to make the guest wait for the
+       ticket to learn it. */
+    check('the store-credit box is on the sheet',
+      (await cdp.evalJs('!!document.querySelector("#creditInput")')) === true);
+    await typeCredit(cdp, CREDIT_CODE);
+    await cdp.waitFor('!!document.querySelector("#cartTotals .trow.disc")', 10000, 'the credit discount row');
+    check('the discount row names the store credit and takes the food subtotal',
+      /Store credit/.test((await cdp.evalJs(DISC_ROW)) || '') &&
+      /-\$31\.98/.test((await cdp.evalJs(DISC_ROW)) || ''),
+      'row=' + (await cdp.evalJs(DISC_ROW)));
+    check('tax is recomputed on the discounted amount ($0.00)',
+      (await cdp.evalJs(ROW('Tax'))) === '$0.00', 'tax=' + (await cdp.evalJs(ROW('Tax'))));
+    check('the TOTAL on the page actually reaches $0.00',
+      (await cdp.evalJs(ROW('Total'))) === '$0.00', 'total=' + (await cdp.evalJs(ROW('Total'))));
+    check('the remaining balance is shown while the guest is still deciding',
+      /\$34\.02 will be left/.test(await cdp.evalJs(CREDIT_BOX_TEXT)),
+      await cdp.evalJs(CREDIT_BOX_TEXT));
+
+    /* One discount per order, whichever kind it is: picking the credit up
+       puts the coupon down. */
+    await cdp.evalJs(`document.querySelector('#creditRemove').click()`);
+    await cdp.waitFor(`!!document.querySelector('#cartTotals .trow.grand') && !document.querySelector('#cartTotals .trow.disc')`,
+      10000, 'the credit row to go away');
+    await typeCode(cdp, 'ten');
+    await cdp.waitFor('!!document.querySelector("#cartTotals .trow.disc")', 10000, 'the coupon discount row');
+    check('with the coupon applied the total is $30.51 again',
+      (await cdp.evalJs(ROW('Total'))) === '$30.51', 'total=' + (await cdp.evalJs(ROW('Total'))));
+    await typeCredit(cdp, CREDIT_CODE);
+    /* The `||''` matters: while the credit re-price is in flight the discount
+       row is briefly REMOVED from the DOM (the setters clear the amount before
+       they ask), and `(x||{}).textContent` is then `undefined` — `.indexOf` on
+       it throws. A throw used to read as a truthy "done" in waitFor. */
+    await cdp.waitFor(`((document.querySelector('#cartTotals .trow.disc')||{}).textContent||'').indexOf('Store credit') >= 0`,
+      10000, 'the store credit to replace the coupon');
+    check('applying the credit puts the coupon down — one discount per order',
+      /Store credit/.test((await cdp.evalJs(DISC_ROW)) || '') &&
+      (await cdp.evalJs(COUPON_BOX_TEXT)) === '',
+      'row=' + (await cdp.evalJs(DISC_ROW)) + ' couponBox=' + (await cdp.evalJs(COUPON_BOX_TEXT)));
+    check('and the total goes back to $0.00',
+      (await cdp.evalJs(ROW('Total'))) === '$0.00', 'total=' + (await cdp.evalJs(ROW('Total'))));
+
+    await cdp.evalJs(`document.querySelector('#creditRemove').click()`);
+    await cdp.waitFor(`!!document.querySelector('#cartTotals .trow.grand') && !document.querySelector('#cartTotals .trow.disc')`,
+      10000, 'the credit row to go away again');
+    check('removing the credit restores the full $33.90',
+      (await cdp.evalJs(ROW('Total'))) === '$33.90', 'total=' + (await cdp.evalJs(ROW('Total'))));
+
+    /* ---- an unknown credit code ---- */
+    await typeCredit(cdp, 'KPOT-NOPE-NOPE-01');
+    await cdp.waitFor(`(() => { const t = (${CREDIT_BOX_TEXT}); return /recognise/i.test(t); })()`,
+      10000, 'the unknown-credit message');
+    check('an unknown store-credit code is refused in the server\'s own words',
+      /recognise/i.test(await cdp.evalJs(CREDIT_BOX_TEXT)),
+      await cdp.evalJs(CREDIT_BOX_TEXT));
+    check('and no discount row appears for it', (await cdp.evalJs(DISC_ROW)) === null);
+    check('the total is untouched', (await cdp.evalJs(ROW('Total'))) === '$33.90');
 
     const errs = cdp.logs.filter((l) => /EXCEPTION|\[error\]/.test(l));
     check('the page logged no JavaScript errors', errs.length === 0, errs.slice(0, 3).join('\n         '));

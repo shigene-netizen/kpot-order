@@ -78,7 +78,11 @@ run() {                       # run <name> <path> [VAR=val...]
 # server were writing their test awards into the shop's member list, and one of
 # them ("Board UI", 125 points) had already done it. Every server-spawning suite
 # now pins KPOT_CUSTOMERS_FILE, and this list is what proves it stays true.
-SHOP_FILES=(orders.local.json store.local.json menu.local.json print.local.json secrets.local.json discounts.local.json customers.local.json giveaway.local.json giveaway-mail-outbox.jsonl)
+#
+# credits.local.json joined on 2026-10-22 with the store-credit ledger: the
+# same failure mode one feature later — a suite issuing a prize code would
+# otherwise mint spendable money into the shop's real ledger.
+SHOP_FILES=(orders.local.json store.local.json menu.local.json print.local.json secrets.local.json discounts.local.json customers.local.json giveaway.local.json giveaway-mail-outbox.jsonl credits.local.json)
 
 fingerprint() {
   local f
@@ -109,13 +113,14 @@ run test_delivery_geo       _dev/test_delivery_geo.js
 run test_dispatch           _dev/test_dispatch.js
 run test_delivery_min        _dev/test_delivery_min.js
 run test_giveaway          _dev/test_giveaway.js
+run test_credit            _dev/test_credit.js
 
 echo
 echo "--- page syntax (the inline scripts in the owner's own pages) ---"
 # node --check cannot read HTML, and one typo in admin.html takes the entire
 # owner console down with nothing in the server log to explain it. The checker
 # existed for a while without ever being run; it is cheap, so it runs here.
-for page in admin.html admin-orders.html admin-menu.html; do
+for page in admin.html admin-orders.html admin-menu.html admin-giveaway.html; do
   printf '  %-26s ' "$page"
   if out=$("$ENV_BIN" node _dev/check_html_syntax.js "$page" 2>&1) && [ -n "$out" ]; then
     printf '%s\n' "$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1)"
@@ -149,6 +154,7 @@ run probe_driver_http      _dev/probe_driver_http.js
 run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 run probe_giveaway_http    _dev/probe_giveaway_http.js
+run probe_credit_http      _dev/probe_credit_http.js
 
 echo
 echo "--- real browser (headless Chrome) ---"

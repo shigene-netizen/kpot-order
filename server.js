@@ -28,6 +28,7 @@ const { loadAssets, priceOrder, toStripeLineItems, round2, applyDiscount } = req
 const { renderKitchenTicket } = require('./printer.js');
 const D = require('./discounts.js');
 const L = require('./customers.js');
+const CR = require('./credits.js');
 const MB = require('./member.js');
 const SC = require('./schedule.js');
 const G = require('./geo.js');
@@ -476,6 +477,7 @@ function settleBoardFromStripe(out) {
     /* The money never arrived and the order is cancelled, so whatever reward it
        was priced with goes back to the guest. */
     releaseLoyaltyFor(o, 'stripe says unpaid');
+    releaseCreditFor(o, 'stripe says unpaid');
   }
 
   console.log('[kpot] board settled by Stripe: order ' + out.orderNo +
@@ -698,6 +700,19 @@ async function handlePrice(req, res) {
   if (reward.error) return sendJSON(res, 409, { error: reward.error, message: reward.message });
 
   const priced = reward.discount ? applyDiscount(base, reward.discount, ASSETS.CONFIG) : base;
+  /* What the store credit is doing on THIS order, and what it will have left
+     afterwards. The guest page shows both — the rules promise the remaining
+     balance after every successful payment, and this is the number the ledger
+     will actually hold once the order is recorded. */
+  let credit = null;
+  if (reward.kind === 'credit' && reward.entry) {
+    credit = {
+      applied: priced.discountAmount || 0,
+      balanceAfter: round2((reward.entry.balance || 0) - (priced.discountAmount || 0)),
+      codeRef: reward.entry.codeRef || '',
+      expiresAt: reward.entry.expiresAt || ''
+    };
+  }
   return sendJSON(res, 200, {
     subtotal: priced.subtotal,
     delivery: priced.delivery,
@@ -707,7 +722,8 @@ async function handlePrice(req, res) {
     discount: priced.discountAmount || 0,
     discountCode: (priced.discount && priced.discount.code) || '',
     discountLabel: (priced.discount && priced.discount.label) || '',
-    discountSource: (priced.discount && priced.discount.source) || ''
+    discountSource: (priced.discount && priced.discount.source) || '',
+    credit: credit
   });
 }
 
@@ -838,6 +854,54 @@ async function handleCheckout(req, res) {
   }
 
   try {
+    /* The store credit's share of this order and what it will have left. The
+       guest page adopts these onto the order so the ticket shown on return
+       can state the remaining balance — the rules promise it after every
+       successful payment. Nothing is SPENT here: handing a guest to Stripe is
+       not a purchase (the balance moves in handleCreateOrder). */
+    let credit = null;
+    if (reward.kind === 'credit' && reward.entry) {
+      credit = {
+        codeHash: reward.entry.codeHash,
+        codeRef: reward.entry.codeRef || '',
+        applied: priced.discountAmount || 0,
+        balanceAfter: round2((reward.entry.balance || 0) - (priced.discountAmount || 0)),
+        expiresAt: reward.entry.expiresAt || ''
+      };
+    }
+
+    /* ---- Fully covered by credit: no payment page at all ----------------
+       A store-credit code can cover the whole bill — that is what a "$66
+       store-credit code" is FOR. Stripe cannot charge $0 (an empty line-item
+       list is refused), and walking a guest through a payment page for
+       nothing would be absurd. The total was computed HERE from the menu and
+       the code's own balance, so "nothing is owed" needs no trust in the
+       browser: the only way to reach this branch is priced.total === 0. The
+       credit itself is still spent in handleCreateOrder, exactly as for a
+       part-paid order — nothing here moves money. */
+    if (round2(priced.total) <= 0.005) {
+      console.log('[kpot] order ' + (order.orderNo || '?') +
+        ' fully covered by store credit — no payment needed');
+      return sendJSON(res, 200, {
+        url: null,
+        covered: true,
+        id: '',
+        paymentIntent: null,
+        total: 0,
+        breakdown: {
+          subtotal: priced.subtotal,
+          delivery: priced.delivery,
+          tax: priced.tax,
+          tip: priced.tip,
+          discount: priced.discountAmount || 0,
+          discountCode: (priced.discount && priced.discount.code) || '',
+          discountLabel: (priced.discount && priced.discount.label) || '',
+          discountSource: (priced.discount && priced.discount.source) || '',
+          credit: credit
+        }
+      });
+    }
+
     const out = await createStripeSession(priced, order, requestBaseUrl(req));
     if (out.error) {
       console.error('[kpot] stripe error:', out.status || '', out.message);
@@ -863,7 +927,8 @@ async function handleCheckout(req, res) {
         discount: priced.discountAmount || 0,
         discountCode: (priced.discount && priced.discount.code) || '',
         discountLabel: (priced.discount && priced.discount.label) || '',
-        discountSource: (priced.discount && priced.discount.source) || ''
+        discountSource: (priced.discount && priced.discount.source) || '',
+        credit: credit
       }
     });
   } catch (e) {
@@ -1136,6 +1201,30 @@ function saveCustomersStore() {
     return L.saveCustomers(CUSTOMERS_FILE, customers);
   } catch (e) {
     console.error('[kpot] could not save customers:', e.message);
+    return null;
+  }
+}
+
+/* The store-credit ledger — the LUCKY 66 prize codes as spendable money.
+   Same shape and same reason as the loyalty ledger above: redirectable so a
+   test can never touch the shop's real balances, loaded at boot. The plaintext
+   of a code never reaches this file; only its sha256 does (credits.js). */
+const CREDITS_FILE = process.env.KPOT_CREDITS_FILE || path.join(ROOT, 'credits.local.json');
+let credits = CR.blankStore();
+
+function loadCreditsStore() {
+  credits = CR.loadCredits(CREDITS_FILE);
+  const n = Object.keys(credits.codes || {}).length;
+  if (n) {
+    console.log('[kpot] credits: ' + n + ' code(s) loaded from ' + path.basename(CREDITS_FILE));
+  }
+}
+
+function saveCreditsStore() {
+  try {
+    return CR.saveCredits(CREDITS_FILE, credits);
+  } catch (e) {
+    console.error('[kpot] could not save credits:', e.message);
     return null;
   }
 }
@@ -2177,11 +2266,58 @@ async function handleCreateOrder(req, res) {
         'Please choose ' + ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
     });
   }
+  /* ---- "Paid by store credit" is a real pay method, with one condition ---
+     It means the credit covered the WHOLE bill, so there is nothing left to
+     collect. The condition is checked against the server's own total — the
+     number computed here from the menu and the code's balance — so a browser
+     claiming 'credit' on a $40 order is simply refused: money is owed and a
+     real payment method has to be named. (This is the mirror of the covered
+     branch in handleCheckout, which never sends such a guest to Stripe.) */
+  if (body.payMethod === 'credit' && round2(priced.total) > 0.005) {
+    console.warn('[kpot] refused payMethod=credit on an order that still owes $' +
+      priced.total.toFixed(2));
+    return sendJSON(res, 409, {
+      error: 'order_owes_money',
+      total: priced.total,
+      message: 'This order still has a balance to pay. Please choose a payment method.'
+    });
+  }
 
   /* Keep the guest's suggested number when it is still free; otherwise the
      server issues the next one for today, so two devices can never collide. */
   const suggested = String(body.no || body.orderNo || '').slice(0, 60);
   const id = (suggested && !orders.has(suggested)) ? suggested : nextServerOrderNo();
+
+  /* ---- Store credit: the balance moves HERE, and only here ----------------
+     Past the idempotency check (a retried order must not deduct twice) and
+     past every refusal above (an order that never happens costs nothing).
+     This is the second money gate; the first was /api/checkout, which priced
+     the deduction but spent nothing — handing a guest to Stripe is not a
+     purchase.
+
+     The spend re-validates against the CURRENT balance, so two orders racing
+     for the last dollars of a code cannot both win: the loser gets a 409
+     rather than a silently over-discounted order. */
+  let creditSpend = null;
+  if (reward.kind === 'credit' && reward.entry) {
+    const amount = priced.discountAmount || 0;
+    const r = CR.spendByCode(credits, body.creditCode, amount, { orderId: id });
+    if (!r.ok) {
+      console.warn('[kpot] credit refused at order creation —', r.reason,
+        '| order', id, '| wanted $' + amount.toFixed(2));
+      const msg = {
+        insufficient: 'That store-credit code no longer has enough left for this order. Please check the amount and try again.',
+        expired: 'That store-credit code has expired.',
+        revoked: 'That store-credit code is no longer valid.',
+        not_found: 'We do not recognise that store-credit code.'
+      }[r.reason] || 'That store-credit code could not be applied.';
+      return sendJSON(res, 409, { error: 'credit_' + r.reason, message: msg });
+    }
+    creditSpend = r;
+    saveCreditsStore();
+    console.log('[kpot] credit: ' + id + ' used $' + r.applied.toFixed(2) +
+      ' of ' + reward.entry.codeRef + ' — $' + r.balanceAfter.toFixed(2) + ' left');
+  }
 
   /* The guest's own contact block, rebuilt rather than copied: the e-mail is
      normalised here so a typo that only fails later fails now, and the raw
@@ -2222,10 +2358,23 @@ async function handleCreateOrder(req, res) {
        its own fallback. Anything else (a forged 'verified', a forged 'paid') is
        replaced by what the pay method implies. A status can only become paid
        through Stripe's own answer (settleBoardFromStripe) or an admin PATCH —
-       the same rule that governs auto-prepare's trustPayment. */
-    paymentStatus: UNPAID_STATUSES.includes(body.paymentStatus)
-      ? body.paymentStatus
-      : (body.payMethod === 'counter' ? 'counter' : 'pending'),
+       the same rule that governs auto-prepare's trustPayment.
+
+       The ONE exception is an order the SERVER priced at $0.00 — nothing is
+       owed, so 'verified' is not a claim the guest made, it is arithmetic this
+       function just performed. That happens two ways: payMethod 'credit' (the
+       covered branch of handleCheckout, which never sends such a guest to
+       Stripe), and a pay-at-counter order a store-credit code covered in full
+       (the guest never went online at all). Both are refused above/elsewhere
+       the moment a total the guest still has to pay appears — 'credit' by
+       name, and any total above zero by arithmetic. */
+    paymentStatus:
+      round2(priced.total) <= 0.005 &&
+        (body.payMethod === 'credit' || body.payMethod === 'counter')
+        ? 'verified'
+        : UNPAID_STATUSES.includes(body.paymentStatus)
+          ? body.paymentStatus
+          : (body.payMethod === 'counter' ? 'counter' : 'pending'),
     payMethod: body.payMethod || 'unknown',
     orderType: ORDER_TYPES.includes(body.orderType) ? body.orderType : 'pickup',
     /* Only ever present on a windowed delivery order, and only with values
@@ -2256,6 +2405,19 @@ async function handleCreateOrder(req, res) {
     delivery: priced.delivery, total: priced.total,
     discountAmount: priced.discountAmount || 0,
     discount: priced.discount || null,
+    /* The store-credit side of this order. `codeHash` is the lookup key (a
+       hash is not a secret — the plaintext never reaches disk), so a
+       cancellation can find the ledger entry again without the code. The
+       balance shown to the guest is the one recorded HERE, at the moment the
+       money moved. */
+    credit: creditSpend ? {
+      codeHash: reward.entry.codeHash,
+      codeRef: reward.entry.codeRef || '',
+      applied: creditSpend.applied,
+      balanceAfter: creditSpend.balanceAfter,
+      expiresAt: reward.entry.expiresAt || '',
+      released: false
+    } : null,
     source: body.source || 'storefront'
   };
 
@@ -2546,7 +2708,10 @@ async function handleUpdateOrder(req, res, id) {
      twice. Cancelling an order that had a reward priced into it gives that
      reward back. */
   awardLoyaltyFor(o, 'payment set by staff');
-  if (o.status === 'cancelled') releaseLoyaltyFor(o, 'cancelled by staff');
+  if (o.status === 'cancelled') {
+    releaseLoyaltyFor(o, 'cancelled by staff');
+    releaseCreditFor(o, 'cancelled by staff');
+  }
 
   /* Reaching 'preparing' means the kitchen is about to cook this — that is the
      moment the ticket has to come out. Only on the TRANSITION, so re-saving an
@@ -3327,6 +3492,43 @@ function resolveLoyalty(req, priced, orderType) {
    out of it.
    Order matters: a bad code is reported before a bad reward, so the guest
    fixes the thing they typed rather than the thing we looked up. */
+/* ---- Store credit (the LUCKY 66 prize code) --------------------------------
+   The code is a WISH, never an amount: the browser may say "apply my code",
+   but what it is worth is decided here, against the ledger, the same way a
+   coupon is. `appliedFor` caps it at the food subtotal, so a $66 code on a
+   $3 order takes $3 off and leaves $63 on the code.
+
+   Reasons map to guest-facing sentences in app.js:
+     not_found  "we don't recognise that code"
+     revoked    "that code is no longer valid"
+     expired    "that code expired on …"                                             */
+function resolveCredit(rawCode, priced) {
+  const code = CR.normalizeCode(rawCode);
+  if (!code) return { none: true };
+  const v = CR.verdict(credits, code, Date.now());
+  if (!v.ok) {
+    const messages = {
+      not_found: 'We do not recognise that store-credit code.',
+      revoked: 'That store-credit code is no longer valid.',
+      expired: 'That store-credit code has expired.'
+    };
+    return { error: 'credit_' + v.reason, message: messages[v.reason] || 'That store-credit code cannot be used.' };
+  }
+  const applied = CR.appliedFor(v.entry, priced.subtotal);
+  if (applied <= 0) return { none: true };   // nothing left on it — not an error
+  return {
+    entry: v.entry,
+    discount: {
+      type: 'amount',
+      value: applied,
+      code: '',
+      label: 'Store credit',
+      source: 'credit',
+      amount: applied
+    }
+  };
+}
+
 function resolveOrderDiscount(body, basePriced, orderType) {
   const coupon = resolveCoupon(body.couponCode, basePriced);
   if (coupon.error) return { error: coupon.error, message: coupon.message };
@@ -3334,11 +3536,22 @@ function resolveOrderDiscount(body, basePriced, orderType) {
   const loyalty = resolveLoyalty(body.loyalty, basePriced, orderType);
   if (loyalty.error) return { error: loyalty.error, message: loyalty.message };
 
-  if (coupon.discount && loyalty.discount) {
+  const credit = resolveCredit(body.creditCode, basePriced);
+  if (credit.error) return { error: credit.error, message: credit.message };
+
+  /* One give-away per bill. A store credit, an owner's code and a loyalty
+     reward are all money off, and letting two ride together is how a house
+     hands out more than it meant to — the owner's standing rule for rewards,
+     applied to the prize code as well. */
+  const chosen = [coupon.discount, loyalty.discount, credit.discount].filter(Boolean);
+  if (chosen.length > 1) {
     return {
       error: 'one_discount_only',
-      message: 'Use either a discount code or your rewards on this order, not both.'
+      message: 'Use either a store-credit code, a discount code, or your rewards on this order — not more than one.'
     };
+  }
+  if (credit.discount) {
+    return { kind: 'credit', entry: credit.entry, discount: credit.discount };
   }
   if (coupon.discount) return { kind: 'code', entry: coupon.entry, discount: coupon.discount };
   if (loyalty.discount) {
@@ -3458,6 +3671,32 @@ function releaseLoyaltyFor(order, why) {
   saveOrdersSoon();
   saveCustomersStore();
   console.log('[kpot] loyalty: released the reward on cancelled ' + order.id + ' (' + why + ')');
+  return true;
+}
+
+/* The same idea for a store-credit code: a cancelled order puts the money
+   back. Guarded by order.credit.released, so a second cancellation cannot
+   refund the same dollars twice, and credits.js caps the restore at the
+   code's original value as a second line of defence. The entry is found by
+   the hash stored on the order — the plaintext is never on disk to find. */
+function releaseCreditFor(order, why) {
+  if (!order || !order.credit || !order.credit.applied || order.credit.released) return null;
+  const at = new Date().toISOString();
+  const r = CR.restore(credits, order.credit.codeHash, order.credit.applied, { orderId: order.id, now: at });
+  if (!r.ok) {
+    console.warn('[kpot] credit: could not restore ' + order.credit.codeRef +
+      ' on cancelled ' + order.id + ' — ' + r.reason);
+    return null;
+  }
+  order.credit = Object.assign({}, order.credit, {
+    released: true, releasedAt: at, balanceAfter: r.balanceAfter
+  });
+  orders.set(order.id, order);
+  saveOrdersSoon();
+  saveCreditsStore();
+  console.log('[kpot] credit: restored $' + r.applied.toFixed(2) + ' to ' +
+    order.credit.codeRef + ' on cancelled ' + order.id + ' (' + why + ') — $' +
+    r.balanceAfter.toFixed(2) + ' left');
   return true;
 }
 
@@ -3871,6 +4110,7 @@ function handleExportCustomers(req, res, format) {
 
 loadDiscountCodes();
 loadCustomersStore();
+loadCreditsStore();
 loadMenuStore();
 
 const server = http.createServer((req, res) => {
@@ -4098,6 +4338,43 @@ const server = http.createServer((req, res) => {
     return sendJSON(res, 405, { error: 'method_not_allowed' });
   }
 
+  /* ---- Store credit ----
+     GET /api/credit/balance?code=… — the guest page asks this while the code
+     is being typed and again after a payment, because the Official Rules
+     promise the remaining balance after every successful payment.
+
+     Public for the same reason /api/customer is: the CODE is the credential.
+     Whoever holds it can spend the balance anyway, so letting them read it
+     grants nothing an attacker could not take. What it must NOT become is a
+     code-guessing oracle, so it is throttled hard and returns only three
+     fields — no history, no order ids, no e-mail. A wrong code and an expired
+     one are deliberately the same answer shape. */
+  if (pathname === '/api/credit/balance') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      return sendJSON(res, 405, { error: 'method_not_allowed' });
+    }
+    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '?').split(',')[0].trim();
+    /* Its own bucket: a guest checking a code while re-pricing a cart would
+       otherwise share (and exhaust) the /api/price allowance. */
+    if (throttled('credit:' + ip, 30, 60000)) {
+      return sendJSON(res, 429, { error: 'rate_limited', message: 'Too many checks. Please wait a moment.' });
+    }
+    const code = CR.normalizeCode(url.searchParams.get('code') || '');
+    if (!code) return sendJSON(res, 400, { error: 'bad_code', message: 'Enter a store-credit code.' });
+    const r = CR.balanceOf(credits, code);
+    if (!r.ok) {
+      return sendJSON(res, 404, {
+        ok: false, reason: r.reason,
+        message: r.reason === 'expired' ? 'That store-credit code has expired.'
+          : r.reason === 'revoked' ? 'That store-credit code is no longer valid.'
+            : 'We do not recognise that store-credit code.'
+      });
+    }
+    return sendJSON(res, 200, {
+      ok: true, balance: r.balance, expiresAt: r.expiresAt, codeRef: r.codeRef
+    });
+  }
+
   /* ---- Loyalty ----
      /api/customer is the only public one, and it is a lookup by an exact
      mobile number that returns the guest nothing they do not already know
@@ -4204,7 +4481,22 @@ const server = http.createServer((req, res) => {
       readBody: readBody,
       adminAuthorized: adminAuthorized,
       requestBaseUrl: requestBaseUrl,
-      getStoreStatus: function () { return storeStatus; }
+      getStoreStatus: function () { return storeStatus; },
+      /* The credit ledger, for prize issuance: the winner's code must exist as
+         a spendable balance, not just as a sentence in an e-mail. File I/O and
+         the plaintext-free store live here; giveaway-api.js decides policy. */
+      credits: {
+        minLength: CR.MIN_CODE_LENGTH,
+        normalizeCode: function (raw) { return CR.normalizeCode(raw); },
+        isValidCode: function (raw) { return CR.isValidCode(raw); },
+        generateCode: function () { return CR.generateCode(); },
+        issue: function (code, value, meta) {
+          const r = CR.issue(credits, code, value, meta);
+          if (r.ok) saveCreditsStore();
+          return r;
+        },
+        balanceOf: function (rawCode) { return CR.balanceOf(credits, rawCode); }
+      }
     }).catch((e) => {
       console.error('[kpot] giveaway unhandled:', e && e.message);
       sendJSON(res, 500, { ok: false, reason: 'internal_error' });

@@ -237,14 +237,16 @@
     }
     if (r.status === 'DRAWN') {
       html += '<div class="row mt8" data-role="prize">' +
-        '<input type="text" data-f="code" placeholder="Store-credit code" style="flex:1;min-width:180px">' +
+        '<input type="text" data-f="code" placeholder="Store-credit code — leave blank to generate one" style="flex:1;min-width:180px">' +
         '<input type="text" data-f="note" placeholder="Note (optional)" style="flex:1;min-width:180px">' +
         '<button class="btn primary" data-act="prize">Issue prize & e-mail winner</button></div>';
     }
     if (r.prizeIssued && !r.redeemedAt) {
       html += '<div class="row mt8" data-role="redeem">' +
+        '<input type="text" data-f="code" placeholder="Code (to read the live balance)" style="flex:1;min-width:180px">' +
         '<input type="number" data-f="bal" placeholder="Balance after (optional)" style="width:180px">' +
         '<input type="text" data-f="note" placeholder="Note (optional)" style="flex:1;min-width:180px">' +
+        '<button class="btn ghost" data-act="credit-balance" title="Ask the ledger what is left on this code">Check balance</button>' +
         '<button class="btn primary" data-act="redeem">Record redemption</button></div>';
     }
     html += '<div class="row mt8">' +
@@ -293,9 +295,12 @@
       return;
     }
     if (act === 'prize') {
-      var code = cardEl.querySelector('[data-f="code"]').value.trim();
+      /* Blank is allowed and encouraged: the server generates a strong code
+         (KPOT-XXXX-XXXX-XXXX) and e-mails it. A hand-typed code must be at
+         least 8 characters — the ledger refuses anything shorter. */
+      var code = cardEl.querySelector('[data-role="prize"] [data-f="code"]').value.trim();
       var pnote = cardEl.querySelector('[data-role="prize"] [data-f="note"]').value.trim();
-      if (code.length < 4) { showErr('Enter the store-credit code (4+ characters).'); return; }
+      if (code && code.length < 8) { showErr('A code must be at least 8 characters — or leave it blank to generate one.'); return; }
       btn.disabled = true;
       api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/prize', { code: code, note: pnote })
         .then(function (out) {
@@ -304,12 +309,30 @@
         });
       return;
     }
+    if (act === 'credit-balance') {
+      var ccode = cardEl.querySelector('[data-role="redeem"] [data-f="code"]').value.trim();
+      if (!ccode) { showErr('Paste the store-credit code first.'); return; }
+      btn.disabled = true;
+      api('GET', '/api/credit/balance?code=' + encodeURIComponent(ccode))
+        .then(function (out) {
+          btn.disabled = false;
+          var j = out.j || {};
+          if (j.ok) {
+            showOk('Code ' + esc(j.codeRef || '') + ': $' + Number(j.balance).toFixed(2) +
+              ' left' + (j.expiresAt ? ' · expires ' + esc(fmt(j.expiresAt)) : '') + '.');
+          } else { showErr(j.message || 'That code is not spendable right now.'); }
+        });
+      return;
+    }
     if (act === 'redeem') {
+      /* The code is optional: with it, the server reads the balance straight
+         off the ledger (the authority); without it, the typed number stands. */
+      var rcode = cardEl.querySelector('[data-role="redeem"] [data-f="code"]').value.trim();
       var bal = cardEl.querySelector('[data-role="redeem"] [data-f="bal"]').value;
       var rnote = cardEl.querySelector('[data-role="redeem"] [data-f="note"]').value.trim();
       btn.disabled = true;
       api('POST', '/api/giveaway/admin/rounds/' + encodeURIComponent(id) + '/redeem',
-        { balanceAfter: bal === '' ? null : Number(bal), note: rnote })
+        { code: rcode, balanceAfter: bal === '' ? null : Number(bal), note: rnote })
         .then(function (out) {
           if (out.j && out.j.ok) { showOk('Redemption recorded — round completed.'); load(); }
           else { showErr(out.j.message || 'Redemption refused.'); btn.disabled = false; }
