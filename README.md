@@ -811,13 +811,16 @@ Collected + PREPARING 连票都不出。probe 当场抓住，才改成先算候�
   堂食对照（$20.12 照样到店付款、$33.90 照样被 $30 上限拦）；落批前遗留的 $16.95
   到店付款自取单同样被拦；另拉一台没有 Stripe key 的服务器，证明拒单照旧、
   文案改口叫客人打电话、而堂食照样收）
-- `_dev/probe_prepay_pay_ui.js`（22 项，真浏览器：$16.95 自取卡片置灰 + 原因只写渠道、
+- `_dev/probe_prepay_pay_ui.js`（26 项，真浏览器：$16.95 自取卡片置灰 + 原因只写渠道、
   客人被移到 Pay Online、切堂食恢复可点且提示改成「pay at your table」、切回自取再次
-  置灰、**没有线上支付的店**里提示带电话号且 Place Order 弹提示不提交）
+  置灰、**没有线上支付的店**里提示带电话号且 Place Order 弹提示不提交；最后一段是
+  **看板**：没确认收款的自取单显示 ⏳ PAY FIRST、PREPARING 按钮 disabled，点 💵 Collected
+  之后两者一起消失）
 
 三套都做了**故意弄红**：把 `kitchenHold` 改成永远放行 → 纯逻辑 15 项红；把厨房关卡的
 `nextStatus === 'preparing'` 关掉 → HTTP 探针 9 项红；把 `counterBlockedByChannel()`
-从 `counterBlocked()` 里摘掉 → 浏览器探针 4 项红。
+从 `counterBlocked()` 里摘掉 → 浏览器探针 4 项红；把看板上的 `heldHere` 从 disabled
+条件里去掉 → 同一条浏览器探针 2 项红。
 
 ---
 
@@ -1747,7 +1750,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
 | `probe_guest_discount` | **真浏览器**里输优惠码/储值码：折扣行、总额、改数量后重新计价、税按折后价算、**储值码扣一部分且显示余额**、与优惠码互斥（拿走储值码优惠码就下去）、移除后恢复原价；**差额用卡付的完整一趟**——页面显示待收 $28.60、跳转 Stripe 桩、票据同时显示「Store credit −$5.00 / left $0.00」和「Pay Online ✓」、客人中途放弃则**储值原样退回**（2026-10-22 扩写） | 47 |
 | `probe_delivery_pay` | **真浏览器**：外送免费行两处一致、到店付款被禁用且给出理由、切渠道自动换支付方式、日期/时间选择器能点 | 41 |
-| `probe_prepay_pay_ui` | **真浏览器**：$16.95 自取到店付款卡片置灰 + 原因只写渠道（不再提 $20）、客人被自动移到 Pay Online、切堂食恢复可点且提示变成「pay at your table」、切回自取再次置灰；**没有线上支付的店**里提示带电话号、Place Order 弹提示而不是静默提交（2026-10-22 新增） | 22 |
+| `probe_prepay_pay_ui` | **真浏览器**：$16.95 自取到店付款卡片置灰 + 原因只写渠道（不再提 $20）、客人被自动移到 Pay Online、切堂食恢复可点且提示变成「pay at your table」、切回自取再次置灰；**没有线上支付的店**里提示带电话号、Place Order 弹提示而不是静默提交；**看板**上没付款的自取单带 ⏳ PAY FIRST 且 PREPARING disabled，Collected 后两者消失（2026-10-22 新增） | 26 |
 | `probe_delivery_geo_ui` | **真浏览器**：超距红卡片 + 一键转自取 + 禁用 Place Order、范围内小绿字、查不到只提示不拦（2026-10-18 新增） | 16 |
 | `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |

@@ -418,6 +418,57 @@ async function main() {
       await cdp.evalJs(`!!document.querySelector('#sheetBody [data-pay]')`));
 
     /* ================================================================== */
+    section('the staff board — an unpaid pickup order cannot be started by hand');
+    /* The server refuses the PATCH (probe_prepay_http.js proves that). What is
+       checked here is the courtesy on top: the board must not OFFER a button
+       that is guaranteed to fail. A tap that 409s is a mystery to a cook at
+       7pm; a greyed-out button with "PAY FIRST" next to it is not. */
+    const boardOrder = 'KP-PP-UI-BOARD-' + Date.now().toString(36);
+    const BOWL_ITEM = { kind: 'hotpot', name: 'Hot Pot To Go', qty: 1, unit: 15.99, mods: [], addons: [], note: '' };
+    const priceR = await fetch(BASE + '/api/price', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderType: 'pickup', items: [BOWL_ITEM], tipAmount: 0 })
+    }).then((r) => r.json());
+    const created = await fetch(BASE + '/api/orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        no: boardOrder, token: 'ui-board-' + boardOrder,
+        orderType: 'pickup', table: '',
+        customer: { name: 'Board Probe', phone: '4045550123', when: 'ASAP', notes: '' },
+        items: [BOWL_ITEM],
+        subtotal: priceR.subtotal, deliveryFee: priceR.delivery, tax: priceR.tax,
+        tip: 0, surcharge: 0, total: priceR.total,
+        payMethod: 'stripe', paymentStatus: 'unverified', paid: false, source: 'probe'
+      })
+    }).then((r) => r.json());
+    check('an unpaid card pickup order is on the board',
+      !!(created && created.ok === true), JSON.stringify(created));
+
+    /* The board reads its key from sessionStorage before its first fetch. */
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: 'try { sessionStorage.setItem("kpotAdminKey", ' + JSON.stringify(ADMIN_KEY) + '); } catch (e) {}'
+    });
+    await cdp.send('Page.navigate', { url: BASE + '/admin-orders.html' });
+    const card = '.order[data-id="' + boardOrder + '"]';
+    await cdp.waitFor('!!document.querySelector(\'' + card + '\')', 15000, 'the order card on the board');
+
+    const head = await cdp.evalJs('document.querySelector(\'' + card + ' .o-head\').textContent');
+    check('the board marks it ⏳ PAY FIRST', /PAY FIRST/.test(head), JSON.stringify(head.trim()));
+    const prepDisabled = await cdp.evalJs(
+      '(() => { const b = document.querySelector(\'' + card + ' button[data-act="preparing"]\'); return b ? b.disabled : null; })()');
+    check('and the PREPARING button is disabled, not offered', prepDisabled === true,
+      'disabled=' + prepDisabled);
+
+    /* 💵 Collected is the real way out, and it must release the button. */
+    await cdp.evalJs('document.querySelector(\'' + card + ' button[data-collect]\').click()');
+    await cdp.waitFor(
+      '(() => { const b = document.querySelector(\'' + card + ' button[data-act="preparing"]\'); return !!(b && b.disabled === false); })()',
+      15000, 'PREPARING to become available after Collected');
+    const headAfter = await cdp.evalJs('document.querySelector(\'' + card + ' .o-head\').textContent');
+    check('Collected releases PREPARING and clears the PAY FIRST badge',
+      !/PAY FIRST/.test(headAfter), JSON.stringify(headAfter.trim()));
+
+    /* ================================================================== */
     section('the page must have thrown nothing');
     const errs = cdp.logs.filter((l) => /EXCEPTION|\[error\]/.test(l));
     check('the page logged no JavaScript errors', errs.length === 0, errs.slice(0, 3).join('\n         '));
