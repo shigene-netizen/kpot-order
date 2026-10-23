@@ -73,7 +73,7 @@ async function main() {
   const r = await fetch(`http://127.0.0.1:${PORT}/api/orders`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      no: '', token, orderType: 'pickup', payMethod: 'counter', total: 10.58,
+      no: '', token, orderType: 'dinein', table: '3', payMethod: 'counter', total: 10.58,
       customer: { name: 'Flush Probe', phone: '555-0177' },
       items: [{ kind: 'simple', groupId: 'bubbletea', name: 'Thai Milk Tea', qty: 2, unit: 4.99 }]
     })

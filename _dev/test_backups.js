@@ -118,7 +118,7 @@ async function main() {
     const created = await fetch(BASE + '/api/orders', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        no: '', token, orderType: 'pickup', payMethod: 'counter', total: 10.58,
+        no: '', token, orderType: 'dinein', table: '3', payMethod: 'counter', total: 10.58,
         customer: { name: 'Backup Probe', phone: '555-0101' },
         items: [{ kind: 'simple', groupId: 'bubbletea', name: 'Thai Milk Tea', qty: 2, unit: 4.99 }]
       })

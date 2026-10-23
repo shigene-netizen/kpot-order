@@ -2258,53 +2258,34 @@
     return !!onlinePayMethod();
   }
 
-  /* ---- Pay at the counter is NOT offered on delivery --------------------
-     A delivery leaves the building: there is no counter to walk up to when
-     the food arrives, and nothing to collect afterwards. So a counter-paid
-     delivery is not a risky order, it is an impossible one — which makes this
-     rule unconditional, unlike the ceiling above. It does not need an online
-     fallback to be legitimate; if the owner sells delivery with no online
-     method configured, delivery simply cannot be ordered until one is, and
-     that is the honest outcome rather than a doorstep debt.
+  /* ---- Pay at the counter is DINE-IN ONLY --------------------------------
+     Owner's decision (2026-10-22, final): pickup and delivery must be paid
+     before the kitchen sees them, so the counter card is not offered on
+     either channel — at any total, with or without an online method.
 
-     Mirrors counterDeliveryVerdict() in server.js — that is the copy that
-     actually enforces it. This one exists so the guest sees the reason
-     instead of a button that dead-ends. */
-  function counterBlockedByDelivery() {
-    if (state.orderType !== 'delivery' || !deliveryOn()) return false;
-    const d = CONFIG.delivery || {};
-    return d.allowCounter !== true;
-  }
-
-  /* ---- Pickup prepayment (guest side) ------------------------------------
-     Mirrors pickupPrepayVerdict() in server.js — the copy that actually
-     enforces it. A pickup order over the threshold is paid BEFORE the
-     kitchen sees it, so pay-at-counter is not offered on one: the guest pays
-     online at checkout, exactly like a delivery.
-
-     Switched off when there is no online method, for the same reason as the
-     ceiling — a rule with nothing to fall back to would block large pickup
-     orders outright. (The server's kitchen hold still applies either way:
-     with no card processing the order waits until staff confirm the cash.) */
-  function pickupPrepayOver() {
-    const p = CONFIG.pickup || {};
-    const n = Number(p.prepayOver);
-    return isFinite(n) && n > 0 ? n : 0;
-  }
-  function counterBlockedByPickup() {
-    if (state.orderType !== 'pickup') return false;
-    const over = pickupPrepayOver();
-    if (!over) return false;
-    if (grandTotal() <= over) return false;
-    return !!onlinePayMethod();
+     Mirrors counterChannelVerdict() in server.js, which is the copy that
+     actually enforces it. This one exists so the guest reads the reason
+     instead of tapping a button that dead-ends. */
+  function counterBlockedByChannel() {
+    return state.orderType === 'pickup' || state.orderType === 'delivery';
   }
 
   /* The single question the checkout asks before letting the counter card be
-     picked: is pay-at-counter allowed for THIS order? Three separate reasons,
+     picked: is pay-at-counter allowed for THIS order? Two separate reasons,
      one answer — so a new reason can never be added to one place and
      forgotten in the other. */
   function counterBlocked() {
-    return counterBlockedByTotal() || counterBlockedByDelivery() || counterBlockedByPickup();
+    return counterBlockedByTotal() || counterBlockedByChannel();
+  }
+
+  /* The one-line reason a blocked counter card carries, in place of its usual
+     blurb. Names the thing the guest can act on. */
+  function counterBlockedBlurb() {
+    if (counterBlockedByChannel()) {
+      return (state.orderType === 'delivery' ? 'Delivery' : 'Pickup') +
+        ' orders must be paid online';
+    }
+    return 'Orders over ' + money(counterCap()) + ' must be paid online';
   }
 
   /* Ask the server whether online payment is actually wired up. On a plain
@@ -2381,10 +2362,10 @@
        has chosen for themselves, respect that instead of overriding it —
        and always recover if their choice is no longer available. */
     if (!state.payChosen || !payReady(state.payMethod)) state.payMethod = defaultPayMethod();
-    /* A cart that has grown past the ceiling — or a Delivery order, which is
-       prepaid-only — can no longer be paid at the counter. Move the guest to
-       an online method rather than leaving them selected on an option the
-       server will refuse. */
+    /* A cart that has grown past the ceiling — or a pickup/delivery order,
+       which is prepaid-only — can no longer be paid at the counter. Move the
+       guest to an online method rather than leaving them selected on an
+       option the server will refuse. */
     if (state.payMethod === 'counter' && counterBlocked()) {
       state.payMethod = onlinePayMethod() || 'counter';
     }
@@ -2395,16 +2376,10 @@
            in place of its usual blurb — hiding it entirely would leave the
            guest wondering where the option went. Which reason depends on why
            it is blocked, so the text names the thing the guest can act on. */
-        const overCap = k === 'counter' && counterBlocked();
-        const desc = overCap
-          ? (counterBlockedByDelivery()
-              ? 'Delivery orders must be paid online'
-              : counterBlockedByPickup()
-                ? 'Pickup orders over ' + money(pickupPrepayOver()) + ' must be paid online'
-                : 'Orders over ' + money(counterCap()) + ' must be paid online')
-          : CONFIG.payment[k].d;
+        const blocked = k === 'counter' && counterBlocked();
+        const desc = blocked ? counterBlockedBlurb() : CONFIG.payment[k].d;
         return '<button class="pay-opt ' + (state.payMethod === k ? 'on' : '') + '" data-pay="' + k + '"' +
-            (overCap ? ' disabled aria-disabled="true"' : '') + '>' +
+            (blocked ? ' disabled aria-disabled="true"' : '') + '>' +
           '<span class="rd"></span>' +
           '<span class="ic">' + ({ counter: '🏪', stripe: '💳', venmo: '💙', zelle: '🏦' }[k] || '💰') + '</span>' +
           '<span class="tx"><b>' + esc(CONFIG.payment[k].n) + '</b><small>' + esc(desc) + '</small></span>' +
@@ -2605,23 +2580,23 @@
       return 'Card, Apple Pay and Google Pay accepted.';
     }
     if (state.payMethod === 'counter') {
-      if (counterBlockedByDelivery()) {
-        /* Reachable only when delivery is on, the counter is refused, and no
-           online method is configured to fall back to. The guest must not be
-           left believing a counter-paid delivery went through. */
+      if (counterBlockedByChannel()) {
+        /* Reachable two ways: the guest tapped the disabled card (browsers do
+           let a tap through on some Android WebViews), or there is no online
+           method at all and the fallback had nowhere to move them. Both need
+           the truth — the second one needs the phone number. */
+        const label = state.orderType === 'delivery' ? 'Delivery' : 'Pickup';
         return onlinePayMethod()
-          ? 'Delivery orders must be paid online. Choose a method above to continue.'
-          : '⚠️ Delivery must be paid online, but no online payment is set up yet. Please call ' + CONFIG.store.phone + '.';
+          ? label + ' orders must be paid online — your order starts cooking once payment clears. Choose a method above to continue.'
+          : '⚠️ ' + label + ' must be paid online, but no online payment is set up yet. Please call ' + CONFIG.store.phone + '.';
       }
-      if (counterBlockedByPickup()) {
-        /* Same shape as the delivery note: the guest picked (or was left on)
-           the counter on a pickup order over the threshold. Blocking implies
-           an online method exists, so this always has somewhere to send
-           them. */
-        return 'Pickup orders over ' + money(pickupPrepayOver()) +
-          ' must be paid online — your order starts cooking once payment clears. Choose a method above to continue.';
+      if (counterBlockedByTotal()) {
+        /* Over the table-tab ceiling. Blocking implies an online method
+           exists, so this always has somewhere to send them. */
+        return 'Orders over ' + money(counterCap()) +
+          ' must be paid online. Choose a method above to continue.';
       }
-      return 'Your order goes straight to the kitchen. Pay when you pick up.';
+      return 'Pay at your table when you are done — cash or card.';
     }
     if (state.payMethod === 'venmo') return 'You\'ll be sent to @' + p.handle + ' on Venmo to pay ' + money(grandTotal()) + '.';
     if (state.payMethod === 'zelle') return 'Send ' + money(grandTotal()) + ' to ' + p.recipient + ' via Zelle, then show the confirmation.';
@@ -2705,6 +2680,27 @@
        verdict belongs to the server. */
     if (state.orderType === 'delivery' && state.deliveryGeo.status === 'blocked') {
       toast(state.deliveryGeo.msg || 'That address is outside our delivery area. Please choose Pickup.', 'err');
+      return;
+    }
+    /* Pay at the counter is dine-in only (owner's decision, 2026-10-22). The
+       checkout already greys the card out and moves the guest to an online
+       method, so arriving here with it still selected means one of two
+       things: a browser that let a tap through a disabled button, or a shop
+       with no online method to fall back to. The server refuses either way —
+       say so here, where the form is still on screen to fix it, instead of
+       letting the guest think the order went through. */
+    if (state.payMethod === 'counter' && counterBlocked()) {
+      const label = state.orderType === 'delivery' ? 'Delivery' : 'Pickup';
+      const alt = onlinePayMethod();
+      if (alt) {
+        state.payMethod = alt;
+        openCheckout();
+        toast(label + ' orders must be paid online — switched you to ' +
+          CONFIG.payment[alt].n + '.', 'err');
+      } else {
+        toast(label + ' orders must be paid online, and online payment is not set up ' +
+          'right now. Please call ' + CONFIG.store.phone + '.', 'err');
+      }
       return;
     }
 
@@ -2929,8 +2925,7 @@
     if (order.__rejected) {
       btnRestore($('#placeOrder'));
       const rej = order.__rejected;
-      if (rej.error === 'counter_over_cap' || rej.error === 'counter_not_allowed_delivery' ||
-          rej.error === 'pickup_prepay_required') {
+      if (rej.error === 'counter_over_cap' || rej.error === 'counter_not_allowed') {
         const alt = onlinePayMethod();
         if (alt) state.payMethod = alt;
         openCheckout();

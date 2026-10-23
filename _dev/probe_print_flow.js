@@ -104,8 +104,10 @@ function makeOrder(token, payMethod) {
     no: 'KP-PRINT-' + token,
     orderNo: 'KP-PRINT-' + token,
     token: 'print-' + token,
-    orderType: 'pickup',
-    table: '',
+    /* DINE-IN: since 2026-10-22 pay-at-counter is refused on pickup and
+       delivery, and these suites are about money/printing, not channels. */
+    orderType: 'dinein',
+    table: '5',
     customer: { name: 'Print Probe', phone: '4045550142', when: 'ASAP', notes: 'no chopsticks' },
     items: [{ kind: 'hotpot', name: 'Build Your Own Bowl', qty: 1, unit, mods: ['Broth: Japanese Miso'], addons: [], note: '' }],
     subtotal, deliveryFee: 0, tax, tip: 0, surcharge: 0,

@@ -741,64 +741,79 @@ printer.js / admin-orders.html / admin-giveaway.html   票、看板、后台
 
 ---
 
-## 四点十二、自取超过 $20：先付款，后进厨房
+## 四点十二、自取和外送一律先付款（堂食除外）
 
-2026-10-22 店主要求：**自取单超过 $20，必须先付款，才会发送到厨房去准备**。
-自取客人不在店里——没有走过的桌子，也没有人来收钱——所以一张没付款的自取单
-就是给一个可能永不到店的人做菜，单越大越疼。$30 到店付款上限（三）守着其它
-渠道，这一条把自取收得更紧。
+2026-10-22 店主最终决定：**所有 PICKUP 和 DELIVERY 的单子都必须先付款，不接受到店付款；
+没确认收款的单子（堂食除外）不许进入 `preparing`——自动、手动都不行。**
+
+这条规矩当天上午还是「自取超过 $20 才要预付」，下午店主把阈值拿掉了：风险不值得
+定价，而且一张做好的自取单，客人照样可以不来。**阈值和开关一起删了**，理由各一条：
+
+- 有阈值的规矩 = 放行最贵的那张单；
+- 能关掉的开关 = 刷卡机坏掉那晚第一个被关掉的东西，而那正是它该起作用的时刻。
 
 ### 规矩本体（两个纯函数，server.js）
 
 | 函数 | 管什么 | 形状 |
 |---|---|---|
-| `pickupPrepayVerdict()` | **付款方式**：超阈值的自取单不提供「到店付款」，客人结算时在线付清 | 像 $30 上限：**没有线上支付方式时不生效**（否则没配刷卡机的店直接接不了大自取单） |
-| `pickupKitchenHold()` | **厨房**：没确认收款的自取大单进不了 `preparing`——自动下厨房不行，店员手点 PREPARING 也不行 | **无条件**：它不拦订单存在，只拦下锅，所以没有什么可豁免的 |
+| `counterChannelVerdict()` | **付款方式**：pickup / delivery 不提供「到店付款」，任何金额、有没有线上支付方式都一样 | **无条件**：没有 fallback 豁免（外送一直如此，现在自取也是）；连不认识的 `orderType` 也拦（fail closed，免得一个拼写错误变成「外送可以付现金」） |
+| `kitchenHold()` | **厨房**：没确认收款的 pickup/delivery 进不了 `preparing`——自动下厨房不行，店员手点 PREPARING 也不行 | **无条件**：它不拦订单存在，只拦下锅，所以没有什么可豁免的 |
 
-- 阈值在 `assets/config.js` 的 `pickup.prepayOver`（当前 **20**，`0` = 关闭）。
-- 按**服务端重算的 total**（含税、含小费）算——和 $30 上限同一个基准，
-  拒绝时报出来的数是客人小票上能看到的数。
-- 「已确认收款」= `verified`（Stripe 的答案，或服务端自己的 $0 算术）或
-  `paid`（店员点 💵 Collected）。其它一律算没付，**不认识的状态 fail closed**。
+- 「已确认收款」= `isPaidStatus()`（`verified` 或 `paid`）——**和积分用的是同一个定义**，
+  自动下厨房和厨房关口也共用它，三处不会各说各话。
+- 堂食是唯一还能挂账的渠道；$30 上限（三点几那一节）现在**只管堂食**。
 
 ### 在哪拦截（两道）
 
 | 关口 | 时机 | 结果 |
 |---|---|---|
-| `POST /api/orders` | 付款方式规则区，$30 上限**之前** | 400 `pickup_prepay_required`，订单不落看板 |
-| `PATCH /api/orders/:id` | 状态/付款状态赋值**之前** | 409 `pickup_awaiting_payment`，订单原地不动 |
+| `POST /api/orders` | 付款方式规则区，$30 上限**之前** | 400 `counter_not_allowed` + `channel`，订单不落看板 |
+| `PATCH /api/orders/:id` | 状态/付款状态赋值**之前** | 409 `unpaid_before_kitchen` + `channel`，订单原地不动 |
 
-付款关口放在 $30 上限之前：一张 $50 的自取单该听到的是自取的 $20，不是通用的
-$30。厨房关口判的是**这个 PATCH 会造成的状态**（`nextStatus` / `nextPayment`），
-不是改完之后的状态——先改再拒会把一张「被拒」的订单留在 `preparing` 里，
-比放行和拒绝都糟。这个坑第一版真踩了：`o.status` 先被赋值，409 后订单已经
-脏了，后面 Collected + PREPARING 连 Ticket 都不出。probe 当场抓住，才改成
-先算候选值再决定。
+付款关口放在 $30 上限之前：一张 $50 的自取单该听到的是「自取必须线上付」，不是
+「超过 $30」。厨房关口判的是**这个 PATCH 会造成的状态**（`nextStatus` / `nextPayment`），
+不是改完之后的状态——先改再拒会把一张「被拒」的订单留在 `preparing` 里，比放行和
+拒绝都糟。这个坑第一版真踩了：`o.status` 先被赋值，409 后订单已经脏了，后面
+Collected + PREPARING 连票都不出。probe 当场抓住，才改成先算候选值再决定。
+
+### 一个真实的后果（写在这里，免得下次有人当成 bug）
+
+店里如果**没有任何线上支付方式**（没 key、没 paymentLink），pickup 和 delivery 就
+**一单也接不了**。这是店主决定的诚实后果，不是故障，而且三处都照着说实话：
+
+- 服务器拒单文案变成「…No online payment is set up right now — please call
+  +1 (678) 335-5388.」，而不是让客人去点一个不存在的 Pay Online；
+- 客人页的到店付款卡片照样置灰，提示里带电话号，按 Place Order 弹提示而**不是静默提交**；
+- **堂食完全不受影响**：没有线上支付也照样能到店付款（这是有意的，别「顺手统一」）。
 
 ### 客人那边 / 店员那边
 
-- 结算页「Pay at Counter」卡片置灰，原因写 **Pickup orders over $20.00 must
-  be paid online**，并自动切到 Pay Online；切到堂食再切回自取，屏蔽会跟着走。
-- 看板上点 PREPARING 被拒时，**服务器那句话会真的弹出来**——以前 409 的
-  `message` 被丢掉，看板只是默默刷新，按钮像坏了。按提示点 💵 Collected
-  或 💳 Re-check，钱一确认，同一套自动化接着把它送进厨房、出票。
+- 结算页「Pay at Counter」在 pickup/delivery 上置灰，原因写 **Pickup orders must be
+  paid online** / **Delivery orders must be paid online**（不再提 $20），并自动切到
+  Pay Online；切到堂食恢复可点，切回自取再次置灰、再次把客人移走。
+- 堂食时的提示是 **Pay at your table when you are done — cash or card.**
+- 看板上没确认收款的 pickup/delivery 卡片带 **⏳ PAY FIRST**，PREPARING 按钮直接禁用
+  （hover 说明「先收款」）。万一点到了（旧缓存页面），服务器 409，而且那句 `message`
+  会真的弹出来——以前 409 的文案被丢掉，看板只是默默刷新，按钮像坏了。
 
-### 测试（3 套新，计入总表 47 → 50）
+### 测试（3 套，替换掉原来的 pickup 专用三套）
 
-- `_dev/test_pickup_prepay.js`（45 项纯逻辑：两个手臂各自的边界、恰好 $20
-  放行、没有线上支付时付款手臂放行而厨房手臂照样拦、堂食/外送不受影响、
-  未知付款状态 fail closed、config 真的写着 20）
-- `_dev/probe_pickup_prepay_http.js`（29 项，真服务端：拒单后看板上没有订单；
-  没付款点 PREPARING 被 409 且不出票；Collected 后出 exactly 一张票；
-  **对照组**——$16.95 自取没付款照样下锅、同一张 $20.12 的购物车换堂食就放行、
-  落批前遗留的到店付款大单同样被拦；另外单独拉一台没有 Stripe key 的服务器，
-  证明大自取单照样收、但照样不进厨房）
-- `_dev/probe_pickup_pay_ui.js`（22 项，真浏览器：卡片置灰 + 原因 + 客人被
-  移走、切堂食恢复可点、切回自取再次置灰、$16.95 对照组正常）
+- `_dev/test_prepay.js`（47 项纯逻辑：两个渠道 × 两个手臂、金额完全无关、堂食豁免、
+  未知 orderType fail closed、**任何 cfg 都解不开**（`prepayOver:0` + `allowCounter:true`
+  一起塞进去也没用）、config 里这两个键确实已经不存在、app.js / 看板确实认得新的错误码）
+- `_dev/probe_prepay_http.js`（39 项，真服务端：$16.95 自取到店付款被拒且不上看板、
+  $33.90 同样被拒、外送同样被拒、线上付的同款单照样收；没付款点 PREPARING 被 409
+  且不出票、Collected 后出 exactly 一张票；**把已下锅的单改回 `counter` 也拦**且不改脏；
+  堂食对照（$20.12 照样到店付款、$33.90 照样被 $30 上限拦）；落批前遗留的 $16.95
+  到店付款自取单同样被拦；另拉一台没有 Stripe key 的服务器，证明拒单照旧、
+  文案改口叫客人打电话、而堂食照样收）
+- `_dev/probe_prepay_pay_ui.js`（22 项，真浏览器：$16.95 自取卡片置灰 + 原因只写渠道、
+  客人被移到 Pay Online、切堂食恢复可点且提示改成「pay at your table」、切回自取再次
+  置灰、**没有线上支付的店**里提示带电话号且 Place Order 弹提示不提交）
 
-三套都做了**故意弄红**：把 `pickupKitchenHold` 改成永远放行 → 纯逻辑 7 项红；
-把厨房关卡的 `nextStatus === 'preparing'` 改掉 → 探针 5 项红；把
-`counterBlockedByPickup()` 从 `counterBlocked()` 摘掉 → 浏览器探针 4 项红。
+三套都做了**故意弄红**：把 `kitchenHold` 改成永远放行 → 纯逻辑 15 项红；把厨房关卡的
+`nextStatus === 'preparing'` 关掉 → HTTP 探针 9 项红；把 `counterBlockedByChannel()`
+从 `counterBlocked()` 里摘掉 → 浏览器探针 4 项红。
 
 ---
 
@@ -1685,12 +1700,12 @@ bash _dev/run_all.sh
 STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 ```
 
-当前 **50 个套件，全绿**（下表 48 个 + 4 个后台页面的语法检查）：
+当前 **50 个套件，全绿**（下表 46 个 + 4 个后台页面的语法检查）：
 
 | 套件 | 覆盖 | 项数 |
 |---|---|---|
-| `test_counter_cap` | 到店付款 $30 上限的规则 | 34 |
-| `test_pickup_prepay` | **自取超 $20 先付款**：付款手臂（超阈值不给到店付款、没线上支付就放行）+ 厨房手臂（没确认收款进不了 preparing、恰好 $20 放行、堂食/外送不受影响、未知状态 fail closed）、config 真的写着 20（2026-10-22 新增） | 45 |
+| `test_counter_cap` | 到店付款 $30 上限的规则（现在只剩堂食能走到它），外加一条结构检查：渠道禁令确实排在 $30 上限之前 | 21 |
+| `test_prepay` | **自取和外送一律先付款（堂食除外）**：付款手臂（两个渠道都拒到店付款，任何金额、没有线上支付也拒、未知 orderType fail closed、任何 cfg 都解不开）+ 厨房手臂（没确认收款进不了 preparing，`isPaidStatus` 与积分同源）+ 堂食豁免 + config 里 `prepayOver`/`allowCounter` 确实不存在（2026-10-22 新增） | 47 |
 | `test_store_gate` | 渠道开关的服务端拦截（未知值 fail closed） | 14 |
 | `test_hours` | 营业时段徽章的 20 个边界 | 20 |
 | `test_printer` | 票据版式，**逐字节**（含样式不残留、折扣行） | 79 |
@@ -1708,8 +1723,8 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `test_auto_prepare` | 自动下厨房：谁能自动、谁不能、开关落盘与重启后仍在 | 50 |
 | `test_backups` | 启动快照 + 变动即备份 + 硬杀不丢数据（含会员表） | 10 |
 | `test_flush_survives_kill` | 定时刷盘（不依赖关闭钩子） | — |
-| `probe_counter_cap_http` | 上限真的被 `handleCreateOrder` 调用；$30 上限现在落在**堂食**上（自取有更严的 $20 规则挡在前面，大自取单报的是自取的原因，不是通用的原因）；外送仍然禁到店付款（2026-10-22 改写） | 14 |
-| `probe_pickup_prepay_http` | **自取超 $20 先付款**：两道关口真的拦——付款方式 400 且订单不上看板、没付款点 PREPARING 409 且不出票、Collected 后出 exactly 一张票；对照组（$16.95 自取没付款照样下锅、同一张 $20.12 换堂食就放行、遗留的到店付款大单同样被拦）；另拉一台没有 Stripe key 的服务器证明大自取单照样收、但照样不进厨房（2026-10-22 新增） | 29 |
+| `probe_counter_cap_http` | 上限真的被 `handleCreateOrder` 调用；$30 上限现在只落在**堂食**上（自取/外送被渠道禁令挡在前面，$16.95 的自取单也被拒，而且客人听到的不是「超过 $30」）；外送仍然禁到店付款，报 `counter_not_allowed`（2026-10-22 改写） | 14 |
+| `probe_prepay_http` | **自取和外送一律先付款**：两道关口真的拦——付款方式 400 且订单不上看板（$16.95 / $33.90 / 外送）、没付款点 PREPARING 409 且不出票、Collected 后出 exactly 一张票；**把已下锅的单改回 `counter` 也拦且不改脏**；堂食对照（$20.12 到店付款放行、$33.90 被 $30 上限拦）；遗留的 $16.95 到店付款自取单同样被拦；另拉一台没有 Stripe key 的服务器证明拒单照旧、文案改口叫客人打电话、堂食照样收（2026-10-22 新增） | 39 |
 | `probe_discount_http` | 优惠码真的被解析/计价/只在落单时消耗；店员打折重开 | 27 |
 | `probe_loyalty` | 真服务端：到店付款**点了 Collected 才发分**、伪造 `paymentStatus` 会被打回、取消退分只退一次、后台/导出的鉴权 | 103 |
 | `probe_throttle_isolate` | 限流按接口分桶：重新计价不会把下单挤爆 | 7 |
@@ -1728,7 +1743,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
 | `probe_guest_discount` | **真浏览器**里输优惠码/储值码：折扣行、总额、改数量后重新计价、税按折后价算、**储值码扣一部分且显示余额**、与优惠码互斥（拿走储值码优惠码就下去）、移除后恢复原价；**差额用卡付的完整一趟**——页面显示待收 $28.60、跳转 Stripe 桩、票据同时显示「Store credit −$5.00 / left $0.00」和「Pay Online ✓」、客人中途放弃则**储值原样退回**（2026-10-22 扩写） | 47 |
 | `probe_delivery_pay` | **真浏览器**：外送免费行两处一致、到店付款被禁用且给出理由、切渠道自动换支付方式、日期/时间选择器能点 | 41 |
-| `probe_pickup_pay_ui` | **真浏览器**：自取超 $20 时到店付款卡片置灰 + 原因写明自取 $20、客人被自动移到 Pay Online、切堂食恢复可点、切回自取再次置灰、$16.95 对照组正常（2026-10-22 新增） | 22 |
+| `probe_prepay_pay_ui` | **真浏览器**：$16.95 自取到店付款卡片置灰 + 原因只写渠道（不再提 $20）、客人被自动移到 Pay Online、切堂食恢复可点且提示变成「pay at your table」、切回自取再次置灰；**没有线上支付的店**里提示带电话号、Place Order 弹提示而不是静默提交（2026-10-22 新增） | 22 |
 | `probe_delivery_geo_ui` | **真浏览器**：超距红卡片 + 一键转自取 + 禁用 Place Order、范围内小绿字、查不到只提示不拦（2026-10-18 新增） | 16 |
 | `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |

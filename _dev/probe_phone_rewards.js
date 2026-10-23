@@ -89,8 +89,10 @@ const orderFor = (no, phone, claim, extra) => Object.assign({
   no: no,
   token: 'dev-' + no,
   claim: claim,
-  orderType: 'pickup',
-  table: '',
+  /* DINE-IN: since 2026-10-22 pay-at-counter is refused on pickup and
+     delivery, and these suites are about money/discounts, not channels. */
+  orderType: 'dinein',
+  table: '5',
   customer: { name: 'Guest', phone: phone },
   items: [HOTPOT],
   subtotal: SUBTOTAL,

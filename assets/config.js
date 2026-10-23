@@ -99,20 +99,19 @@ const CONFIG = {
     fee: 0,
     listFee: 1.99,
 
-    /* ---- Pay at the counter is NOT offered on delivery -------------------
+    /* ---- Delivery is prepaid ---------------------------------------------
        A delivery leaves the building: there is no counter to walk up to when
        the food arrives, and nothing to collect afterwards. So a delivery must
-       be prepaid, and a guest who picked "Pay at Counter" is refused rather
-       than quietly downgraded.
+       be paid online, and a guest who picked "Pay at Counter" is refused
+       rather than quietly downgraded.
 
-       Unlike the counter ceiling this rule is unconditional — it does not
-       need an online fallback to be legitimate, because there is no version
-       of a counter-paid delivery that works. If delivery is sold with no
-       online method configured, delivery orders simply cannot be placed until
-       one is; the guest page says so instead of dead-ending.
-
-       Set this to true only if you really do collect on the doorstep. */
-    allowCounter: false,
+       Since 2026-10-22 the same is true of PICKUP (owner's final decision),
+       so this is no longer a delivery-specific rule — see
+       counterChannelVerdict() in server.js, which covers both channels and
+       has no switch. `allowCounter` used to live here; it is gone on purpose.
+       If the shop has no online method configured, delivery orders simply
+       cannot be placed until it has one; the guest page says so instead of
+       dead-ending. */
 
     /* ---- Delivery minimum -------------------------------------------------
        The smallest food subtotal that may be delivered. The 2-mile rule
@@ -206,7 +205,7 @@ const CONFIG = {
   ],
 
   /* ---- Payment methods -------------------------------------------------
-     'counter'  → guest pays at pickup / to the server. Always available.
+     'counter'  → guest pays at the table / to the server. DINE-IN ONLY.
      'stripe'   → online card / Apple Pay / Google Pay via Stripe.
      'venmo'    → deep-link to a Venmo business handle.
      'zelle'    → show a Zelle email/phone for manual transfer.
@@ -215,22 +214,25 @@ const CONFIG = {
     counter: {
       enabled: true,
       n: 'Pay at Counter',
-      d: 'Cash or card when you pick up',
+      d: 'Cash or card at the table',
 
-      /* ---- Ceiling on pay-at-counter ----------------------------------
-         A pay-at-counter order reaches the kitchen BEFORE any money is
-         collected. If the guest never turns up, the food cost is a straight
-         loss — and the pain scales with the ticket, so the big orders are
-         the ones worth protecting.
+      /* ---- Pay at the counter is a DINE-IN method -----------------------
+         Owner's decision (2026-10-22, final): pickup and delivery orders
+         must ALWAYS be paid before the kitchen sees them, so the counter is
+         not offered on either. A pickup guest is not in the building — there
+         is no table to walk past and nobody to collect from when the food is
+         ready — and a delivery leaves the building entirely. Only a guest
+         sitting at a table may run a tab.
 
-         Orders ABOVE this amount must be prepaid online. Orders at or below
-         it can still pay at pickup, which keeps cash customers happy.
+         This is enforced in server.js by counterChannelVerdict(), which is
+         unconditional: it does NOT relax when no online method is
+         configured. A shop without card processing simply cannot take
+         pickup/delivery orders until it has one — the honest outcome, and
+         the same rule delivery has always had.
 
-         `maxTotal: 0` (or removing the line) switches the ceiling off.
-         It is only ever enforced when an online method is actually
-         configured — otherwise a ceiling would silently stop the store from
-         taking large orders at all, which is worse than the risk it guards
-         against. */
+         The ceiling below still applies to the one channel that may pay at
+         the counter (dine-in): a very large table tab must still be
+         prepaid. */
       maxTotal: 30
     },
 
@@ -296,29 +298,29 @@ const CONFIG = {
     }
   },
 
-  /* ---- Pickup prepayment ---------------------------------------------------
-     The owner's rule (2026-10-22): a PICKUP order above this total must be
-     PAID before it is sent to the kitchen. A pickup guest is not in the
-     building — there is no table to walk past and nobody to collect from
-     afterwards — so an unpaid pickup order is food cooked for someone who
-     may never arrive, and the waste scales with the ticket. The pay-at-
-     counter ceiling above ($30) still guards every other order type; this
-     tightens pickup further.
+  /* ---- Pickup and delivery are prepaid — there is nothing to configure ---
+     The owner's rule (2026-10-22, final): every PICKUP and every DELIVERY
+     order must be PAID before it is sent to the kitchen, and pay-at-counter
+     is not accepted on either. A pickup guest is not in the building — there
+     is no table to walk past and nobody to collect from afterwards — so an
+     unpaid pickup order is food cooked for someone who may never arrive. A
+     delivery leaves the building entirely. Only a guest sitting at a table
+     may run a tab.
 
-     Two arms enforce it, both in server.js:
-       * pay-at-counter is not offered on such an order
-         (pickupPrepayVerdict) — the guest pays online at checkout, exactly
-         like a delivery does;
+     Two arms enforce it, both in server.js, and neither has a threshold or a
+     switch:
+       * pay-at-counter is refused on pickup and delivery at order creation
+         (counterChannelVerdict) — the guest pays online at checkout;
        * the order cannot reach 'preparing' until the money is confirmed
-         (pickupKitchenHold) — not by the kitchen automation, and not by a
-         staff tap on PREPARING.
+         (kitchenHold) — not by the kitchen automation, and not by a staff tap
+         on PREPARING.
 
-     `prepayOver: 0` (or removing the line) switches the rule off. Measured
-     on the priced TOTAL — the number on the bill, tip included — so a
-     refusal quotes a figure the guest can see and reconcile. */
-  pickup: {
-    prepayOver: 20
-  },
+     There is deliberately no `prepayOver` and no `allowCounter` any more: a
+     rule with a threshold is a rule that lets the expensive order through,
+     and a switch to turn it off is the switch somebody flips at 9pm when the
+     card terminal is down — exactly when it matters. The one number that
+     still exists, payment.counter.maxTotal below, is a TABLE-TAB ceiling,
+     because dine-in is the only channel left that can pay at the counter. */
 
   /* ---- Where the order goes --------------------------------------------
      The order ticket is ALWAYS shown on screen (guest shows it at the counter).

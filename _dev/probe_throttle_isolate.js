@@ -69,8 +69,10 @@ const THROTTLE_PHONE = '4045550777';
 const orderFor = (no, total) => ({
   no: no,
   token: 'thr-' + no,
-  orderType: 'pickup',
-  table: '',
+  /* DINE-IN: since 2026-10-22 pay-at-counter is refused on pickup and
+     delivery, and these suites are about money/discounts, not channels. */
+  orderType: 'dinein',
+  table: '5',
   customer: { name: 'Throttle Probe', phone: THROTTLE_PHONE },
   items: [HOTPOT],
   subtotal: 15.99, deliveryFee: 0, tax: 0.96, tip: 0, surcharge: 0,

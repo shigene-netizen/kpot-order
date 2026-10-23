@@ -142,7 +142,9 @@ function makeOrder(token) {
   const unit = 15.99, subtotal = unit, tax = Math.round(subtotal * 0.06 * 100) / 100;
   return {
     no: 'KP-UI-' + token, orderNo: 'KP-UI-' + token, token: 'ui-' + token,
-    orderType: 'pickup', table: '',
+    /* DINE-IN: pay-at-counter is refused on pickup since 2026-10-22, and
+       this probe is about the board's print buttons, not channels. */
+    orderType: 'dinein', table: '4',
     customer: { name: 'Board UI', phone: '4045550142', when: 'ASAP', notes: '' },
     items: [{ kind: 'hotpot', name: 'Build Your Own Bowl', qty: 1, unit, mods: [], addons: [], note: '' }],
     subtotal, deliveryFee: 0, tax, tip: 0, surcharge: 0, total: Math.round((subtotal + tax) * 100) / 100,

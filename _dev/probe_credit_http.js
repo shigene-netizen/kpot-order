@@ -132,8 +132,10 @@ function orderFor(n, extra) {
   return Object.assign({
     no: 'KP-PROBE-CREDIT-' + n,
     token: 'probe-credit-' + n,
-    orderType: 'pickup',
-    table: '',
+    /* DINE-IN: since 2026-10-22 pay-at-counter is refused on pickup and
+       delivery, and these suites are about money/printing, not channels. */
+    orderType: 'dinein',
+    table: '5',
     customer: { name: 'Probe', phone: '', when: 'ASAP' },
     items: [{ kind: 'hotpot', name: 'Hot Pot To Go', qty: 1, unit: UNIT, mods: [], addons: [], note: '' }],
     subtotal: SUBTOTAL,

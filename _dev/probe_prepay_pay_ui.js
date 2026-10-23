@@ -1,38 +1,46 @@
 #!/usr/bin/env node
 /* ==========================================================================
-   Pickup prepayment, as the GUEST sees it: over $20, pay before the kitchen.
+   Prepayment, as the GUEST sees it: pickup and delivery pay before the kitchen.
    (index.html, real browser + real server)
 
-   The rule (owner, 2026-10-22): a PICKUP order over $20 must be paid before
-   it is sent to the kitchen. The server enforces it (probe_pickup_prepay_http.js
-   proves that); what is checked here is the part the server cannot do for the
-   guest — the counter card is shown DISABLED with the reason, and the guest is
-   never left selected on an option the server would refuse. A guest who only
-   finds out at "Place Order" has already lost.
+   The rule (owner, 2026-10-22, final): every pickup and every delivery order
+   must be paid before it is sent to the kitchen, and pay-at-counter is not
+   accepted on either. The server enforces it (probe_prepay_http.js proves
+   that); what is checked here is the part the server cannot do for the guest —
+   the counter card is shown DISABLED with the reason, and the guest is never
+   left selected on an option the server would refuse. A guest who only finds
+   out at "Place Order" has already lost.
 
    Four things this file exists to catch, all rendered-state bugs that pure
    logic cannot see:
 
-     1. THE BLOCKED CARD. On a pickup order over the threshold, pay-at-counter
-        is visible but disabled, marked aria-disabled, and its blurb names the
-        PICKUP rule — not the general $30 ceiling, not the delivery ban.
+     1. THE BLOCKED CARD. On a pickup order the counter card is visible but
+        disabled, marked aria-disabled, and its blurb names the CHANNEL —
+        not the general $30 ceiling.
 
      2. THE FALLBACK. The guest is moved to an online method rather than left
         on a card that would be refused, and the hint under the options says
         why.
 
-     3. THE TWO CONTROLS. The same over-threshold cart on DINE-IN offers the
-        counter again (the guest is in the building — the rule is
-        pickup-scoped), and a SMALL pickup cart offers it too (the threshold
-        is the whole point: a $12 bowl still pays at the counter). Without
-        these, a bug that disabled the counter card everywhere would pass
-        checks 1 and 2 happily.
+     3. THE DINE-IN CONTROL. The same cart on DINE-IN offers the counter
+        again, with its normal blurb and a working tap. Without this, a bug
+        that disabled the counter card everywhere would pass checks 1 and 2.
+
+     4. THE HONEST DEAD END. On a shop with no online method at all there is
+        nowhere to move the guest, so the page must say so — the hint names
+        the shop's phone number and Place Order refuses with a message instead
+        of quietly sending nothing.
+
+   The cart is $16.95 — deliberately BELOW the retired $20 threshold, because
+   "the threshold is gone" is the part of this change that is easiest to
+   regress: every check here passed under the old rule at $20.12 and none of
+   them may pass now.
 
    Pitfall: the failure mode is a *rendered* one (which card carries .on,
    whether the option is really disabled), so it is asserted against the DOM,
    never against the state variable that produced it.
 
-   Run:  node _dev/probe_pickup_pay_ui.js
+   Run:  node _dev/probe_prepay_pay_ui.js
    ========================================================================== */
 
 'use strict';
@@ -45,15 +53,18 @@ const { teardown } = require('./probe_cleanup.js');
 
 const ROOT = path.dirname(__dirname);
 const PORT = parseInt(process.env.PORT || '8956', 10);
+const PORT2 = parseInt(process.env.PORT2 || '8957', 10);
 const BASE = 'http://127.0.0.1:' + PORT;
+const BASE2 = 'http://127.0.0.1:' + PORT2;
 const CDP_PORT = parseInt(process.env.CDP_PORT || '9384', 10);
 const CHROME = process.env.CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const ADMIN_KEY = 'pickup-pay-key-' + Date.now().toString(36);
+const ADMIN_KEY = 'prepay-pay-key-' + Date.now().toString(36);
 
 /* Hermetic: every state file the server knows about points at scratch, so
    this probe cannot read or write the shop's real orders, switches, menu,
-   ledger or secrets. */
-const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-pickup-pay-'));
+   ledger or secrets. Two scratch dirs — one per server. */
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-prepay-pay-'));
+const SCRATCH2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-prepay-nokey-ui-'));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -146,13 +157,13 @@ const TOTAL_ROW = (sel) => `(() => {
 })()`;
 
 const PAY_HINT = `(() => ((document.querySelector('#payHint') || {}).textContent || '').trim())()`;
+const TOASTS = `(() => Array.from(document.querySelectorAll('#toasts .toast')).map((t) => (t.textContent || '').trim()).join(' | '))()`;
 
 /* Cart seeding. The cart lives in localStorage and survives a reload, so the
    item shapes below are exactly what addToCart() would have written — same
    fields, same prices as the menu (the server re-prices regardless). One bowl
-   is $15.99 and a side of fries $2.99, so bowl + fries = $18.98 + 6% tax =
-   $20.12: just over the $20 threshold and under the $30 counter ceiling, so
-   a refusal here can only be the pickup rule. */
+   is $15.99 + 6% tax = $16.95: comfortably under the $30 table-tab ceiling,
+   and under the $20 pickup threshold this rule used to have. */
 const BOWL = { uid: 'probe-bowl', qty: 1, name: 'Hot Pot To Go', unit: 15.99, kind: 'hotpot', mods: [], addons: [], note: '', sig: '["Hot Pot To Go",[],[]]' };
 const FRIES = { uid: 'probe-fries', qty: 1, name: 'Side of Fries', unit: 2.99, kind: 'simple', mods: [], addons: [], note: '', sig: '["Side of Fries",[]]' };
 
@@ -162,16 +173,16 @@ const seedCart = (items) => `(() => { try {
   localStorage.removeItem('kpot.history.v1');
 } catch (e) {} })()`;
 
-/* Open the page with a seeded cart on the Pickup channel and drive it to the
+/* Open a page with a seeded cart on the Pickup channel and drive it to the
    CART sheet. Stops there on purpose: clicking through to checkout REPLACES
    the sheet body, so #cartTotals must be read before that click (reading it
    afterwards gets an empty node list, which reads as "no total" rather than
    as the mistake it is). */
-async function openPickupCart(cdp, items) {
-  await cdp.send('Page.navigate', { url: BASE });
+async function openPickupCart(cdp, base, items) {
+  await cdp.send('Page.navigate', { url: base });
   await cdp.waitFor('!!document.querySelector("[data-cat]")', 15000, 'the menu to render');
   await cdp.evalJs(seedCart(items));
-  await cdp.send('Page.navigate', { url: BASE + '/?type=pickup' });
+  await cdp.send('Page.navigate', { url: base + '/?type=pickup' });
   await cdp.waitFor('!!document.querySelector("#otGrid .ot-card.on")', 15000, 'the channel cards');
 
   const picked = await cdp.evalJs('(() => { const b = document.querySelector("#otGrid .ot-card.on"); return b ? b.dataset.ot : null; })()');
@@ -191,59 +202,65 @@ async function clickToCheckout(cdp) {
   await cdp.waitFor('!!document.querySelector("#checkoutTotals .trow")', 8000, 'the checkout totals');
 }
 
+function serverEnv(dir, port, extra) {
+  return Object.assign({}, process.env, {
+    PORT: String(port),
+    ADMIN_KEY,
+    KPOT_FLUSH_MS: '500',
+    /* 24h open: the business-hours tick holds `open` on the hours clock, and a
+       guest page that will not accept orders cannot be driven through a cart
+       at all. See hoursSpec() in server.js. */
+    KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
+    KPOT_ORDERS_FILE: path.join(dir, 'orders.local.json'),
+    KPOT_CUSTOMERS_FILE: path.join(dir, 'customers.local.json'),
+    KPOT_CREDITS_FILE: path.join(dir, 'credits.local.json'),
+    KPOT_PRINT_FILE: path.join(dir, 'print.local.json'),
+    KPOT_STORE_FILE: path.join(dir, 'store.local.json'),
+    KPOT_MENU_FILE: path.join(dir, 'menu.local.json'),
+    KPOT_SECRETS_FILE: path.join(dir, 'secrets.local.json'),
+    KPOT_DISCOUNTS_FILE: path.join(dir, 'discounts.local.json'),
+    KPOT_APPLE_PAY_FILE: path.join(dir, 'apple-domain-association'),
+    KPOT_GIVEAWAY_OUTBOX: path.join(dir, 'giveaway-mail-outbox.jsonl'),
+    ORDERS_BACKUP_DIR: path.join(dir, 'order-backups')
+  }, extra || {});
+}
+
+async function waitHealthy(base, tries) {
+  for (let i = 0; i < (tries || 80); i++) {
+    try {
+      const r = await fetch(base + '/api/health');
+      if (r.ok) { const j = await r.json(); if (j && j.ok) return j; }
+    } catch (e) {}
+    await sleep(250);
+  }
+  return null;
+}
+
 async function main() {
-  console.log('pickup prepayment as the guest sees it — real browser + real server');
+  console.log('prepayment as the guest sees it — real browser + real server');
   console.log('='.repeat(74));
 
-  let server = null, chrome = null, cdp = null;
+  let server = null, server2 = null, chrome = null, cdp = null;
   let serverLog = '';
-  const profile = path.join(os.tmpdir(), 'kpot-pickup-pay-chrome-' + Date.now());
+  const profile = path.join(os.tmpdir(), 'kpot-prepay-pay-chrome-' + Date.now());
 
   const cleanup = async () => {
-    await teardown([chrome, server], [SCRATCH, profile]);
+    await teardown([chrome, server, server2], [SCRATCH, SCRATCH2, profile]);
   };
 
   try {
+    /* A real (fake) key is what makes "Pay Online" an available fallback —
+       without one there is nowhere to move the guest, which is the second
+       server below. */
     server = spawn(process.execPath, ['server.js'], {
       cwd: ROOT,
-      env: Object.assign({}, process.env, {
-        PORT: String(PORT),
-        ADMIN_KEY,
-        KPOT_FLUSH_MS: '500',
-        /* 24h open: the business-hours tick holds `open` on the hours clock,
-           and a guest page that will not accept orders cannot be driven
-           through a cart at all. See hoursSpec() in server.js. */
-        KPOT_HOURS_SPEC: '{"openMinute":0,"closeSunThu":1440,"closeFriSat":1440}',
-        KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
-        KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
-        KPOT_CREDITS_FILE: path.join(SCRATCH, 'credits.local.json'),
-        KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
-        KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
-        KPOT_MENU_FILE: path.join(SCRATCH, 'menu.local.json'),
-        KPOT_SECRETS_FILE: path.join(SCRATCH, 'secrets.local.json'),
-        KPOT_DISCOUNTS_FILE: path.join(SCRATCH, 'discounts.local.json'),
-        KPOT_APPLE_PAY_FILE: path.join(SCRATCH, 'apple-domain-association'),
-        KPOT_GIVEAWAY_OUTBOX: path.join(SCRATCH, 'giveaway-mail-outbox.jsonl'),
-        ORDERS_BACKUP_DIR: path.join(SCRATCH, 'order-backups'),
-        /* A real (fake) key is what makes "Pay Online" an available fallback —
-           without one the pickup rule switches itself off, exactly as on the
-           server, and this probe would be measuring nothing. */
-        STRIPE_SECRET_KEY: 'sk_test_pickup_pay_not_a_real_key'
-      }),
+      env: serverEnv(SCRATCH, PORT, { STRIPE_SECRET_KEY: 'sk_test_prepay_pay_not_a_real_key' }),
       stdio: ['ignore', 'pipe', 'pipe']
     });
     server.stdout.on('data', (d) => { serverLog += d.toString(); });
     server.stderr.on('data', (d) => { serverLog += d.toString(); });
 
-    let health = null;
-    for (let i = 0; i < 80; i++) {
-      try {
-        const r = await fetch(BASE + '/api/health');
-        if (r.ok) { const j = await r.json(); if (j && j.ok) { health = j; break; } }
-      } catch (e) {}
-      await sleep(250);
-    }
-    if (!health) throw new Error('server never became healthy');
+    if (!await waitHealthy(BASE)) throw new Error('server never became healthy');
     console.log('server up on ' + BASE + '\n');
 
     chrome = spawn(CHROME, [
@@ -270,19 +287,19 @@ async function main() {
     await cdp.send('Page.enable');
 
     /* ================================================================== */
-    section('a $20.12 pickup order — pay online, before the kitchen');
-    await openPickupCart(cdp, [BOWL, FRIES]);
+    section('a $16.95 pickup order — pay online, before the kitchen');
+    await openPickupCart(cdp, BASE, [BOWL]);
 
-    /* The cart is really over the threshold — asserted from the BILL, so a
-       seeded-cart mistake cannot masquerade as the rule working. */
+    /* Asserted from the BILL, so a seeded-cart mistake cannot masquerade as
+       the rule working. */
     const cartTotal = await cdp.evalJs(TOTAL_ROW('#cartTotals'));
-    check('the cart totals $20.12 — over the $20 threshold, under the $30 ceiling',
-      !!cartTotal && /20\.12/.test(cartTotal), 'cartTotal=' + cartTotal);
+    check('the cart totals $16.95 — under the retired $20 threshold, under the $30 ceiling',
+      !!cartTotal && /16\.95/.test(cartTotal), 'cartTotal=' + cartTotal);
 
     await clickToCheckout(cdp);
 
     const coTotal = await cdp.evalJs(TOTAL_ROW('#checkoutTotals'));
-    check('and the checkout shows the same total', !!coTotal && /20\.12/.test(coTotal), 'checkoutTotal=' + coTotal);
+    check('and the checkout shows the same total', !!coTotal && /16\.95/.test(coTotal), 'checkoutTotal=' + coTotal);
 
     const cards = await cdp.evalJs(PAY_CARDS);
     const counter = (cards || []).find((c) => c.pay === 'counter') || null;
@@ -295,8 +312,8 @@ async function main() {
       'disabled=' + (counter && counter.disabled));
     check('and marked aria-disabled for screen readers',
       !!counter && counter.ariaDisabled === 'true', 'aria-disabled=' + (counter && counter.ariaDisabled));
-    check('the reason names the PICKUP rule and the $20 threshold',
-      !!counter && /pickup orders over \$20\.00 must be paid online/i.test(counter.sub || ''),
+    check('the reason names the PICKUP channel (no threshold in it any more)',
+      !!counter && /^pickup orders must be paid online$/i.test(counter.sub || ''),
       'sub=' + JSON.stringify(counter && counter.sub));
     check('the guest is NOT left selected on the refused option',
       chosen.length > 0 && chosen.indexOf('counter') === -1,
@@ -308,10 +325,10 @@ async function main() {
       /card, apple pay and google pay/i.test(hint), 'hint=' + JSON.stringify(hint));
 
     /* ================================================================== */
-    section('the same $20.12 cart on DINE-IN — the control');
-    /* The rule is pickup-scoped: a guest sitting at a table in the building
-       is the case the $30 ceiling exists for, and $20.12 is under it. The
-       channel card is clicked while the checkout sheet is open — the
+    section('the same $16.95 cart on DINE-IN — the control');
+    /* A guest sitting at a table in the building may run a tab; that is the
+       only channel the counter is for now, and $16.95 is under the ceiling.
+       The channel card is clicked while the checkout sheet is open — the
        delegated handler re-runs openCheckout(), which re-evaluates the
        block. */
     await cdp.evalJs(`document.querySelector('#otGrid .ot-card[data-ot="dinein"]').click()`);
@@ -321,12 +338,12 @@ async function main() {
 
     const dCards = await cdp.evalJs(PAY_CARDS);
     const dCounter = (dCards || []).find((c) => c.pay === 'counter') || null;
-    check('pay-at-counter is ENABLED on the dine-in order (the rule is pickup-scoped)',
+    check('pay-at-counter is ENABLED on the dine-in order',
       !!dCounter && dCounter.disabled !== true, JSON.stringify(dCounter));
     check('and it carries its normal blurb, not a refusal',
       !!dCounter && !/must be paid online/i.test(dCounter.sub || ''),
       'sub=' + JSON.stringify(dCounter && dCounter.sub));
-    check('the blurb is the ordinary counter one',
+    check('the blurb is the ordinary dine-in counter one',
       !!dCounter && /cash or card/i.test(dCounter.sub || ''),
       'sub=' + JSON.stringify(dCounter && dCounter.sub));
     /* A disabled card must not become selectable just because some browser
@@ -335,6 +352,9 @@ async function main() {
     const dChosen = await cdp.evalJs(
       `(() => { const c = document.querySelector('[data-pay="counter"]'); return !!(c && c.classList.contains('on')); })()`);
     check('and the guest can actually pick it', dChosen === true, 'on=' + dChosen);
+    const dHint = await cdp.evalJs(PAY_HINT);
+    check('the hint is the dine-in one ("pay at your table")',
+      /pay at your table/i.test(dHint), 'hint=' + JSON.stringify(dHint));
 
     /* ================================================================== */
     section('back to PICKUP — the block returns');
@@ -351,36 +371,51 @@ async function main() {
     check('and MOVES the guest off it, instead of leaving a refused option selected',
       pChosen.length > 0 && pChosen.indexOf('counter') === -1, 'selected=' + JSON.stringify(pChosen));
     check('with the pickup reason, not the ceiling one',
-      !!pCounter && /pickup orders over \$20\.00/i.test(pCounter.sub || ''),
+      !!pCounter && /^pickup orders must be paid online$/i.test(pCounter.sub || ''),
       'sub=' + JSON.stringify(pCounter && pCounter.sub));
 
     /* ================================================================== */
-    section('a $16.95 pickup order — the small-cart control');
-    /* The threshold is the whole point: a small counter order must still go
-       straight to the kitchen. A bug that disabled the counter card on every
-       pickup order would pass every check above. */
-    await openPickupCart(cdp, [BOWL]);
+    section('a shop with NO online method — the honest dead end');
+    /* Nothing to fall back to, so the page must not pretend: the counter card
+       is still refused, the hint names the shop's phone number, and Place
+       Order refuses out loud instead of silently doing nothing. */
+    server2 = spawn(process.execPath, ['server.js'], {
+      cwd: ROOT,
+      env: serverEnv(SCRATCH2, PORT2, { STRIPE_SECRET_KEY: '' }),
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    server2.stdout.on('data', () => {});
+    server2.stderr.on('data', () => {});
+    if (!await waitHealthy(BASE2)) throw new Error('second server never became healthy');
 
-    const sTotal = await cdp.evalJs(TOTAL_ROW('#cartTotals'));
-    check('the control cart totals $16.95 — under the threshold',
-      !!sTotal && /16\.95/.test(sTotal), 'cartTotal=' + sTotal);
-
+    await openPickupCart(cdp, BASE2, [BOWL]);
     await clickToCheckout(cdp);
 
-    const sCards = await cdp.evalJs(PAY_CARDS);
-    const sCounter = (sCards || []).find((c) => c.pay === 'counter') || null;
-    check('pay-at-counter is ENABLED on the small pickup order',
-      !!sCounter && sCounter.disabled !== true, JSON.stringify(sCounter));
-    check('and it carries its normal blurb',
-      !!sCounter && !/must be paid online/i.test(sCounter.sub || ''),
-      'sub=' + JSON.stringify(sCounter && sCounter.sub));
-    await cdp.evalJs(`document.querySelector('[data-pay="counter"]').click()`);
-    const sChosen = await cdp.evalJs(
-      `(() => { const c = document.querySelector('[data-pay="counter"]'); return !!(c && c.classList.contains('on')); })()`);
-    check('and the guest can pick it', sChosen === true, 'on=' + sChosen);
-    const sHint = await cdp.evalJs(PAY_HINT);
-    check('the hint is the ordinary counter one ("pay when you pick up")',
-      /pay when you pick up/i.test(sHint), 'hint=' + JSON.stringify(sHint));
+    const nCards = await cdp.evalJs(PAY_CARDS);
+    const nCounter = (nCards || []).find((c) => c.pay === 'counter') || null;
+    check('with no card processing the counter is the only card, and it is disabled',
+      !!nCounter && nCounter.disabled === true && !(nCards || []).some((c) => c.pay === 'stripe'),
+      JSON.stringify(nCards));
+    const nHint = await cdp.evalJs(PAY_HINT);
+    check('the hint says no online payment is set up and names the shop phone',
+      /no online payment is set up/i.test(nHint) && /\(678\) 335-5388/.test(nHint),
+      'hint=' + JSON.stringify(nHint));
+
+    /* Fill the form and try to place it: the guard must refuse with a message,
+       not submit an order the server would reject anyway. */
+    await cdp.evalJs(`(() => {
+      const set = (id, v) => { const el = document.querySelector(id); if (el) el.value = v; };
+      set('#cName', 'Probe Guest'); set('#cPhone', '4045550199'); set('#cEmail', 'probe@example.com');
+    })()`);
+    await cdp.evalJs(`document.querySelector('#placeOrder').click()`);
+    const toastText = await cdp.waitFor(
+      `(() => { const t = Array.from(document.querySelectorAll('#toasts .toast')).map((x) => (x.textContent || '')).join(' | '); return /must be paid online/i.test(t) ? t : null; })()`,
+      8000, 'the refusal toast');
+
+    check('Place Order refuses with a message instead of submitting',
+      /must be paid online/i.test(toastText) && /call/i.test(toastText), 'toast=' + JSON.stringify(toastText));
+    check('…and the guest is still on the checkout sheet, cart intact',
+      await cdp.evalJs(`!!document.querySelector('#sheetBody [data-pay]')`));
 
     /* ================================================================== */
     section('the page must have thrown nothing');

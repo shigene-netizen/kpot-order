@@ -1759,12 +1759,17 @@ loadStoreStatus();
      * dine-in  — yes, on arrival. The guest is at the table, in the building,
        with staff walking past. A no-show would have to leave the restaurant.
        Payment state is irrelevant to this one, which also keeps it safe.
-     * pickup / delivery — only once the money is confirmed (`paymentStatus:
-       verified`). A card order is written to the board BEFORE the guest pays,
-       so auto-cooking on arrival would cook food for money that may never
-       arrive — the same risk the pay-at-counter ceiling guards against. The
-       confirm can come from the guest's phone returning from Stripe or from
-       staff tapping Re-check; both go through settleBoardFromStripe.
+     * pickup / delivery — only once the money is confirmed (`isPaidStatus`:
+       'verified' from Stripe's own answer, or 'paid' from staff tapping
+       💵 Collected). A card order is written to the board BEFORE the guest
+       pays, so auto-cooking on arrival would cook food for money that may
+       never arrive — the same risk the pay-at-counter ceiling guards
+       against. The confirm can come from the guest's phone returning from
+       Stripe, from staff tapping Re-check, or from staff recording cash; all
+       three end in a payment status the board trusts.
+
+       (The kitchen hold in handleUpdateOrder is the same rule for the human
+       path. Both use isPaidStatus so the two can never drift apart.)
 
    Two deliberate refusals:
      * the switch itself defaults to OFF and can only be turned on by an admin
@@ -1790,7 +1795,7 @@ function shouldAutoPrepare(order, opts) {
      trusted; settleBoardFromStripe (Stripe's own answer) and the admin PATCH
      are. */
   if (!opts || opts.trustPayment !== true) return false;
-  return order.paymentStatus === 'verified';
+  return L.isPaidStatus(order.paymentStatus);
 }
 
 /* Move an order to the kitchen if the rules above allow it. Only ever acts on
@@ -1975,98 +1980,89 @@ function counterCapVerdict(total, payMethod, cfg, onlineAvailable) {
   return { blocked: true, code: 'counter_over_cap', cap: cap };
 }
 
-/* ---- Pay at the counter is NOT offered on delivery ----------------------
-   A delivery leaves the building. There is no counter for the guest to walk
-   up to when the food arrives, and nothing to collect afterwards, so a
-   counter-paid delivery is not a risky order — it is an impossible one.
+/* ---- Pay at the counter is DINE-IN ONLY --------------------------------
+   Owner's decision (2026-10-22, final): every PICKUP and every DELIVERY order
+   must be paid before the kitchen sees it, so pay-at-counter is not offered
+   on either channel — at any total.
 
-   That is what makes this rule different from the ceiling above: it is
-   UNCONDITIONAL. It does not need an online fallback to be legitimate,
-   because there is no version of a counter-paid delivery that works. If
-   delivery is sold with no online method configured, delivery orders simply
-   cannot be placed until one is — the honest outcome, and better than the
-   alternative the ceiling guards against (blocking orders the store could
-   actually have taken).
+   Why this one is UNCONDITIONAL, when the ceiling above is not:
 
-   `delivery.allowCounter` is the escape hatch for an owner who really does
-   collect on the doorstep. It defaults off; only an explicit `true` — the
-   same value the guest page checks — turns the rule off.
+     * A delivery leaves the building. There is no counter to walk up to when
+       the food arrives and nothing to collect afterwards, so a counter-paid
+       delivery is not a risky order — it is an impossible one.
+
+     * A pickup guest is not in the building either. There is no table to walk
+       past and nobody to collect from when the food is ready, so an unpaid
+       pickup order is food cooked for someone who may never arrive. The rule
+       started as a $20 threshold the same day; the owner then dropped the
+       threshold — the risk is not worth pricing, and a guest can always
+       cancel after the food is made.
+
+   So: no online-fallback carve-out, and deliberately NO config switch. The
+   ceiling fails open without an online method because it would otherwise
+   block orders the shop could actually have taken; there is no version of a
+   counter-paid pickup or delivery that works at all. If the shop has no
+   online method configured, pickup and delivery simply cannot be ordered
+   until it has one — the honest outcome, and the guest page says so instead
+   of dead-ending. A switch to turn THIS off is the switch somebody flips at
+   9pm when the card terminal is down, which is exactly the moment the rule
+   exists for; the owner's decision lives in code.
 
    Pure, like counterCapVerdict, so _dev/test_counter_cap.js can lift the real
    rule out of this file instead of re-implementing it. */
-function counterDeliveryVerdict(payMethod, orderType, cfg) {
+function counterChannelVerdict(payMethod, orderType) {
   if (payMethod !== 'counter') return { blocked: false };
-  if (orderType !== 'delivery') return { blocked: false };
-  const d = (cfg && cfg.delivery) || {};
-  if (d.allowCounter === true) return { blocked: false };
-  return { blocked: true, code: 'counter_not_allowed_delivery' };
+  if (orderType === 'dinein') return { blocked: false };   // the only channel that may run a tab
+  /* Anything else — pickup, delivery, or a type we do not recognise — is
+     refused. Failing closed on the unknown matters because this function is
+     the payment arm: an orderType typo must not become a way to pay cash for
+     a delivery. (handleCreateOrder coerces an unknown type to pickup before
+     this point, so the label below is the honest one either way.) */
+  return {
+    blocked: true,
+    code: 'counter_not_allowed',
+    channel: orderType === 'delivery' ? 'delivery' : 'pickup'
+  };
 }
 
-/* ---- Pickup prepayment — pay before the kitchen --------------------------
-   The owner's rule (2026-10-22): a PICKUP order above a set total must be
-   PAID before it is sent to the kitchen. A pickup guest is not in the
-   building — there is no table to walk past and no server to collect from
-   when the food is ready — so an unpaid pickup order is food cooked for
-   someone who may never arrive, and the loss scales with the ticket. The
-   pay-at-counter ceiling above still guards every other order type; this
-   tightens pickup further.
+/* ---- The kitchen arm: no unpaid order starts cooking --------------------
+   The payment arm above stops a guest CHOOSING pay-at-counter on pickup or
+   delivery. This one holds the food itself, because the board is where an
+   unpaid order would otherwise quietly become cooked food — and because the
+   payment arm alone would be enough only if every unpaid order had been
+   created under it (a legacy order, a staff-typed one, or a PATCH that sets
+   the payment back to 'counter' all get past it). Same owner decision: an
+   order whose payment is not confirmed may not enter 'preparing' — not by
+   the kitchen automation, and not by a staff tap.
 
-   Two arms, one threshold, deliberately different shapes:
+   Dine-in is exempt: the guest is at the table, in the building, with staff
+   walking past, and the tab is settled at the end by design.
 
-     * THE PAYMENT ARM (pickupPrepayVerdict, here): pay-at-counter is not
-       offered on a pickup order above the threshold — the guest pays online
-       at checkout, exactly like a delivery. Like the ceiling it fails OPEN
-       when no online method is configured: a shop with no card processing
-       must still be able to take a large pickup order. (The kitchen arm
-       below still holds the food until staff confirm the cash, so the
-       no-show risk does not come back with the carve-out.)
+   "Confirmed" is `isPaidStatus` — 'verified' (Stripe's own answer, or the
+   server's own $0 arithmetic for an order a store credit covered in full) or
+   'paid' (staff tapped 💵 Collected). Everything else — 'counter',
+   'pending', 'unverified', 'unpaid', or a status we do not recognise —
+   counts as unpaid. Fail closed, the same direction as every other money
+   door here.
 
-     * THE KITCHEN ARM (pickupKitchenHold, below): whatever the pay method,
-       an unpaid pickup order above the threshold cannot reach 'preparing' —
-       not by the kitchen automation, and not by a staff tap. Unlike the
-       payment arm this one is UNCONDITIONAL: it never stops an order from
-       EXISTING, it only holds the cooking, so there is no outage to guard
-       against and nothing to fall back to.
-
-   Measured on the priced TOTAL — the number on the bill, tip included —
-   the same basis as the pay-at-counter ceiling, so a refusal quotes a
-   figure the guest can see and reconcile.
-
-   Both pure, like their neighbours, so _dev/test_pickup_prepay.js can lift
-   the real rules out of this file instead of re-implementing them. */
-function pickupPrepayOver(cfg) {
-  const p = (cfg && cfg.pickup) || {};
-  const n = Number(p.prepayOver);
-  return isFinite(n) && n > 0 ? n : 0;
-}
-
-function pickupPrepayVerdict(total, payMethod, orderType, cfg, onlineAvailable) {
-  if (payMethod !== 'counter') return { blocked: false };
-  if (orderType !== 'pickup') return { blocked: false };
-  const over = pickupPrepayOver(cfg);
-  if (!over) return { blocked: false };               // no threshold configured
-  if (!onlineAvailable) return { blocked: false };    // nothing to fall back to
-  if (!isFinite(total) || total <= over) return { blocked: false };
-  return { blocked: true, code: 'pickup_prepay_required', over: over };
-}
-
-/* The kitchen arm: is this order held out of the kitchen until its money is
-   confirmed? Pickup only, above the threshold, and NOT yet paid.
-
-   'verified' and 'paid' are the two ways money lands on this board — the
-   first from Stripe's own answer (or the server's own $0 arithmetic), the
-   second from staff tapping 💵 Collected. Anything else — 'counter',
-   'pending', 'unverified', or a status we do not recognise — counts as
-   unpaid. Fail closed, the same direction as every other money door here. */
-function pickupKitchenHold(order, cfg) {
-  if (!order || order.orderType !== 'pickup') return { blocked: false };
-  const over = pickupPrepayOver(cfg);
-  if (!over) return { blocked: false };
-  const total = Number(order.total);
-  if (!isFinite(total) || total <= over) return { blocked: false };
-  const ps = order.paymentStatus;
-  if (ps === 'verified' || ps === 'paid') return { blocked: false };
-  return { blocked: true, code: 'pickup_awaiting_payment', over: over, total: total };
+   Judged on the order the PATCH would CREATE (see handleUpdateOrder), and
+   only the move INTO the kitchen is refused: the order stays on the board
+   with its number, and the fix is one tap — 💵 Collected for cash, or
+   💳 Re-check for a guest who paid online and closed the tab. */
+function kitchenHold(order) {
+  if (!order) return { blocked: false };
+  const t = order.orderType;
+  if (t === 'dinein') return { blocked: false };     // the tab is the design
+  /* Not dine-in → the money must be in. Fails closed on a type we do not
+     recognise for the same reason as the payment arm above: a typo must never
+     be the thing that lets unpaid food start cooking. */
+  if (L.isPaidStatus(order.paymentStatus)) return { blocked: false };
+  return {
+    blocked: true,
+    code: 'unpaid_before_kitchen',
+    channel: t === 'delivery' ? 'delivery' : 'pickup',
+    total: Number(order.total) || 0
+  };
 }
 
 /* ---- Delivery minimum — the smallest order that earns a driver's trip ---
@@ -2081,7 +2077,7 @@ function pickupKitchenHold(order, cfg) {
    refusal never reads as a bait-and-switch.
 
    Applies to every delivery order regardless of payment method (a delivery
-   is prepaid anyway — see counterDeliveryVerdict), and unlike the counter
+   is prepaid anyway — see counterChannelVerdict), and unlike the counter
    ceiling it needs no online fallback: the floor is legitimate with or
    without card payments, because it is about the run, not the risk.
 
@@ -2301,46 +2297,42 @@ async function handleCreateOrder(req, res) {
         ' more, or choose Pickup or Dine-In.'
     });
   }
-  /* Delivery must be prepaid — see counterDeliveryVerdict(). Checked against
-     the EFFECTIVE type, so a tampered payload cannot dodge the rule by sending
-     an orderType we do not recognise (that is coerced to pickup, and pickup is
-     allowed to pay at the counter). Deliberately BEFORE the ceiling below: a
-     delivery that is also over the cap should be reported for the reason that
-     actually applies to it, not for its size. */
-  const counterVerdict = counterDeliveryVerdict(body.payMethod, effectiveType, ASSETS.CONFIG);
-  if (counterVerdict.blocked) {
-    console.warn('[kpot] refused pay-at-counter order for a delivery');
+  /* Pay at the counter is DINE-IN ONLY — see counterChannelVerdict(). Checked
+     against the EFFECTIVE type, so a tampered payload cannot dodge the rule by
+     sending an orderType we do not recognise: that is coerced to pickup, and
+     pickup is refused too. Deliberately BEFORE the ceiling below — a pickup
+     order that also happens to be over $30 should be refused for the reason
+     that actually applies to it (the counter is not on the menu at all), not
+     reported as "too big". */
+  const channelVerdict = counterChannelVerdict(body.payMethod, effectiveType);
+  if (channelVerdict.blocked) {
+    const label = channelVerdict.channel === 'delivery' ? 'Delivery' : 'Pickup';
+    /* Two honest endings, because there are two: with an online method the
+       guest can just pay; without one the shop genuinely cannot take this
+       order, and saying "choose Pay Online" would point at a button that is
+       not there. */
+    const online = onlinePaymentAvailable();
+    console.warn('[kpot] refused pay-at-counter order for a ' + channelVerdict.channel +
+      (online ? '' : ' (no online method configured)'));
     return sendJSON(res, 400, {
-      error: 'counter_not_allowed_delivery',
-      message: 'Delivery orders must be paid online. Please choose ' +
-        ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
-    });
-  }
-  /* Pickup prepayment — the owner's rule (2026-10-22). A pickup order over
-     the threshold is paid BEFORE the kitchen sees it, so pay-at-counter is
-     not on the menu for one: the guest pays online, exactly like a delivery.
-     Checked BEFORE the general ceiling below, so a big pickup order is
-     refused for the reason that actually applies to it — and quotes the
-     number the owner set for pickup, not the general $30. */
-  const pickupVerdict = pickupPrepayVerdict(priced.total, body.payMethod, effectiveType,
-    ASSETS.CONFIG, onlinePaymentAvailable());
-  if (pickupVerdict.blocked) {
-    console.warn('[kpot] refused pay-at-counter pickup order over the prepay threshold — $' +
-      priced.total.toFixed(2) + ' > $' + pickupVerdict.over.toFixed(2));
-    return sendJSON(res, 400, {
-      error: 'pickup_prepay_required',
-      over: pickupVerdict.over,
-      total: priced.total,
-      message: 'Pickup orders over $' + pickupVerdict.over.toFixed(2) +
-        ' must be paid online. Please choose ' +
-        ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
+      error: 'counter_not_allowed',
+      channel: channelVerdict.channel,
+      message: label + ' orders must be paid online.' + (online
+        ? ' Please choose ' + ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') +
+          ' to place this order.'
+        : ' No online payment is set up right now — please call ' +
+          ((ASSETS.CONFIG.store || {}).phone || 'the restaurant') + '.')
     });
   }
   /* Pay-at-counter ceiling. Checked HERE, on the server, because a greyed-out
      button in the browser is only a hint — the rule has to hold where the
      order is actually accepted. Placed after the idempotency check so a retry
      of an order we already took still resolves to that order instead of being
-     refused (e.g. the owner lowers the cap while a guest is mid-checkout). */
+     refused (e.g. the owner lowers the cap while a guest is mid-checkout).
+
+     Since the channel rule above, dine-in is the ONLY order type that can
+     still reach this line — so the ceiling is now purely a table-tab rule: a
+     very large tab is prepaid like everything else. */
   const capVerdict = counterCapVerdict(priced.total, body.payMethod, ASSETS.CONFIG, onlinePaymentAvailable());
   if (capVerdict.blocked) {
     console.warn('[kpot] refused pay-at-counter order over the cap — $' +
@@ -2689,34 +2681,39 @@ async function handleUpdateOrder(req, res, id) {
     ? body.paymentStatus
     : o.paymentStatus;
 
-  /* ---- Pickup prepayment — the kitchen arm -------------------------------
-     The owner's rule (2026-10-22): a pickup order over the threshold must be
-     PAID before it goes to the kitchen. The payment arm at order creation
-     keeps a guest from CHOOSING pay-at-counter on such an order; this one
-     holds the food itself — a tap on PREPARING cannot jump the queue either,
+  /* ---- No unpaid pickup/delivery order starts cooking -------------------
+     The owner's rule (2026-10-22, final): an order whose payment is not
+     confirmed may not enter 'preparing' — neither by the kitchen automation
+     nor by a staff tap. Dine-in is exempt (the tab is the design).
+
+     The payment arm at order creation keeps a guest from CHOOSING
+     pay-at-counter on these channels; this one holds the food itself,
      because the board is where an unpaid order would otherwise quietly
-     become cooked food.
+     become cooked food. It also catches the orders the payment arm cannot:
+     one placed before this rule existed, one a staff member typed, or a
+     PATCH that sets the payment BACK to 'counter' on an order already in
+     the kitchen.
 
      Only the move INTO the kitchen is refused (or a re-save that keeps an
      unpaid order sitting in it). The order stays on the board with its
      number, and the fix is one tap: 💵 Collected for cash, or 💳 Re-check for
      a guest who paid online and closed the tab — either sets the payment
-     status, and the automation that fires for Stripe takes it from there.
-     Every other PATCH (a discount, a note, a move to ready/completed) is
-     untouched: the hold is about cooking, not editing. */
+     status, and the automation that fires for a confirmed payment takes it
+     from there. Every other PATCH (a discount, a note, a move to
+     ready/completed) is untouched: the hold is about cooking, not editing. */
   if (nextStatus === 'preparing') {
-    const hold = pickupKitchenHold(
-      { orderType: o.orderType, total: o.total, paymentStatus: nextPayment }, ASSETS.CONFIG);
+    const hold = kitchenHold(
+      { orderType: o.orderType, total: o.total, paymentStatus: nextPayment });
     if (hold.blocked) {
-      console.warn('[kpot] held pickup order ' + id + ' out of the kitchen — $' +
-        hold.total.toFixed(2) + ' not confirmed (over $' + hold.over.toFixed(2) + ')');
+      const label = hold.channel === 'delivery' ? 'Delivery' : 'Pickup';
+      console.warn('[kpot] held ' + hold.channel + ' order ' + id + ' out of the kitchen — payment ' +
+        (nextPayment || '(none)') + ', $' + hold.total.toFixed(2) + ' not confirmed');
       return sendJSON(res, 409, {
-        error: 'pickup_awaiting_payment',
-        over: hold.over,
+        error: 'unpaid_before_kitchen',
+        channel: hold.channel,
         total: hold.total,
-        message: 'Pickup orders over $' + hold.over.toFixed(2) +
-          ' must be paid before they go to the kitchen. Confirm the payment first ' +
-          '(Re-check, or mark it Collected).'
+        message: label + ' orders must be paid before they go to the kitchen. Confirm the ' +
+          'payment first (Re-check, or mark it Collected).'
       });
     }
   }

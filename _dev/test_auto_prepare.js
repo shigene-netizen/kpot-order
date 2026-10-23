@@ -447,11 +447,27 @@ async function main() {
     check('and no ticket was printed for it', readJobs().filter((j) => j.orderId === dl1).length === 0);
 
     /* Staff tapped first: the human wins, and no second ticket appears when
-       the payment afterwards confirms. */
+       the payment afterwards confirms.
+
+       Since 2026-10-22 (owner's final decision) a pickup/delivery order with
+       unconfirmed money may not enter 'preparing' at all — so the tap that
+       starts the cooking carries the cash with it, exactly as the board's
+       💵 Collected + Preparing do. The unpaid tap is checked first, because
+       "it was refused" is the half that must not silently rot. */
     const p4 = 'KP-AO-PICK-TAPPED-' + TOKEN;
     await jpost(BASE, '/api/orders', mkOrder(p4));
-    const tap = await jpatch(BASE, '/api/orders/' + encodeURIComponent(p4), { status: 'preparing' }, admin);
-    check('staff can still tap PREPARING by hand', tap.status === 200 && tap.j && tap.j.status === 'preparing');
+    const tapUnpaid = await jpatch(BASE, '/api/orders/' + encodeURIComponent(p4), { status: 'preparing' }, admin);
+    check('an UNPAID pickup order cannot be tapped into the kitchen',
+      tapUnpaid.status === 409 && tapUnpaid.j && tapUnpaid.j.error === 'unpaid_before_kitchen',
+      'status=' + tapUnpaid.status + ' ' + JSON.stringify(tapUnpaid.j));
+    check('…and the refusal left the order exactly where it was (no dirty status)',
+      (await orderAt(BASE, p4) || {}).status === 'received',
+      (await orderAt(BASE, p4) || {}).status);
+    const tap = await jpatch(BASE, '/api/orders/' + encodeURIComponent(p4),
+      { status: 'preparing', paymentStatus: 'paid' }, admin);
+    check('staff can still start it by hand once the cash is in',
+      tap.status === 200 && tap.j && tap.j.status === 'preparing',
+      'status=' + tap.status + ' ' + JSON.stringify(tap.j));
     await jobsWait(p4, 1);
     sessions.push(stubSession('cs_test_aotapped' + TOKEN, p4, 'paid'));
     await jget(BASE, '/api/verify-session?id=cs_test_aotapped' + TOKEN);

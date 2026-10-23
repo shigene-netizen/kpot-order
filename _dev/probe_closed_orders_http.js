@@ -117,8 +117,10 @@ function orderFor(no, total, extra) {
   return Object.assign({
     no: no,
     token: 'closed-' + no,
-    orderType: 'pickup',
-    table: '',
+    /* DINE-IN: since 2026-10-22 pay-at-counter is refused on pickup and
+       delivery, and these suites are about money/printing, not channels. */
+    orderType: 'dinein',
+    table: '5',
     customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
     items: [HOTPOT],
     subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,

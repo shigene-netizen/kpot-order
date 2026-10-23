@@ -179,9 +179,10 @@
       Skip the <b>PREPARING</b> tap. <b>Dine-in</b> orders start cooking the moment
       they arrive — the guest is at the table. <b>Pickup</b> and <b>delivery</b>
       start the moment their payment is confirmed: when the guest's phone comes
-      back from Stripe, or when you tap <b>💳 Re-check payment</b>. Anything still
-      unpaid waits for you as usual. Your choice is saved and survives a
-      re-publish.
+      back from Stripe, when you tap <b>💳 Re-check payment</b>, or when you
+      record cash with <b>💵 Collected</b>. Anything still unpaid waits for you
+      — and cannot be started by hand either (the server refuses PREPARING until
+      the money is in). Your choice is saved and survives a re-publish.
     </div>
     <div class="store-controls">
       <div class="toggle"><b>🚀 Auto-start cooking</b><button class="sw" id="swAuto" data-k="autoPrepare"></button></div>
@@ -523,6 +524,32 @@ function needsCollect(o) {
   return ps !== 'verified' && ps !== 'paid';
 }
 
+/* Is this order held out of the kitchen until its money is confirmed?
+
+   Owner's rule (2026-10-22, final): a pickup or delivery order whose payment
+   is not confirmed may not enter PREPARING — not by the automation, and not
+   by a staff tap. Mirrors kitchenHold() in server.js, which is the copy that
+   actually enforces it (a 409 on the PATCH). This one is here so the board
+   does not offer a button that is guaranteed to fail: the PREPARING tap is
+   greyed out and the reason is on the card, where the person who can take
+   the money is already looking.
+
+   Dine-in is exempt — the tab is the design. */
+function kitchenHeld(o) {
+  if (o.orderType !== 'pickup' && o.orderType !== 'delivery') return false;
+  if (o.status === 'cancelled') return false;
+  return needsCollect(o);
+}
+
+/* The board's own words for the hold above: this order is still waiting on
+   money, so PREPARING is not available yet. Only shown while the order is
+   still 'received' — that is the only moment the gate can bite. */
+function holdBadge(o) {
+  if (!kitchenHeld(o)) return '';
+  if ((o.status || 'received') !== 'received') return '';
+  return '<span class="pill warnpay" title="Pickup and delivery orders must be paid before they go to the kitchen — Collected, or Re-check">⏳ PAY FIRST</span>';
+}
+
 function orderCard(o) {
   /* Line prices come from the SERVER's recomputation (o.lines), never from the
      browser's own numbers — the client payload is untrusted and could claim any
@@ -544,11 +571,18 @@ function orderCard(o) {
       (l.desc ? ' (' + esc(l.desc) + ')' : '') + '</span><span>' + amount + '</span></div>';
   }).join('');
   const cur = o.status || 'received';
+  const held = kitchenHeld(o);
   const actions = ['preparing','ready','completed','cancelled'].map(a => {
     const isCur = a === cur;
     const label = a === 'completed' ? 'Complete' : a === 'cancelled' ? 'Cancel' : (a.charAt(0).toUpperCase()+a.slice(1));
     const cls = (a==='ready' ? 'primary' : a==='cancelled' ? 'ghost' : '') + (isCur ? ' done' : '');
-    return '<button class="' + cls + '" data-act="'+a+'" data-id="'+esc(o.id)+'" '+(isCur?'disabled':'')+'>' + label + '</button>';
+    /* PREPARING is the one action the server will refuse on an unpaid
+       pickup/delivery order — disable it and say why on the title, rather than
+       letting staff tap it and read a toast. */
+    const heldHere = held && a === 'preparing';
+    const title = heldHere ? ' title="Take the payment first — Collected, or Re-check"' : '';
+    return '<button class="' + cls + '" data-act="'+a+'" data-id="'+esc(o.id)+'" '+
+      ((isCur || heldHere) ? 'disabled' : '') + title + '>' + label + '</button>';
   }).join('');
   const cust = (o.customer||{});
   const when = o.orderType === 'dinein' ? ('Table ' + esc(o.table||'?')) : (esc(cust.when||'ASAP'));
@@ -588,6 +622,7 @@ function orderCard(o) {
   return '<div class="order" data-id="'+esc(o.id)+'">' +
     '<div class="o-head">' + statusBadge(cur) +
       payBadge(o) +
+      holdBadge(o) +
       printBadge(o) +
       '<span class="o-no">#' + esc(o.id) + '</span>' +
       '<span class="o-time">' + new Date(o.at).toLocaleString() + '</span>' +

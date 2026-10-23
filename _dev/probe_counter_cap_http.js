@@ -9,12 +9,12 @@
  *
  * It boots the real server on a scratch port, posts real orders, and checks
  * the HTTP status + error code. The rules covered:
- *   - the $30 ceiling (counter_over_cap) — now dine-in's rule, since pickup
- *     has its own stricter one
- *   - the delivery ban (counter_not_allowed_delivery)
- *   - and the pickup interaction: a big pickup order is refused by the
- *     PICKUP rule (pickup_prepay_required), which sits in front of the
- *     ceiling, so the reason quoted is the one that actually applies
+ *   - the $30 ceiling (counter_over_cap) — now purely a TABLE-TAB rule, since
+ *     the counter is dine-in only
+ *   - the channel ban on delivery (counter_not_allowed)
+ *   - and the interaction that makes the ceiling a table rule: the same big
+ *     cart on PICKUP is refused by the channel rule, which sits in front of
+ *     the ceiling, so the reason quoted is the one that actually applies
  *
  * It runs against SCRATCH files, not the shop's own orders.local.json. The
  * comment here used to claim "orders.local.json is backed up by the caller and
@@ -46,8 +46,8 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 /* One 'Hot Pot To Go' bowl is $15.99 (builder base price). `orderType` is a
    parameter because the ceiling's remaining job is DINE-IN: since 2026-10-22
-   a pickup order over $20 is refused earlier, by the stricter pickup prepay
-   rule (pickup_prepay_required) — so a pickup cart over $30 would be
+   (owner's final decision) pay-at-counter is refused on pickup and delivery
+   outright (counter_not_allowed) — so a pickup cart over $30 would be
    measuring the wrong rule. The pickup interaction is pinned below instead. */
 function orderFor(qty, payMethod, token, orderType) {
   const unit = 15.99;
@@ -197,8 +197,9 @@ async function probeDeliveryBan() {
   }, money);
 
   const bad = await post(dlOrder('counter', 'dlcounter'));
-  check('delivery + pay-at-counter → REFUSED with counter_not_allowed_delivery',
-    bad.status === 400 && bad.j && bad.j.error === 'counter_not_allowed_delivery',
+  check('delivery + pay-at-counter → REFUSED with counter_not_allowed',
+    bad.status === 400 && bad.j && bad.j.error === 'counter_not_allowed' &&
+      bad.j.channel === 'delivery',
     'status=' + bad.status + ' body=' + JSON.stringify(bad.j));
   check('the refusal tells the guest to pay online',
     !!(bad.j && /paid online/i.test(bad.j.message || '')),
@@ -216,26 +217,26 @@ async function probeDeliveryBan() {
 waitForHealth(60)
   .then(() => {
     console.log('server up on ' + BASE + '\n');
-    /* Small counter order — under both ceilings, must be accepted. Pickup on
-       purpose: it also proves the pickup prepay rule lets a small one pay at
-       the counter. */
+    /* A SMALL pickup counter order — $16.95, under every ceiling the shop has
+       ever had — must still be refused, because the rule is about the
+       CHANNEL now, not the size. This is the check that would have passed
+       under the retired $20 threshold. */
     return post(orderFor(1, 'counter', 'small', 'pickup')).then((r) => {
-      check('counter $16.95 (under the ceilings) → accepted',
-        r.status === 200 && r.j && r.j.ok === true,
+      check('counter $16.95 pickup → REFUSED with counter_not_allowed (size is irrelevant)',
+        r.status === 400 && r.j && r.j.error === 'counter_not_allowed' &&
+          r.j.channel === 'pickup',
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
-      /* The pickup interaction: over $20 the stricter pickup rule fires
-         FIRST, so a big pickup order is refused for the pickup reason, not
-         the general ceiling. */
+      /* The interaction: the channel rule sits IN FRONT of the ceiling, so a
+         big pickup order is refused for the channel, not for its size. */
       return post(orderFor(3, 'counter', 'bigpickup', 'pickup'));
     }).then((r) => {
-      /* $50.85 — over the pickup threshold, must be REFUSED by the pickup
-         rule (not by the $30 ceiling, which sits behind it). */
-      check('counter $50.85 pickup → REFUSED with pickup_prepay_required (the stricter rule fires first)',
-        r.status === 400 && r.j && r.j.error === 'pickup_prepay_required',
+      /* $50.85 — over the ceiling too, but the channel rule answers first. */
+      check('counter $50.85 pickup → REFUSED for the CHANNEL, not the ceiling',
+        r.status === 400 && r.j && r.j.error === 'counter_not_allowed',
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
-      check('refusal names the pickup threshold and the total',
-        r.j && r.j.over === 20 && r.j.total === 50.85,
-        'over=' + (r.j && r.j.over) + ' total=' + (r.j && r.j.total));
+      check('…and the guest is never told about the $30 cap here',
+        !!(r.j && !/over \$30/i.test(r.j.message || '')),
+        'message=' + JSON.stringify(r.j && r.j.message));
       return post(orderFor(3, 'counter', 'big'));
     }).then((r) => {
       /* $50.85 on dine-in — over the $30 ceiling, must be REFUSED by it. */
@@ -248,9 +249,8 @@ waitForHealth(60)
       check('refusal tells the guest what to do',
         !!(r.j && /paid online/i.test(r.j.message || '')),
         'message=' + JSON.stringify(r.j && r.j.message));
-      /* The same size order paid online is fine — it is prepaid, so the
-         ceiling does not apply to it. Pickup: also under the pickup rule's
-         radar, because it is prepaid. */
+      /* The same size order paid online is fine — it is prepaid, so neither
+         the ceiling nor the channel rule has anything to say about it. */
       return post(orderFor(3, 'stripe', 'bigstripe', 'pickup'));
     }).then((r) => {
       check('stripe $50.85 (over cap) → accepted (prepaid, cap does not apply)',
@@ -260,7 +260,7 @@ waitForHealth(60)
          counter — the pickup rule must not touch it. */
       return post(orderFor(1, 'counter', 'dinein20'));
     }).then((r) => {
-      check('control: counter $16.95 dine-in → accepted (pickup rule is pickup-scoped)',
+      check('control: counter $16.95 dine-in → accepted (the counter is dine-in only, and this is dine-in)',
         r.status === 200 && r.j && r.j.ok === true,
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
       /* Exactly at the ceiling — must be allowed. */

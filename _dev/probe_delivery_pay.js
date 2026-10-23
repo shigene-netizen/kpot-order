@@ -359,7 +359,11 @@ async function main() {
       'selected=' + JSON.stringify(chosen));
 
     /* ================================================================== */
-    section('the same guest, on Pickup — the control');
+    section('the same guest, on Pickup — the counter is refused here too');
+    /* Since 2026-10-22 (owner's final decision) pickup is prepaid as well, so
+       this is no longer "the control that proves the ban is delivery-only" —
+       it is the second channel of the same rule, and the reason must name
+       PICKUP so a guest on the wrong channel is not told about delivery. */
     await openCart(cdp, BASE + '/?type=pickup');
 
     const pickedP = await cdp.evalJs('(() => { const b = document.querySelector("#otGrid .ot-card.on"); return b ? b.dataset.ot : null; })()');
@@ -377,9 +381,9 @@ async function main() {
       return r ? (r.querySelector('b') || {}).textContent : null;
     })()`);
     /* The counter ceiling is $30, so a single side must be well under it —
-       otherwise the control below would be measuring the ceiling, not the
-       delivery rule, and would fail for the wrong reason. */
-    check('the control cart is under the $30 counter ceiling', !!sub, 'subtotal=' + sub);
+       otherwise the checks below would be measuring the ceiling, not the
+       channel rule, and would fail for the wrong reason. */
+    check('the pickup cart is under the $30 counter ceiling', !!sub, 'subtotal=' + sub);
 
     const pRow = await cdp.evalJs(deliveryRow('#checkoutTotals'));
     check('no Delivery line in the checkout on a pickup order',
@@ -387,10 +391,13 @@ async function main() {
 
     const pCards = await cdp.evalJs(PAY_CARDS);
     const pCounter = (pCards || []).find((c) => c.pay === 'counter') || null;
-    check('pay-at-counter is ENABLED on a pickup order (the rule is delivery-scoped)',
-      !!pCounter && pCounter.disabled !== true, JSON.stringify(pCounter));
-    check('and it carries its normal blurb, not a refusal',
-      !!pCounter && !/must be paid online/i.test(pCounter.sub || ''),
+    const pChosen = (pCards || []).filter((c) => c.on).map((c) => c.pay);
+    check('pay-at-counter is DISABLED on a pickup order too (pickup is prepaid)',
+      !!pCounter && pCounter.disabled === true, JSON.stringify(pCounter));
+    check('and the guest is moved off it', pChosen.indexOf('counter') === -1,
+      'selected=' + JSON.stringify(pChosen));
+    check('with the PICKUP reason, not the delivery one',
+      !!pCounter && /pickup/i.test(pCounter.sub || '') && !/delivery/i.test(pCounter.sub || ''),
       'sub=' + JSON.stringify(pCounter && pCounter.sub));
 
     /* ================================================================== */
@@ -398,14 +405,19 @@ async function main() {
     /* This is the case the auto-switch exists for, and the one the section
        above cannot see: there the guest never picked a method, so the DEFAULT
        (online) was already selected and a missing fallback would go unnoticed.
-       Here the guest has explicitly chosen the counter, so payChosen is true
-       and nothing else would move them off it. The channel card is clicked
-       while the checkout sheet is open — the delegated handler re-runs
-       openCheckout(), which is where the fallback lives. */
+       Dine-in is now the only channel where the counter can be chosen at all,
+       so the choice is made there and then the guest switches to Delivery.
+       The channel card is clicked while the checkout sheet is open — the
+       delegated handler re-runs openCheckout(), which is where the fallback
+       lives. */
+    await cdp.evalJs(`document.querySelector('#otGrid .ot-card[data-ot="dinein"]').click()`);
+    await cdp.waitFor(
+      `(() => { const c = document.querySelector('[data-pay="counter"]'); return !!(c && c.disabled === false); })()`,
+      10000, 'the counter card to be enabled on Dine-In');
     await cdp.evalJs(`document.querySelector('[data-pay="counter"]').click()`);
     const choseCounter = await cdp.evalJs(
       `(() => { const c = document.querySelector('[data-pay="counter"]'); return !!(c && c.classList.contains('on')); })()`);
-    check('the guest can pick pay-at-counter while on Pickup', choseCounter === true, 'on=' + choseCounter);
+    check('the guest can pick pay-at-counter while on Dine-In', choseCounter === true, 'on=' + choseCounter);
 
     await cdp.evalJs(`document.querySelector('#otGrid .ot-card[data-ot="delivery"]').click()`);
     await cdp.waitFor(
