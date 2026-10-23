@@ -2276,12 +2276,35 @@
     return d.allowCounter !== true;
   }
 
+  /* ---- Pickup prepayment (guest side) ------------------------------------
+     Mirrors pickupPrepayVerdict() in server.js — the copy that actually
+     enforces it. A pickup order over the threshold is paid BEFORE the
+     kitchen sees it, so pay-at-counter is not offered on one: the guest pays
+     online at checkout, exactly like a delivery.
+
+     Switched off when there is no online method, for the same reason as the
+     ceiling — a rule with nothing to fall back to would block large pickup
+     orders outright. (The server's kitchen hold still applies either way:
+     with no card processing the order waits until staff confirm the cash.) */
+  function pickupPrepayOver() {
+    const p = CONFIG.pickup || {};
+    const n = Number(p.prepayOver);
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  function counterBlockedByPickup() {
+    if (state.orderType !== 'pickup') return false;
+    const over = pickupPrepayOver();
+    if (!over) return false;
+    if (grandTotal() <= over) return false;
+    return !!onlinePayMethod();
+  }
+
   /* The single question the checkout asks before letting the counter card be
-     picked: is pay-at-counter allowed for THIS order? Two separate reasons,
+     picked: is pay-at-counter allowed for THIS order? Three separate reasons,
      one answer — so a new reason can never be added to one place and
      forgotten in the other. */
   function counterBlocked() {
-    return counterBlockedByTotal() || counterBlockedByDelivery();
+    return counterBlockedByTotal() || counterBlockedByDelivery() || counterBlockedByPickup();
   }
 
   /* Ask the server whether online payment is actually wired up. On a plain
@@ -2376,7 +2399,9 @@
         const desc = overCap
           ? (counterBlockedByDelivery()
               ? 'Delivery orders must be paid online'
-              : 'Orders over ' + money(counterCap()) + ' must be paid online')
+              : counterBlockedByPickup()
+                ? 'Pickup orders over ' + money(pickupPrepayOver()) + ' must be paid online'
+                : 'Orders over ' + money(counterCap()) + ' must be paid online')
           : CONFIG.payment[k].d;
         return '<button class="pay-opt ' + (state.payMethod === k ? 'on' : '') + '" data-pay="' + k + '"' +
             (overCap ? ' disabled aria-disabled="true"' : '') + '>' +
@@ -2587,6 +2612,14 @@
         return onlinePayMethod()
           ? 'Delivery orders must be paid online. Choose a method above to continue.'
           : '⚠️ Delivery must be paid online, but no online payment is set up yet. Please call ' + CONFIG.store.phone + '.';
+      }
+      if (counterBlockedByPickup()) {
+        /* Same shape as the delivery note: the guest picked (or was left on)
+           the counter on a pickup order over the threshold. Blocking implies
+           an online method exists, so this always has somewhere to send
+           them. */
+        return 'Pickup orders over ' + money(pickupPrepayOver()) +
+          ' must be paid online — your order starts cooking once payment clears. Choose a method above to continue.';
       }
       return 'Your order goes straight to the kitchen. Pay when you pick up.';
     }
@@ -2896,7 +2929,8 @@
     if (order.__rejected) {
       btnRestore($('#placeOrder'));
       const rej = order.__rejected;
-      if (rej.error === 'counter_over_cap' || rej.error === 'counter_not_allowed_delivery') {
+      if (rej.error === 'counter_over_cap' || rej.error === 'counter_not_allowed_delivery' ||
+          rej.error === 'pickup_prepay_required') {
         const alt = onlinePayMethod();
         if (alt) state.payMethod = alt;
         openCheckout();

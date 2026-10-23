@@ -102,6 +102,7 @@ echo "==========================================================================
 echo
 echo "--- pure logic (no server, no network) ---"
 run test_counter_cap       _dev/test_counter_cap.js
+run test_pickup_prepay     _dev/test_pickup_prepay.js
 run test_store_gate        _dev/test_store_gate.js
 run test_hours             _dev/test_hours.js
 run test_printer           _dev/test_printer.js
@@ -141,6 +142,7 @@ run test_auto_prepare      _dev/test_auto_prepare.js
 run test_backups           _dev/test_backups.js
 run test_flush_survives_kill _dev/test_flush_survives_kill.js
 run probe_counter_cap_http _dev/probe_counter_cap_http.js
+run probe_pickup_prepay_http _dev/probe_pickup_prepay_http.js
 run probe_discount_http    _dev/probe_discount_http.js
 run probe_loyalty          _dev/probe_loyalty.js
 run probe_throttle_isolate _dev/probe_throttle_isolate.js
@@ -161,6 +163,7 @@ echo "--- real browser (headless Chrome) ---"
 run probe_guest_defaults   _dev/probe_guest_defaults.js
 run probe_guest_discount   _dev/probe_guest_discount.js
 run probe_delivery_pay     _dev/probe_delivery_pay.js
+run probe_pickup_pay_ui    _dev/probe_pickup_pay_ui.js
 run probe_delivery_geo_ui  _dev/probe_delivery_geo_ui.js
 run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js

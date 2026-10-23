@@ -8,9 +8,13 @@
  * channel switched on but the schedule checks never reached.
  *
  * It boots the real server on a scratch port, posts real orders, and checks
- * the HTTP status + error code. Both rules are covered:
- *   - the $30 ceiling (counter_over_cap)
+ * the HTTP status + error code. The rules covered:
+ *   - the $30 ceiling (counter_over_cap) — now dine-in's rule, since pickup
+ *     has its own stricter one
  *   - the delivery ban (counter_not_allowed_delivery)
+ *   - and the pickup interaction: a big pickup order is refused by the
+ *     PICKUP rule (pickup_prepay_required), which sits in front of the
+ *     ceiling, so the reason quoted is the one that actually applies
  *
  * It runs against SCRATCH files, not the shop's own orders.local.json. The
  * comment here used to claim "orders.local.json is backed up by the caller and
@@ -19,7 +23,10 @@
  * never has to touch real data. The delivery section below also switches the
  * channel on through the board's own endpoint, so KPOT_STORE_FILE and ADMIN_KEY
  * are set too — without them this probe would flip the owner's real
- * store.local.json and leave Delivery ON in the shop.
+ * store.local.json and leave Delivery ON in the shop. Every other *_FILE the
+ * server honours is pinned as well: hermeticity is per-FILE, and a probe that
+ * pins only the files it remembers is how the shop's real discount codes got
+ * clobbered once already.
  *
  * Run:  node _dev/probe_counter_cap_http.js
  */
@@ -37,8 +44,12 @@ const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-cap-http-'));
 
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
-/* One 'Hot Pot To Go' bowl is $15.99 (builder base price). */
-function orderFor(qty, payMethod, token) {
+/* One 'Hot Pot To Go' bowl is $15.99 (builder base price). `orderType` is a
+   parameter because the ceiling's remaining job is DINE-IN: since 2026-10-22
+   a pickup order over $20 is refused earlier, by the stricter pickup prepay
+   rule (pickup_prepay_required) — so a pickup cart over $30 would be
+   measuring the wrong rule. The pickup interaction is pinned below instead. */
+function orderFor(qty, payMethod, token, orderType) {
   const unit = 15.99;
   const subtotal = round2(unit * qty);
   const tax = round2(subtotal * 0.06);
@@ -46,8 +57,8 @@ function orderFor(qty, payMethod, token) {
   return {
     no: 'KP-PROBE-' + token,
     token: 'probe-' + token,
-    orderType: 'pickup',
-    table: '',
+    orderType: orderType || 'dinein',
+    table: orderType === 'dinein' ? '7' : '',
     customer: { name: 'Probe', phone: '', when: 'ASAP' },
     items: [{ kind: 'hotpot', name: 'Hot Pot To Go', qty: qty, unit: unit, mods: [], addons: [], note: '' }],
     subtotal: subtotal,
@@ -93,10 +104,16 @@ const server = spawn(process.execPath, ['server.js'], {
     PORT: String(PORT),
     KPOT_ORDERS_FILE: path.join(SCRATCH, 'orders.local.json'),
     KPOT_CUSTOMERS_FILE: path.join(SCRATCH, 'customers.local.json'),
+    KPOT_CREDITS_FILE: path.join(SCRATCH, 'credits.local.json'),
     KPOT_PRINT_FILE: path.join(SCRATCH, 'print.local.json'),
     /* The delivery section below flips the channel switch through the board's
        own endpoint — that writes this file, so it MUST be a scratch one. */
     KPOT_STORE_FILE: path.join(SCRATCH, 'store.local.json'),
+    KPOT_MENU_FILE: path.join(SCRATCH, 'menu.local.json'),
+    KPOT_SECRETS_FILE: path.join(SCRATCH, 'secrets.local.json'),
+    KPOT_DISCOUNTS_FILE: path.join(SCRATCH, 'discounts.local.json'),
+    KPOT_APPLE_PAY_FILE: path.join(SCRATCH, 'apple-domain-association'),
+    KPOT_GIVEAWAY_OUTBOX: path.join(SCRATCH, 'giveaway-mail-outbox.jsonl'),
     /* 24h open: this suite posts pay-at-counter orders, and /api/orders now
        refuses those outside opening hours. The clock must not decide these
        cases. See hoursSpec() in server.js. */
@@ -199,15 +216,30 @@ async function probeDeliveryBan() {
 waitForHealth(60)
   .then(() => {
     console.log('server up on ' + BASE + '\n');
-    /* Small counter order — under the $30 ceiling, must be accepted. */
-    return post(orderFor(1, 'counter', 'small')).then((r) => {
-      check('counter $16.95 (under cap) → accepted',
+    /* Small counter order — under both ceilings, must be accepted. Pickup on
+       purpose: it also proves the pickup prepay rule lets a small one pay at
+       the counter. */
+    return post(orderFor(1, 'counter', 'small', 'pickup')).then((r) => {
+      check('counter $16.95 (under the ceilings) → accepted',
         r.status === 200 && r.j && r.j.ok === true,
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
+      /* The pickup interaction: over $20 the stricter pickup rule fires
+         FIRST, so a big pickup order is refused for the pickup reason, not
+         the general ceiling. */
+      return post(orderFor(3, 'counter', 'bigpickup', 'pickup'));
+    }).then((r) => {
+      /* $50.85 — over the pickup threshold, must be REFUSED by the pickup
+         rule (not by the $30 ceiling, which sits behind it). */
+      check('counter $50.85 pickup → REFUSED with pickup_prepay_required (the stricter rule fires first)',
+        r.status === 400 && r.j && r.j.error === 'pickup_prepay_required',
+        'status=' + r.status + ' body=' + JSON.stringify(r.j));
+      check('refusal names the pickup threshold and the total',
+        r.j && r.j.over === 20 && r.j.total === 50.85,
+        'over=' + (r.j && r.j.over) + ' total=' + (r.j && r.j.total));
       return post(orderFor(3, 'counter', 'big'));
     }).then((r) => {
-      /* $50.85 — over the ceiling, must be REFUSED. */
-      check('counter $50.85 (over cap) → REFUSED with counter_over_cap',
+      /* $50.85 on dine-in — over the $30 ceiling, must be REFUSED by it. */
+      check('counter $50.85 dine-in (over cap) → REFUSED with counter_over_cap',
         r.status === 400 && r.j && r.j.error === 'counter_over_cap',
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
       check('refusal names the cap and the total',
@@ -217,16 +249,24 @@ waitForHealth(60)
         !!(r.j && /paid online/i.test(r.j.message || '')),
         'message=' + JSON.stringify(r.j && r.j.message));
       /* The same size order paid online is fine — it is prepaid, so the
-         ceiling does not apply to it. */
-      return post(orderFor(3, 'stripe', 'bigstripe'));
+         ceiling does not apply to it. Pickup: also under the pickup rule's
+         radar, because it is prepaid. */
+      return post(orderFor(3, 'stripe', 'bigstripe', 'pickup'));
     }).then((r) => {
       check('stripe $50.85 (over cap) → accepted (prepaid, cap does not apply)',
+        r.status === 200 && r.j && r.j.ok === true,
+        'status=' + r.status + ' body=' + JSON.stringify(r.j));
+      /* Control: a dine-in order between the two thresholds pays at the
+         counter — the pickup rule must not touch it. */
+      return post(orderFor(1, 'counter', 'dinein20'));
+    }).then((r) => {
+      check('control: counter $16.95 dine-in → accepted (pickup rule is pickup-scoped)',
         r.status === 200 && r.j && r.j.ok === true,
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
       /* Exactly at the ceiling — must be allowed. */
       return post(orderFor(2, 'counter', 'exact'));
     }).then((r) => {
-      check('counter $33.90 (over cap) → refused',
+      check('counter $33.90 dine-in (over cap) → refused',
         r.status === 400 && r.j && r.j.error === 'counter_over_cap',
         'status=' + r.status + ' body=' + JSON.stringify(r.j));
       console.log('\n--- pay at the counter on DELIVERY ---');

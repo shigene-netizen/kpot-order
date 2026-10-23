@@ -296,6 +296,30 @@ const CONFIG = {
     }
   },
 
+  /* ---- Pickup prepayment ---------------------------------------------------
+     The owner's rule (2026-10-22): a PICKUP order above this total must be
+     PAID before it is sent to the kitchen. A pickup guest is not in the
+     building — there is no table to walk past and nobody to collect from
+     afterwards — so an unpaid pickup order is food cooked for someone who
+     may never arrive, and the waste scales with the ticket. The pay-at-
+     counter ceiling above ($30) still guards every other order type; this
+     tightens pickup further.
+
+     Two arms enforce it, both in server.js:
+       * pay-at-counter is not offered on such an order
+         (pickupPrepayVerdict) — the guest pays online at checkout, exactly
+         like a delivery does;
+       * the order cannot reach 'preparing' until the money is confirmed
+         (pickupKitchenHold) — not by the kitchen automation, and not by a
+         staff tap on PREPARING.
+
+     `prepayOver: 0` (or removing the line) switches the rule off. Measured
+     on the priced TOTAL — the number on the bill, tip included — so a
+     refusal quotes a figure the guest can see and reconcile. */
+  pickup: {
+    prepayOver: 20
+  },
+
   /* ---- Where the order goes --------------------------------------------
      The order ticket is ALWAYS shown on screen (guest shows it at the counter).
      Optionally, also push it somewhere automatically:

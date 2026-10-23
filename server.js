@@ -2002,6 +2002,73 @@ function counterDeliveryVerdict(payMethod, orderType, cfg) {
   return { blocked: true, code: 'counter_not_allowed_delivery' };
 }
 
+/* ---- Pickup prepayment — pay before the kitchen --------------------------
+   The owner's rule (2026-10-22): a PICKUP order above a set total must be
+   PAID before it is sent to the kitchen. A pickup guest is not in the
+   building — there is no table to walk past and no server to collect from
+   when the food is ready — so an unpaid pickup order is food cooked for
+   someone who may never arrive, and the loss scales with the ticket. The
+   pay-at-counter ceiling above still guards every other order type; this
+   tightens pickup further.
+
+   Two arms, one threshold, deliberately different shapes:
+
+     * THE PAYMENT ARM (pickupPrepayVerdict, here): pay-at-counter is not
+       offered on a pickup order above the threshold — the guest pays online
+       at checkout, exactly like a delivery. Like the ceiling it fails OPEN
+       when no online method is configured: a shop with no card processing
+       must still be able to take a large pickup order. (The kitchen arm
+       below still holds the food until staff confirm the cash, so the
+       no-show risk does not come back with the carve-out.)
+
+     * THE KITCHEN ARM (pickupKitchenHold, below): whatever the pay method,
+       an unpaid pickup order above the threshold cannot reach 'preparing' —
+       not by the kitchen automation, and not by a staff tap. Unlike the
+       payment arm this one is UNCONDITIONAL: it never stops an order from
+       EXISTING, it only holds the cooking, so there is no outage to guard
+       against and nothing to fall back to.
+
+   Measured on the priced TOTAL — the number on the bill, tip included —
+   the same basis as the pay-at-counter ceiling, so a refusal quotes a
+   figure the guest can see and reconcile.
+
+   Both pure, like their neighbours, so _dev/test_pickup_prepay.js can lift
+   the real rules out of this file instead of re-implementing them. */
+function pickupPrepayOver(cfg) {
+  const p = (cfg && cfg.pickup) || {};
+  const n = Number(p.prepayOver);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+function pickupPrepayVerdict(total, payMethod, orderType, cfg, onlineAvailable) {
+  if (payMethod !== 'counter') return { blocked: false };
+  if (orderType !== 'pickup') return { blocked: false };
+  const over = pickupPrepayOver(cfg);
+  if (!over) return { blocked: false };               // no threshold configured
+  if (!onlineAvailable) return { blocked: false };    // nothing to fall back to
+  if (!isFinite(total) || total <= over) return { blocked: false };
+  return { blocked: true, code: 'pickup_prepay_required', over: over };
+}
+
+/* The kitchen arm: is this order held out of the kitchen until its money is
+   confirmed? Pickup only, above the threshold, and NOT yet paid.
+
+   'verified' and 'paid' are the two ways money lands on this board — the
+   first from Stripe's own answer (or the server's own $0 arithmetic), the
+   second from staff tapping 💵 Collected. Anything else — 'counter',
+   'pending', 'unverified', or a status we do not recognise — counts as
+   unpaid. Fail closed, the same direction as every other money door here. */
+function pickupKitchenHold(order, cfg) {
+  if (!order || order.orderType !== 'pickup') return { blocked: false };
+  const over = pickupPrepayOver(cfg);
+  if (!over) return { blocked: false };
+  const total = Number(order.total);
+  if (!isFinite(total) || total <= over) return { blocked: false };
+  const ps = order.paymentStatus;
+  if (ps === 'verified' || ps === 'paid') return { blocked: false };
+  return { blocked: true, code: 'pickup_awaiting_payment', over: over, total: total };
+}
+
 /* ---- Delivery minimum — the smallest order that earns a driver's trip ---
    The 2-mile rule (geo.js) decides WHERE we deliver; this decides HOW BIG an
    order has to be to be delivered at all. A run across town for a $6 bowl
@@ -2246,6 +2313,26 @@ async function handleCreateOrder(req, res) {
     return sendJSON(res, 400, {
       error: 'counter_not_allowed_delivery',
       message: 'Delivery orders must be paid online. Please choose ' +
+        ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
+    });
+  }
+  /* Pickup prepayment — the owner's rule (2026-10-22). A pickup order over
+     the threshold is paid BEFORE the kitchen sees it, so pay-at-counter is
+     not on the menu for one: the guest pays online, exactly like a delivery.
+     Checked BEFORE the general ceiling below, so a big pickup order is
+     refused for the reason that actually applies to it — and quotes the
+     number the owner set for pickup, not the general $30. */
+  const pickupVerdict = pickupPrepayVerdict(priced.total, body.payMethod, effectiveType,
+    ASSETS.CONFIG, onlinePaymentAvailable());
+  if (pickupVerdict.blocked) {
+    console.warn('[kpot] refused pay-at-counter pickup order over the prepay threshold — $' +
+      priced.total.toFixed(2) + ' > $' + pickupVerdict.over.toFixed(2));
+    return sendJSON(res, 400, {
+      error: 'pickup_prepay_required',
+      over: pickupVerdict.over,
+      total: priced.total,
+      message: 'Pickup orders over $' + pickupVerdict.over.toFixed(2) +
+        ' must be paid online. Please choose ' +
         ((ASSETS.CONFIG.payment.stripe || {}).n || 'Pay Online') + ' to place this order.'
     });
   }
@@ -2591,6 +2678,49 @@ async function handleUpdateOrder(req, res, id) {
   }
 
   const wasStatus = o.status;
+  /* The values this PATCH is ASKING for, read before anything is mutated.
+     The kitchen hold below has to judge the order the request would CREATE,
+     and a refusal must leave the stored order exactly as it was — mutating
+     first and refusing afterwards would leave a "refused" order sitting in
+     'preparing' with no ticket and no money, which is worse than either
+     outcome on its own. */
+  const nextStatus = (body.status && VALID_STATUS.includes(body.status)) ? body.status : o.status;
+  const nextPayment = (body.paymentStatus && typeof body.paymentStatus === 'string')
+    ? body.paymentStatus
+    : o.paymentStatus;
+
+  /* ---- Pickup prepayment — the kitchen arm -------------------------------
+     The owner's rule (2026-10-22): a pickup order over the threshold must be
+     PAID before it goes to the kitchen. The payment arm at order creation
+     keeps a guest from CHOOSING pay-at-counter on such an order; this one
+     holds the food itself — a tap on PREPARING cannot jump the queue either,
+     because the board is where an unpaid order would otherwise quietly
+     become cooked food.
+
+     Only the move INTO the kitchen is refused (or a re-save that keeps an
+     unpaid order sitting in it). The order stays on the board with its
+     number, and the fix is one tap: 💵 Collected for cash, or 💳 Re-check for
+     a guest who paid online and closed the tab — either sets the payment
+     status, and the automation that fires for Stripe takes it from there.
+     Every other PATCH (a discount, a note, a move to ready/completed) is
+     untouched: the hold is about cooking, not editing. */
+  if (nextStatus === 'preparing') {
+    const hold = pickupKitchenHold(
+      { orderType: o.orderType, total: o.total, paymentStatus: nextPayment }, ASSETS.CONFIG);
+    if (hold.blocked) {
+      console.warn('[kpot] held pickup order ' + id + ' out of the kitchen — $' +
+        hold.total.toFixed(2) + ' not confirmed (over $' + hold.over.toFixed(2) + ')');
+      return sendJSON(res, 409, {
+        error: 'pickup_awaiting_payment',
+        over: hold.over,
+        total: hold.total,
+        message: 'Pickup orders over $' + hold.over.toFixed(2) +
+          ' must be paid before they go to the kitchen. Confirm the payment first ' +
+          '(Re-check, or mark it Collected).'
+      });
+    }
+  }
+
   if (body.status && VALID_STATUS.includes(body.status)) {
     o.status = body.status;
   }

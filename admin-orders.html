@@ -345,7 +345,15 @@ function showAuth(b) { $('#authBanner').hidden = !b; }
 function patchStatus(id, patch) {
   return fetch('/api/orders/' + encodeURIComponent(id), { method:'PATCH', headers: headers(), body: JSON.stringify(patch) })
     .then(r => { if (r.status === 401) { showAuth(true); throw new Error('unauthorized'); } return r.json(); })
-    .then(j => j).catch(e => { if (e.message !== 'unauthorized') toast('Update failed'); return null; });
+    .then(j => {
+      /* A refusal (e.g. the pickup prepay hold: "paid before the kitchen")
+         used to come back as a resolved JSON body nobody read — the board
+         reloaded and the button simply appeared to do nothing. The server
+         already writes the one sentence staff need; show it. */
+      if (j && j.error) toast(j.message || 'Update failed');
+      return j;
+    })
+    .catch(e => { if (e.message !== 'unauthorized') toast('Update failed'); return null; });
 }
 
 async function setStore(k, v) {
