@@ -123,6 +123,35 @@ function claimDevice(id, suggestedNo) {
     });
 }
 
+/* Every number this suite posts an order under is seeded with a PRIOR order,
+   so each one is a RETURNING customer. Since 2026-10-23 a brand-new mobile
+   number earns an automatic 10% welcome discount (resolveFirstTime in
+   server.js), which would move the total of the very first order a number
+   places and refuse it as a mismatch — and this suite is about loyalty, not
+   that offer. The server decides "first-timer" from the order history
+   (isFirstTimeCustomer), so the history is what has to say otherwise.
+
+   Seeded on disk BEFORE the server boots, not posted over HTTP: an order
+   placed to warm a number IS that number's first order, and would be
+   discounted itself. None of these are paid, so no member record and no
+   points exist and the "an unpaid order creates NO member record" assertions
+   below stay true. */
+const warmOrder = (id, phone) => ({
+  id: id,
+  at: new Date(Date.now() - 86400000).toISOString(),
+  status: 'received',
+  orderType: 'dinein',
+  customer: { name: 'Warm Up', phone: phone },
+  total: 16.95,
+  payMethod: 'counter',
+  paymentStatus: 'counter'
+});
+fs.writeFileSync(path.join(SCRATCH, 'orders.local.json'), JSON.stringify([
+  warmOrder('KP-LOY-WARM-A', '(678) 335-5388'),
+  warmOrder('KP-LOY-WARM-B', '4045550199'),
+  warmOrder('KP-LOY-WARM-C', '4045550666')
+], null, 2));
+
 const server = spawn(process.execPath, ['server.js'], {
   cwd: ROOT,
   env: Object.assign({}, process.env, {

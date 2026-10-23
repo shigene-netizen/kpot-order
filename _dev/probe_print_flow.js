@@ -112,7 +112,7 @@ function makeOrder(token, payMethod) {
        delivery, and these suites are about money/printing, not channels. */
     orderType: 'dinein',
     table: '5',
-    customer: { name: 'Print Probe', phone: '4045550142', when: 'ASAP', notes: 'no chopsticks' },
+    customer: { name: 'Print Probe', phone: '', when: 'ASAP', notes: 'no chopsticks' },
     items: [{ kind: 'hotpot', name: 'Build Your Own Bowl', qty: 1, unit, mods: ['Broth: Japanese Miso'], addons: [], note: '' }],
     subtotal, deliveryFee: 0, tax, tip: 0, surcharge: 0,
     total: round2(subtotal + tax),

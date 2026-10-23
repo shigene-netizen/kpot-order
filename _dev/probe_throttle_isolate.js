@@ -65,7 +65,7 @@ const HOTPOT = { kind: 'hotpot', name: 'Hot Pot To Go', qty: 1, mods: [], addons
 const priceBody = () => ({ orderType: 'pickup', items: [HOTPOT], tipAmount: 0 });
 /* A number with no wallet, so this order cannot disturb anyone's balance —
    the same trick probe_loyalty.js uses for its forged-payment section. */
-const THROTTLE_PHONE = '4045550777';
+const THROTTLE_PHONE = '';
 const orderFor = (no, total) => ({
   no: no,
   token: 'thr-' + no,

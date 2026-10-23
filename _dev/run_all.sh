@@ -46,6 +46,16 @@ if [ "$("$ENV_BIN" echo probe 2>/dev/null)" != "probe" ]; then
   exit 1
 fi
 
+# What counts as a clue when a suite dies. 'FAIL|Error|error' alone missed the
+# two ways these suites actually fail in the wild: a browser probe that gives
+# up prints "timed out waiting for ..." (no "error" anywhere in it), and its
+# crash handler prints "probe crashed: ...". probe_giveaway_ui failed exactly
+# that way during a full run and the runner reported a bare "FAILED" with no
+# detail underneath — a five-second diagnosis turned into a re-run. The errno
+# names are here because a port collision between two suites looks like nothing
+# at all from the outside, and that is the other thing that bites this runner.
+FAIL_RE='FAIL|Error|error|timed out|crashed|ECONNREFUSED|EADDRINUSE|EPIPE|ENOENT'
+
 run() {                       # run <name> <path> [VAR=val...]
   local name="$1"; shift
   local script="$1"; shift
@@ -58,7 +68,7 @@ run() {                       # run <name> <path> [VAR=val...]
   else
     printf 'FAILED\n'
     if [ -n "$out" ]; then
-      printf '%s\n' "$out" | grep -E 'FAIL|Error|error' | head -6 | sed 's/^/        /'
+      printf '%s\n' "$out" | grep -E "$FAIL_RE" | head -6 | sed 's/^/        /'
     else
       printf '        (no output at all — the suite never ran, or env is broken)\n'
     fi
@@ -128,7 +138,7 @@ for page in admin.html admin-orders.html admin-menu.html admin-giveaway.html; do
     pass=$((pass + 1))
   else
     printf 'FAILED\n'
-    printf '%s\n' "$out" | grep -E 'FAIL|Error' | head -6 | sed 's/^/        /'
+    printf '%s\n' "$out" | grep -E "$FAIL_RE" | head -6 | sed 's/^/        /'
     fail=$((fail + 1)); failed_names+=("$page")
   fi
 done
@@ -157,6 +167,7 @@ run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 run probe_giveaway_http    _dev/probe_giveaway_http.js
 run probe_credit_http      _dev/probe_credit_http.js
+run probe_first_visit      _dev/probe_first_visit.js
 
 echo
 echo "--- real browser (headless Chrome) ---"

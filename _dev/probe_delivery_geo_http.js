@@ -162,7 +162,7 @@ function orderFor(no, total, extra) {
     token: 'geo-' + no,
     orderType: 'delivery',
     table: '',
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
+    customer: { name: 'Alex Smith', phone: '' },
     items: [HOTPOT],
     subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,
     total: total,
@@ -220,7 +220,7 @@ async function main() {
   /* ====================================================================== */
   section('order creation — POST /api/orders');
   const far = await post('/api/orders', orderFor('GEO-FAR', dTotal, {
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' },
+    customer: { name: 'Alex Smith', phone: '', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' },
     schedule: nextSchedule()
   }));
   check('a delivery to a 2000-mile address is REFUSED',
@@ -232,14 +232,14 @@ async function main() {
     far.j && /Pickup|Dine-In/i.test(far.j.message || ''), far.j && far.j.message);
 
   const near = await post('/api/orders', orderFor('GEO-NEAR', dTotal, {
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+    customer: { name: 'Alex Smith', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
     schedule: nextSchedule()
   }));
   check('a delivery ~1 mi away is ACCEPTED',
     near.status === 200 && near.j && near.j.ok === true, 'status=' + near.status + ' ' + JSON.stringify(near.j));
 
   const zipFar = await post('/api/orders', orderFor('GEO-ZIPFAR', dTotal, {
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: 'Somewhere in Kennesaw, GA 30101' },
+    customer: { name: 'Alex Smith', phone: '', when: 'Somewhere in Kennesaw, GA 30101' },
     schedule: nextSchedule()
   }));
   check('an unknown street in a far ZIP is refused by the ZIP ruler',
@@ -247,14 +247,14 @@ async function main() {
     'status=' + zipFar.status + ' ' + JSON.stringify(zipFar.j));
 
   const zipOk = await post('/api/orders', orderFor('GEO-ZIPOK', dTotal, {
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: 'A brand new street, Atlanta, GA 30339' },
+    customer: { name: 'Alex Smith', phone: '', when: 'A brand new street, Atlanta, GA 30339' },
     schedule: nextSchedule()
   }));
   check('an unknown street in the shop\'s own ZIP is accepted (ZIP ruler)',
     zipOk.status === 200 && zipOk.j && zipOk.j.ok === true, 'status=' + zipOk.status + ' ' + JSON.stringify(zipOk.j));
 
   const zipUnknown = await post('/api/orders', orderFor('GEO-ZIPUNK', dTotal, {
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '123 Nowhere Ln, Metropolis, GA 99999' },
+    customer: { name: 'Alex Smith', phone: '', when: '123 Nowhere Ln, Metropolis, GA 99999' },
     schedule: nextSchedule()
   }));
   check('an address in NO known ZIP fails OPEN (an outage must not stop the shop)',
@@ -265,7 +265,7 @@ async function main() {
   section('the rule is DELIVERY-scoped — the control');
   const pickupFar = await post('/api/orders', orderFor('GEO-PICKUP', pTotal, {
     orderType: 'pickup',
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' }
+    customer: { name: 'Alex Smith', phone: '', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' }
   }));
   check('the SAME far address on a PICKUP order is fine',
     pickupFar.status === 200 && pickupFar.j && pickupFar.j.ok === true,
@@ -278,7 +278,7 @@ async function main() {
      the suite runs. */
   const coFar = await post('/api/checkout', {
     orderNo: 'GEO-CO-FAR', orderType: 'delivery', items: [HOTPOT], tipAmount: 0,
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' },
+    customer: { name: 'Alex Smith', phone: '', when: '1600 Amphitheatre Pkwy, Mountain View, CA 94043 FAR' },
     schedule: nextSchedule(), total: dTotal
   });
   check('a far delivery never reaches Stripe',
@@ -287,7 +287,7 @@ async function main() {
 
   const coNear = await post('/api/checkout', {
     orderNo: 'GEO-CO-NEAR', orderType: 'delivery', items: [HOTPOT], tipAmount: 0,
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+    customer: { name: 'Alex Smith', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
     schedule: nextSchedule(), total: dTotal
   });
   check('a near delivery reaches Stripe and gets a session URL back',
@@ -301,7 +301,7 @@ async function main() {
      already proven deterministically by the scheduled case above. */
   const coPickup = await post('/api/checkout', {
     orderNo: 'GEO-CO-PICKUP', orderType: 'pickup', items: [HOTPOT], tipAmount: 0,
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199' }, total: pTotal
+    customer: { name: 'Alex Smith', phone: '' }, total: pTotal
   });
   const pickupGotSession = coPickup.status === 200 && coPickup.j && !!coPickup.j.url;
   const pickupClosedNow = coPickup.status === 409 && coPickup.j && coPickup.j.error === 'closed';

@@ -301,7 +301,7 @@ async function main() {
 
     await cdp.evalJs(`(() => {
       const n = document.querySelector('#cName'); if (n) n.value = ${JSON.stringify(GUEST)};
-      const p = document.querySelector('#cPhone'); if (p) p.value = '4045550142';
+      const p = document.querySelector('#cPhone'); if (p) { p.value = '4045550142'; p.dispatchEvent(new Event('input', { bubbles: true })); }
       /* E-mail became required (order-ready notification + reward contact) —
          a probe that leaves it blank is stopped by the same validation a
          guest is, before the submit path this probe exists to test. */
@@ -309,6 +309,15 @@ async function main() {
       const c = document.querySelector('[data-pay="counter"]'); if (c) c.click();
       return true;
     })()`);
+
+    /* Typing the number is what a guest does; assigning .value alone fires no
+       input event, so the page would still be holding the pre-discount total
+       and the server would refuse the order as a total mismatch. The banner is
+       the page's own proof the welcome offer landed, so wait for IT rather than
+       for a number: it is drawn from the server's answer, so a stale total and
+       a missing banner fail the same way for the same reason. */
+    await cdp.waitFor('!!document.querySelector("#firstVisitBanner.on")',
+      10000, 'the first-time-guest discount to apply');
 
     /* Slow the POST that records the order, so the whole busy window is
        observable instead of a few milliseconds of luck. */

@@ -119,7 +119,7 @@ function seeded(no, extra) {
     deliverySlotLabel: '12:00 PM – 1:00 PM',
     scheduledFor: TODAY + 'T16:30:00.000Z',
     table: '',
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199', when: '1 NEAR Rd, Atlanta, GA 30339', notes: '' },
+    customer: { name: 'Alex Smith', phone: '', when: '1 NEAR Rd, Atlanta, GA 30339', notes: '' },
     items: [{ name: 'Pick 2 Proteins Bowl', qty: 1 }],
     lines: [{ name: 'Pick 2 Proteins Bowl', qty: 1, unit: 15.99, desc: '' }],
     subtotal: 15.99, tax: 0.96, tip: 0, delivery: 0, total: 16.95,
@@ -135,12 +135,12 @@ function atMiles(no, miles, extra) {
 }
 
 const SEED = [
-  atMiles('DRV-FAR', 1.9, { customer: { name: 'Far Away', phone: '(404) 555-0201', when: '19 NEAR Test Rd, Atlanta, GA 30339', notes: '' } }),
+  atMiles('DRV-FAR', 1.9, { customer: { name: 'Far Away', phone: '', when: '19 NEAR Test Rd, Atlanta, GA 30339', notes: '' } }),
   atMiles('DRV-NEAR', 0.7, { customer: { name: 'Next Door', phone: '(404) 555-0202', when: '7 NEAR Test Rd, Atlanta, GA 30339', notes: 'Gate code 1234' } }),
   atMiles('DRV-EVENING', 0.5, {
     deliverySlot: '4pm', deliverySlotLabel: '4:00 PM – 5:00 PM',
     scheduledFor: TODAY + 'T19:30:00.000Z',
-    customer: { name: 'Late One', phone: '(404) 555-0203', when: '5 NEAR Test Rd, Atlanta, GA 30339', notes: '' }
+    customer: { name: 'Late One', phone: '', when: '5 NEAR Test Rd, Atlanta, GA 30339', notes: '' }
   }),
   atMiles('DRV-TOMORROW', 0.6, { deliveryDate: TOMORROW }),
   atMiles('DRV-DONE', 0.6, { status: 'completed' }),
@@ -149,12 +149,26 @@ const SEED = [
   atMiles('DRV-OVERDUE', 1.0, {
     deliveryDate: YESTERDAY, deliverySlot: '2pm', deliverySlotLabel: '2:00 PM – 3:00 PM',
     scheduledFor: YESTERDAY + 'T18:30:00.000Z',
-    customer: { name: 'Yesterday', phone: '(404) 555-0204', when: '10 NEAR Test Rd, Atlanta, GA 30339', notes: '' }
+    customer: { name: 'Yesterday', phone: '', when: '10 NEAR Test Rd, Atlanta, GA 30339', notes: '' }
   }),
   seeded('DRV-UNPAID', {
     paymentStatus: 'pending', payMethod: 'stripe',
-    customer: { name: 'Not Paid Yet', phone: '(404) 555-0205', when: '3 NEAR Test Rd, Atlanta, GA 30339', notes: '' },
+    customer: { name: 'Not Paid Yet', phone: '', when: '3 NEAR Test Rd, Atlanta, GA 30339', notes: '' },
     geo: { lat: 33.89, lon: -84.46, miles: 0.8, source: 'street' }
+  }),
+  /* A DINE-IN order, so it is NOT part of the run this suite sequences — it is
+     here for one reason only: it gives '(404) 555-0202' a prior order, so that
+     number is a RETURNING customer. Since 2026-10-23 a brand-new mobile number
+     earns an automatic 10% welcome discount (resolveFirstTime in server.js),
+     which would move the total of the first order it places and refuse it as a
+     mismatch. The server decides "first-timer" from the order history
+     (isFirstTimeCustomer), so the history is what has to say otherwise. Every
+     other number in this suite posts its order with no phone at all — a guest
+     who gives no number is never identified as a first-timer. */
+  seeded('DRV-WARM', {
+    orderType: 'dinein',
+    deliveryDate: '', deliverySlot: '', deliverySlotLabel: '', scheduledFor: '',
+    customer: { name: 'Next Door', phone: '(404) 555-0202', when: '7 NEAR Test Rd, Atlanta, GA 30339', notes: '' }
   })
 ];
 
@@ -374,7 +388,7 @@ async function main() {
     const price = await post('/api/price', { orderType: 'delivery', items: [HOTPOT], tipAmount: 0 });
     const created = await post('/api/orders', {
       no: 'DRV-NEW', token: 'drv-new', orderType: 'delivery', items: [HOTPOT], tipAmount: 0,
-      customer: { name: 'New One', phone: '(404) 555-0206', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+      customer: { name: 'New One', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
       schedule: { date: day.iso, slot: bookable.id }, total: price.j.total,
       payMethod: 'stripe', paymentStatus: 'pending', paid: false
     });

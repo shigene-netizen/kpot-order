@@ -259,7 +259,8 @@ function applyDiscount(priced, discount, CONFIG) {
          unknown source on a money-off object is not something to be generous
          about. */
       source: (discount.source === 'staff' || discount.source === 'loyalty'
-        || discount.source === 'member' || discount.source === 'credit')
+        || discount.source === 'member' || discount.source === 'credit'
+        || discount.source === 'welcome')
         ? discount.source : 'code',
       amount
     }

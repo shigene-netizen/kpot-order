@@ -1456,7 +1456,30 @@
   function refreshTotals() {
     updateCartTotals();
     renderTotalsInCheckout();
+    renderFirstVisitBanner();
     syncCartUI();
+  }
+
+  /* The first-time welcome note. Driven entirely by the server's answer: when
+     the reprice came back with discountSource 'welcome' the number is brand
+     new, so celebrate it; otherwise stay silent (returning guest, or no number
+     typed yet). Kept to one element so it cannot fight the discount row. */
+  function renderFirstVisitBanner() {
+    const el = $('#firstVisitBanner');
+    if (!el) return;
+    if (state.discountSource === 'welcome' && state.discountAmount > 0) {
+      /* CONFIG is the browser global from assets/config.js — the same object
+         the server loads as ASSETS.CONFIG. NOT ASSETS: that name only exists
+         server-side, and reading it here throws a ReferenceError that
+         reprice()'s catch swallows into clearDiscounts(), which silently
+         undoes the very discount this banner is meant to announce. */
+      const pct = (CONFIG.firstVisit && CONFIG.firstVisit.percent) || 10;
+      el.textContent = '🎉 First-time guest — ' + pct + '% off applied automatically.';
+      el.classList.add('on');
+    } else {
+      el.textContent = '';
+      el.classList.remove('on');
+    }
   }
 
   /* Never decides money — it adopts the server's answer, exactly the way
@@ -1477,7 +1500,12 @@
           tipAmount: tipAmount(),
           couponCode: code,
           creditCode: credit,
-          loyalty: loyalty
+          loyalty: loyalty,
+          /* The mobile number drives the first-time welcome offer: the server
+             decides "new customer" from the order history, so the preview has
+             to send the number the guest just typed for the discount to show
+             before they pay. */
+          customer: { phone: state.customer.phone }
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -1543,6 +1571,15 @@
           state.loyaltyState = 'ok';
           state.couponMsg = '';
           state.couponState = '';
+          state.creditMsg = '';
+          state.creditState = '';
+        } else if (state.discountSource === 'welcome') {
+          /* Automatic, not typed — so the message says so, and it does not
+             collide with the coupon box the guest never opened. */
+          state.couponMsg = 'First-time guest — ' + money(state.discountAmount) + ' off, applied automatically.';
+          state.couponState = 'ok';
+          state.loyaltyMsg = '';
+          state.loyaltyState = '';
           state.creditMsg = '';
           state.creditState = '';
         } else {
@@ -1806,6 +1843,15 @@
   }
 
   let loyaltyTimer = null;
+  /* Re-price (debounced) when the mobile number changes, so the first-time
+     welcome note appears as the guest types — not only after they tab away.
+     Mirrors scheduleLoyaltyLookup; the two can race but reprice is one call and
+     the last answer wins, so no order is ever double-counted. */
+  let firstVisitTimer = null;
+  function scheduleFirstVisitCheck() {
+    if (firstVisitTimer) clearTimeout(firstVisitTimer);
+    firstVisitTimer = setTimeout(() => { firstVisitTimer = null; reprice(true); }, 500);
+  }
   function scheduleLoyaltyLookup() {
     if (loyaltyTimer) clearTimeout(loyaltyTimer);
     loyaltyTimer = setTimeout(() => { loyaltyTimer = null; lookupLoyalty(); }, 500);
@@ -2393,6 +2439,9 @@
       '<div class="field"><label>Name</label><input id="cName" placeholder="e.g. Alex" value="' + esc(c.name) + '"></div>' +
       '<div class="field"><label>Mobile</label><input id="cPhone" type="tel" inputmode="tel" placeholder="(555) 123-4567" value="' + esc(c.phone) + '"></div>' +
       '<div class="small dim" style="margin:8px 0 14px">Used for this order and Reward enrollment - not marketing SMS consent.</div>' +
+      /* Shows the moment the server confirms this number has never ordered
+         before — the guest sees the 10% before they pay, no code needed. */
+      '<div id="firstVisitBanner" class="fvn"></div>' +
       /* REQUIRED now: it is how we e-mail the guest the moment their order is
          ready, and it is their reward enrollment contact. A guest who leaves it
          blank cannot be told their food is up, so the order cannot be placed
@@ -2437,12 +2486,12 @@
     updatePayHint();
     renderStripeBox();
 
-    /* The mobile number drives the rewards, and it is typed HERE — so mirror it
-       into state as it is typed (placeOrder used to read the input directly and
-       nothing else ever saw it) and look up what the number is worth. */
+  /* The mobile number drives the rewards, and it is typed HERE — so mirror it
+     into state as it is typed (placeOrder used to read the input directly and
+     nothing else ever saw it) and look up what the number is worth. */
     const ph = $('#cPhone');
     if (ph) {
-      ph.oninput = () => { state.customer.phone = ph.value; scheduleLoyaltyLookup(); };
+      ph.oninput = () => { state.customer.phone = ph.value; scheduleLoyaltyLookup(); scheduleFirstVisitCheck(); };
       ph.onblur = () => { state.customer.phone = ph.value; lookupLoyalty(); };
     }
     /* Mirrored for the same reason as the phone: placeOrder() used to read the

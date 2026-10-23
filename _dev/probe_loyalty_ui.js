@@ -53,6 +53,7 @@ const ADMIN_KEY = 'loyalty-ui-key-' + Date.now().toString(36);
 
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'kpot-loyalty-ui-'));
 const CUSTOMERS_FILE = path.join(SCRATCH, 'customers.local.json');
+const ORDERS_FILE = path.join(SCRATCH, 'orders.local.json');
 
 const PHONE = '6783355388';
 const PHONE_TYPED = '(678) 335-5388';
@@ -365,6 +366,29 @@ async function main() {
   try {
     /* Seeded BEFORE the server starts, so it is the ledger it boots with. */
     fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify(seedCustomer(), null, 2));
+    /* And a prior order for each of those numbers, so they are RETURNING
+       customers. Since 2026-10-23 a brand-new mobile number earns an automatic
+       10% welcome discount, which would silently move every total this probe
+       derives from the basket — and this suite is about the rewards panel, not
+       that offer. The server decides "first-timer" from the order history
+       (isFirstTimeCustomer), so the history is what has to say otherwise. */
+    fs.writeFileSync(ORDERS_FILE, JSON.stringify([{
+      id: 'KP-LOYUI-WARM',
+      at: new Date(Date.now() - 86400000).toISOString(),
+      status: 'collected',
+      orderType: 'dinein',
+      customer: { name: 'Bob Smith', phone: '(678) 335-5388' },
+      total: 16.95,
+      paymentStatus: 'paid'
+    }, {
+      id: 'KP-LOYUI-WARM-LOW',
+      at: new Date(Date.now() - 86400000).toISOString(),
+      status: 'collected',
+      orderType: 'dinein',
+      customer: { name: 'Carol Jones', phone: '(678) 335-5399' },
+      total: 16.95,
+      paymentStatus: 'paid'
+    }], null, 2));
 
     server = spawn(process.execPath, ['server.js'], {
       cwd: ROOT,

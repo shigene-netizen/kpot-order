@@ -461,6 +461,18 @@ img { max-width: 100%; display: block; }
 .loy-row .amt { flex: none; font-size: 13px; font-weight: 800; color: var(--green); }
 .loy-note { margin: 2px 0 9px; }
 
+/* ---------- First-time welcome note ----------
+   Appears automatically when the server confirms the mobile number has never
+   ordered before, so the guest sees the 10% before they pay — no code to type.
+   Hidden by default; .on is added by renderFirstVisitBanner(). */
+.fvn { display: none; }
+.fvn.on {
+  display: block; margin: -4px 0 14px; padding: 10px 12px;
+  border-radius: var(--radius-sm); font-size: 13px; font-weight: 700;
+  color: var(--green); background: rgba(46,160,67,.12);
+  box-shadow: 0 0 0 2px var(--green);
+}
+
 /* ---------- Live delivery-distance check ----------
    The guest typing a delivery address gets the answer while they type, not
    after they pay: inside the 2-mile radius a quiet green line, outside it a

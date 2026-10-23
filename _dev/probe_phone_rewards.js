@@ -160,6 +160,29 @@ async function main() {
   check('mailer send() returns {ok:false} when unconfigured',
     true);
 
+  /* Carol is seeded with a PRIOR order, so she is a RETURNING customer. Since
+     2026-10-23 a brand-new mobile number earns an automatic 10% welcome
+     discount (resolveFirstTime in server.js), which would move the total of
+     the first order she places and refuse it as a mismatch — and this suite is
+     about the come-back coupon, not that offer. The server decides
+     "first-timer" from the order history (isFirstTimeCustomer), so the history
+     is what has to say otherwise.
+
+     Seeded on disk BEFORE the server boots, not posted over HTTP: an order
+     placed to warm a number IS that number's first order, and would be
+     discounted itself. It is unpaid, so it mints no points and no coupon, and
+     the "a stranger who spent nothing has no account" assertion below holds. */
+  fs.writeFileSync(path.join(SCRATCH, 'orders.local.json'), JSON.stringify([{
+    id: 'KP-PH-CAROL-WARM',
+    at: new Date(Date.now() - 86400000).toISOString(),
+    status: 'received',
+    orderType: 'dinein',
+    customer: { name: 'Carol Jones', phone: CAROL },
+    total: TOTAL,
+    payMethod: 'counter',
+    paymentStatus: 'counter'
+  }], null, 2));
+
   server = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: Object.assign({}, process.env, {

@@ -204,6 +204,27 @@ const CONFIG = {
     { type: 'custom' }
   ],
 
+  /* ---- First-time guest welcome offer -----------------------------------
+     A brand-new mobile number gets this percentage off automatically — no
+     code to type, no box to fill in. "New" is decided by the SERVER from the
+     order history (the mobile number is the customer identity here), never by
+     a flag the page sends, so a returning guest cannot claim it twice and a
+     stranger cannot claim it at all.
+
+     The number is the only identity we have, so the offer requires one: a guest
+     who checks out without a mobile number simply pays full price. It also
+     yields to any discount the guest explicitly chose (a code, their rewards,
+     store credit) — first-timers who have a better offer keep it.
+
+     Set enabled:false to turn it off without a deploy. Change percent / label
+     freely; they are the whole economics of the welcome. */
+  firstVisit: {
+    enabled: true,
+    percent: 10,          // % off the subtotal for a first-ever order
+    minSubtotal: 0,       // smallest subtotal that still qualifies (0 = any)
+    label: 'First-time guest — 10% off'
+  },
+
   /* ---- Payment methods -------------------------------------------------
      'counter'  → guest pays at the table / to the server. DINE-IN ONLY.
      'stripe'   → online card / Apple Pay / Google Pay via Stripe.

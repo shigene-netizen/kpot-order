@@ -24,7 +24,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const { loadAssets, priceOrder, toStripeLineItems, round2, applyDiscount } = require('./pricing.js');
+const { loadAssets, priceOrder, toStripeLineItems, round2, applyDiscount, discountAmountFor } = require('./pricing.js');
 const { renderKitchenTicket } = require('./printer.js');
 const D = require('./discounts.js');
 const L = require('./customers.js');
@@ -3708,6 +3708,75 @@ function resolveCredit(rawCode, priced) {
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/* First-time guest — an automatic welcome discount, no code to type          */
+/* -------------------------------------------------------------------------- */
+/* "First-time customer" means "this mobile number has never placed an order
+   before". The number IS the customer here (it is the loyalty credential), so
+   it is the only identity we have, and it is exactly what the page already
+   collects for rewards — the guest types nothing new.
+
+   Decided ONLY on the server. The browser sends the number it already holds
+   and gets back the server's read of the order history; it can never assert
+   "I am a first-timer" and get a discount. The check scans every order on the
+   board, so an order placed a moment ago (by the same phone) already counts as
+   "known" — the discount is spent on the first purchase, never the second. */
+function isFirstTimeCustomer(phone, exceptToken) {
+  const p = L.normalizePhone(phone);
+  if (!p) return false;
+  for (const o of orders.values()) {
+    /* The order being priced right now is not "a previous order".
+
+       The guest page posts the same order twice with the same token: once
+       before it leaves for Stripe (so the board has it and the number is
+       real), and again on the way back to re-resolve the order number before
+       verifying the session. Without this exclusion the second post sees the
+       order the first one created, concludes the guest is a returning
+       customer, and prices the very SAME order at full price — which then
+       fails its own total_mismatch check and never reaches the
+       idempotent-retry branch that exists precisely to answer that request.
+
+       So the welcome discount is a property of the ORDER, not of the moment
+       the server happened to be asked. A genuinely second order carries a
+       different token, still sees this one, and still gets nothing. */
+    if (exceptToken && o.clientToken && o.clientToken === exceptToken) continue;
+    const op = L.normalizePhone((o.customer || {}).phone);
+    if (op && op === p) return false;
+  }
+  return true;
+}
+
+/* The welcome discount, resolved here and priced by applyDiscount() exactly
+   like an owner's code. Returns { none: true } — never an error — when there
+   is nothing to give: no config, no number on the order, a returning customer,
+   or a subtotal under the floor. A first-timer who does not qualify is not
+   refused, they simply pay full price. */
+function resolveFirstTime(body, basePriced) {
+  const cfg = (ASSETS.CONFIG && ASSETS.CONFIG.firstVisit) || {};
+  if (cfg.enabled === false) return { none: true };
+  const pct = Number(cfg.percent);
+  if (!isFinite(pct) || pct <= 0) return { none: true };
+
+  const phone = L.normalizePhone((body.customer || {}).phone);
+  if (!phone) return { none: true }; // cannot identify -> no auto discount
+  /* `body.token` is the order's own idempotency token: the one order that must
+     not count as "a previous order" is the one being priced right now. */
+  if (!isFirstTimeCustomer(phone, body.token)) return { none: true };
+
+  const min = Number(cfg.minSubtotal) || 0;
+  if (min > 0 && Number(basePriced.subtotal) < min) return { none: true };
+
+  const discount = {
+    type: 'percent',
+    value: pct,
+    code: '',
+    label: String(cfg.label || '').slice(0, 60) || ('First-time guest — ' + pct + '% off'),
+    source: 'welcome'
+  };
+  if (discountAmountFor(basePriced, discount) <= 0) return { none: true };
+  return { discount };
+}
+
 function resolveOrderDiscount(body, basePriced, orderType) {
   const coupon = resolveCoupon(body.couponCode, basePriced);
   if (coupon.error) return { error: coupon.error, message: coupon.message };
@@ -3718,22 +3787,32 @@ function resolveOrderDiscount(body, basePriced, orderType) {
   const credit = resolveCredit(body.creditCode, basePriced);
   if (credit.error) return { error: credit.error, message: credit.message };
 
+  const first = resolveFirstTime(body, basePriced);
+  if (first.error) return { error: first.error, message: first.message };
+
   /* One give-away per bill. A store credit, an owner's code and a loyalty
      reward are all money off, and letting two ride together is how a house
      hands out more than it meant to — the owner's standing rule for rewards,
-     applied to the prize code as well. */
+     applied to the prize code as well. The welcome offer is NOT in this list:
+     it is automatic and unrequested, so it must step aside when the guest has
+     explicitly chosen something, never fight them for the same bill. */
   const chosen = [coupon.discount, loyalty.discount, credit.discount].filter(Boolean);
   if (chosen.length > 1) {
     return {
       error: 'one_discount_only',
-      message: 'Use either a store-credit code, a discount code, or your rewards on this order — not more than one.'
+      message: 'Use one reward per order — a discount code, your rewards, or store credit. Pick a single one.'
     };
   }
-  if (credit.discount) {
-    return { kind: 'credit', entry: credit.entry, discount: credit.discount };
-  }
-  if (coupon.discount) return { kind: 'code', entry: coupon.entry, discount: coupon.discount };
-  if (loyalty.discount) {
+
+  /* An explicit choice wins; the automatic welcome offer only fills the gap
+     when the guest asked for nothing else. So a first-timer who types a code
+     they saw on a poster simply gets that code — no "pick one" error, no
+     surprise. */
+  if (chosen.length > 0) {
+    if (credit.discount) {
+      return { kind: 'credit', entry: credit.entry, discount: credit.discount };
+    }
+    if (coupon.discount) return { kind: 'code', entry: coupon.entry, discount: coupon.discount };
     return {
       kind: 'loyalty', customer: loyalty.entry,
       /* `redemption` is absent for a member perk: nothing is taken out of the
@@ -3744,6 +3823,8 @@ function resolveOrderDiscount(body, basePriced, orderType) {
       discount: loyalty.discount
     };
   }
+
+  if (first.discount) return { kind: 'welcome', discount: first.discount };
   return { none: true };
 }
 

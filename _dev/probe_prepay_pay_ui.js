@@ -434,7 +434,7 @@ async function main() {
       body: JSON.stringify({
         no: boardOrder, token: 'ui-board-' + boardOrder,
         orderType: 'pickup', table: '',
-        customer: { name: 'Board Probe', phone: '4045550123', when: 'ASAP', notes: '' },
+        customer: { name: 'Board Probe', phone: '', when: 'ASAP', notes: '' },
         items: [BOWL_ITEM],
         subtotal: priceR.subtotal, deliveryFee: priceR.delivery, tax: priceR.tax,
         tip: 0, surcharge: 0, total: priceR.total,

@@ -248,11 +248,17 @@ async function main() {
     await cdp.waitFor('!!document.querySelector("#placeOrder")', 10000, 'the checkout sheet');
     await cdp.evalJs(`(() => {
       const n = document.querySelector('#cName'); if (n) n.value = ${JSON.stringify(GUEST_NAME)};
-      const p = document.querySelector('#cPhone'); if (p) p.value = '${GUEST_PHONE}';
+      const p = document.querySelector('#cPhone'); if (p) { p.value = '${GUEST_PHONE}'; p.dispatchEvent(new Event('input', { bubbles: true })); }
       const e = document.querySelector('#cEmail'); if (e) e.value = 'src-probe@example.invalid';
       const c = document.querySelector('[data-pay="counter"]'); if (c) c.click();
       return true;
     })()`);
+    /* Typing the number is what a guest does; assigning .value alone fires no
+       input event, so the page would still be holding the pre-discount total
+       and the server would refuse the order as a total mismatch. Wait for the
+       first-time-guest discount to reach the totals before submitting. */
+    await cdp.waitFor('!!document.querySelector("#firstVisitBanner.on")',
+      10000, 'the first-time-guest discount to apply');
     await cdp.evalJs(`document.querySelector('#placeOrder').click()`);
 
     /* Wait for the SERVER to have it, not for a toast. */

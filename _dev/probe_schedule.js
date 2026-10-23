@@ -88,7 +88,7 @@ const orderFor = (no, total, extra) => {
     token: 'sched-' + no,
     orderType: 'delivery',
     table: '',
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
+    customer: { name: 'Alex Smith', phone: '' },
     items: [HOTPOT],
     subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,
     total: total,

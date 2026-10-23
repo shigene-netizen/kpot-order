@@ -164,7 +164,7 @@ async function pricedDelivery(items, token, extra) {
     token: 'min-' + token,
     orderType: 'delivery',
     table: '',
-    customer: { name: 'Min Probe', phone: '(404) 555-0177', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+    customer: { name: 'Min Probe', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
     items: items,
     subtotal: price.j.subtotal, deliveryFee: price.j.delivery,
     tax: price.j.tax, tip: 0, surcharge: 0,
@@ -271,7 +271,7 @@ async function main() {
   const beforeSmall = stripeCalls;
   const coSmall = await post('/api/checkout', {
     orderNo: 'KM-CO-SMALL', orderType: 'delivery', items: [DONUTS, DONUTS], tipAmount: 0,
-    customer: { name: 'Min Probe', phone: '(404) 555-0177', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+    customer: { name: 'Min Probe', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
     schedule: nextSchedule(), total: small.price.total
   });
   check('a $7.98 delivery checkout is REFUSED with delivery_below_minimum',
@@ -283,7 +283,7 @@ async function main() {
   const beforeBig = stripeCalls;
   const coBig = await post('/api/checkout', {
     orderNo: 'KM-CO-BIG', orderType: 'delivery', items: [SOUP, DONUTS, DONUTS], tipAmount: 0,
-    customer: { name: 'Min Probe', phone: '(404) 555-0177', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
+    customer: { name: 'Min Probe', phone: '', when: '1 NEAR Test Rd, Atlanta, GA 30339' },
     schedule: nextSchedule(), total: big.price.total
   });
   check('a $10.97 delivery checkout returns a Stripe session',
@@ -296,7 +296,7 @@ async function main() {
   const beforePickup = stripeCalls;
   const coPickup = await post('/api/checkout', {
     orderNo: 'KM-CO-PICKUP', orderType: 'pickup', items: [DONUTS, DONUTS], tipAmount: 0,
-    customer: { name: 'Min Probe', phone: '(404) 555-0177' },
+    customer: { name: 'Min Probe', phone: '' },
     total: small.price.total
   });
   check('the SAME small cart as a PICKUP checkout still pays',

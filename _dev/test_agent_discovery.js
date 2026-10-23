@@ -317,8 +317,18 @@ async function main() {
     const printed2 = await waitFor(() => printer.received.length >= 1, 15000);
     check('a ticket queued at the NEW address gets printed',
       printed2, 'tickets=' + printer.received.length);
+    /* The ack gets its OWN wait, and this is not padding. pollOnce() prints
+       first and acks afterwards (agent.js: printBytes, then ack), so the ack's
+       HTTP round-trip always trails the print. Waiting for the print and then
+       asserting the ack on the next line races the agent against itself: on an
+       idle machine the ack lands inside the same millisecond and nobody
+       notices; during a full-suite run — fifty suites deep, machine loaded —
+       the print was observed, the assertion ran, and acked was still []. The
+       suite went red while the agent had behaved perfectly. The ack is the
+       thing under claim, so the ack is the thing to wait for. */
+    const acked2 = await waitFor(() => appB.state.acked.includes('J2'), 15000);
     check('and the result is reported back to the new address',
-      appB.state.acked.includes('J2'), 'acked B=' + JSON.stringify(appB.state.acked));
+      acked2, 'acked B=' + JSON.stringify(appB.state.acked));
     check('and NOT to the address it moved away from',
       !appA.state.acked.includes('J2'), 'acked A=' + JSON.stringify(appA.state.acked));
 

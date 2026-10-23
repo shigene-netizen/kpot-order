@@ -121,7 +121,7 @@ function orderFor(no, total, extra) {
        delivery, and these suites are about money/printing, not channels. */
     orderType: 'dinein',
     table: '5',
-    customer: { name: 'Alex Smith', phone: '(404) 555-0199' },
+    customer: { name: 'Alex Smith', phone: '' },
     items: [HOTPOT],
     subtotal: 0, deliveryFee: 0, tax: 0, tip: 0, surcharge: 0,
     total: total,
@@ -209,7 +209,7 @@ async function main() {
     section('the control — checkout already refuses (proving the seam)');
     const co = await post('/api/checkout', {
       orderNo: 'CLOSED-CO', orderType: 'pickup', items: [HOTPOT], tipAmount: 0,
-      customer: { name: 'Alex Smith', phone: '(404) 555-0199' }, total: total
+      customer: { name: 'Alex Smith', phone: '' }, total: total
     });
     check('POST /api/checkout refuses the same order (the behaviour /api/orders lacks)',
       co.status === 409 && co.j && co.j.error === 'closed',

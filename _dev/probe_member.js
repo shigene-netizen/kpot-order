@@ -108,6 +108,28 @@ const dev = () => (DEVICE ? '&device=' + encodeURIComponent(DEVICE) : '');
 const member = () => get('/api/customer?phone=' + encodeURIComponent(PHONE) + dev());
 const membersAdmin = () => get('/api/customers', adminH());
 
+/* The member number is seeded with a PRIOR order, so it is a RETURNING
+   customer. Since 2026-10-23 a brand-new mobile number earns an automatic 10%
+   welcome discount (resolveFirstTime in server.js), which would move the total
+   of the first order the number places and refuse it as a mismatch — and this
+   suite is about the MEMBER perk, not that offer. The server decides
+   "first-timer" from the order history (isFirstTimeCustomer), so the history
+   is what has to say otherwise.
+
+   Seeded on disk BEFORE the server boots, not posted over HTTP: an order
+   placed to warm a number IS that number's first order, and would be
+   discounted itself. It is unpaid, so no points are minted by it. */
+fs.writeFileSync(path.join(SCRATCH, 'orders.local.json'), JSON.stringify([{
+  id: 'KP-MEM-WARM',
+  at: new Date(Date.now() - 86400000).toISOString(),
+  status: 'received',
+  orderType: 'dinein',
+  customer: { name: 'Warm Up', phone: '(678) 335-5388' },
+  total: 16.95,
+  payMethod: 'counter',
+  paymentStatus: 'counter'
+}], null, 2));
+
 const server = spawn(process.execPath, ['server.js'], {
   cwd: ROOT,
   env: Object.assign({}, process.env, {
@@ -288,6 +310,7 @@ waitForHealth(80).then(() => {
      never off the order payload. A pay-at-counter order earns nothing until
      a staff member taps Collected — the same rule probe_loyalty.js pins.
      ====================================================================== */
+
   return post('/api/price', priceBody([HOTPOT])).then((p) => {
     const total = p.j && p.j.total;
     return post('/api/orders', orderFor('KP-MEM-1', total, {
