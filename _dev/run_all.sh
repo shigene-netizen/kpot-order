@@ -167,6 +167,7 @@ run probe_print_flow       _dev/probe_print_flow.js
 run test_agent_discovery   _dev/test_agent_discovery.js
 run probe_giveaway_http    _dev/probe_giveaway_http.js
 run probe_credit_http      _dev/probe_credit_http.js
+run probe_one_discount     _dev/probe_one_discount.js
 run probe_first_visit      _dev/probe_first_visit.js
 
 echo
