@@ -967,6 +967,11 @@ dispatch: {
 | 🟡 `N ticket(s) waiting to print…` | 排队中（一直不动就是上面某一种） |
 | 🟢 `Printer ready` | 一切正常 |
 
+> 红条只数**还没人管过的失败**：一张票失败之后又被 Reprint 打出来（或者已经有一张
+> 新的补打在排队），它就从红条里消失。历史留着，但不再是待办——否则夜里断一次网，
+> 早上看板还挂着 `2 ticket(s) failed to print`，而订单卡早就变绿了，两处对不上，
+> 店员于是学会忽略红条，下一次真失败就这么过去了。
+
 #### 打印失败时，报错必须写明它试的地址（2026-10-13）
 
 起因是店里真实发生的一次故障：打印机换了 IP，出纸全失败，而看板只写
@@ -993,6 +998,28 @@ dispatch: {
 > 退避是 2s、4s、8s…最多 60s，所以**红条大约 5 分钟后才出现**。
 > 测试用 `KPOT_PRINT_MAX_ATTEMPTS=1` 这个测试缝把这个过程压到 1 次，
 > 否则一个套件要跑五分钟。生产环境不要设它。
+
+#### 补打之后，红条必须自己消掉（2026-10-23）
+
+店里真实发生的一次投诉：打印机连接正常、Reprint 也正常，但后台一直挂着
+`2 ticket(s) failed to print` —— 那是之前断网时留下的旧错。实际盘过
+`/var/lib/kpot/print.local.json` 才发现：两张票确实失败过，其中一张
+**19:01:53 已经补打成功**，订单卡上的标记也确实变绿了，只有那一行红条没更新。
+
+根因是**两处用了两个不同的口径**：
+
+- 订单卡（`printStateFor()`）取每张单**最新一次**后厨打印任务，补打成功就算翻篇；
+- 打印机健康行（`handlePrintStatus()`）把 `status === 'failed'` 的任务**从头数到尾**，
+  补打成功也不会把原来那条捞出来。
+
+于是同一个订单，卡上说 `REPRINTED`、顶上说 `failed`——而嗓门大的那个是错的。
+现在两处都走 `latestKitchenJobs()`（每张单最新的后厨任务），只有**仍然是该单最新
+尝试、且仍是 failed** 的任务才进红条。补打成功 → 计数归零；补打在排队 → 算 pending，
+不算 failed；补打也失败 → 红条继续挂着，而且指的是新那张。
+
+测试：`probe_print_flow` 第 10 节（服务端口径：补打后 `counts.failed` 从 2 掉到 1，
+剩下的正是没人补的那张）和 `probe_board_print_ui`（真浏览器里点 Reprint，
+红条自己退回 `Printer ready`）。两处都**故意弄红过一次**才提交。
 
 ### 纸宽 / 切纸 / 总开关
 
@@ -1034,8 +1061,8 @@ printer: {
 
 ```bash
 node _dev/test_printer.js          # 票据版式，逐字节（73 项，无需硬件）
-node _dev/probe_print_flow.js      # 真服务端 + 真代理 + 假打印机（24 项）
-node _dev/probe_board_print_ui.js  # 真浏览器里看标记、点 Reprint / Re-check（29 项）
+node _dev/probe_print_flow.js      # 真服务端 + 真代理 + 假打印机（30 项）
+node _dev/probe_board_print_ui.js  # 真浏览器里看标记、点 Reprint / Re-check（37 项）
 node _dev/probe_guest_defaults.js  # 真浏览器里客人默认落在哪个渠道（14 项）
 ```
 
@@ -1542,8 +1569,8 @@ Stripe 付款后会带客人回到 `?paid=1`（成功）或 `?canceled=1`（放�
 - [x] 后台可手动关掉 Dine-In / Pickup / Delivery 任一渠道（见第四点五节），
       状态落盘到 `store.local.json`，重启与重新发布都不丢
 - [x] **厨房自动打单**功能已完成并在本地测通（见第五点五节）：
-      票据版式 `test_printer` 73 项、端到端 `probe_print_flow` 24 项、
-      看板 UI `probe_board_print_ui` 29 项，全部通过。**不需要真打印机就能测。**
+      票据版式 `test_printer` 73 项、端到端 `probe_print_flow` 30 项、
+      看板 UI `probe_board_print_ui` 37 项，全部通过。**不需要真打印机就能测。**
 - [ ] ⚠️ **会员积分 + 回头券：写完测完，但还没发布**（见第五点八节）。
       `test_loyalty` 197 项 + `probe_loyalty` 85 项全绿，7 个数据文件指纹比对通过。
       发布它需要：确认店主同意 11–15% 的返利比例、店里打印机/打印链路先修好
@@ -1745,7 +1772,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_driver_http` | **司机队列**：钥匙矩阵（没/错/打印钥匙 401，司机与店主 200）、司机只能「送达」、没配 driverKey 就是锁的、坐标存进订单（2026-10-18 新增） | 47 |
 | `probe_giveaway_http` | **LUCKY 66 真服务端**：flag off/on 双服务器、验证信走 outbox、6 争 5 并发验证只成 5、第 201 位礼貌 409、开奖幂等、导出全脱敏、Stripe 桩 0 调用；**奖品真的开成一个能花的余额**（留空自动生成强码、重发 409、磁盘上只有哈希，2026-10-22 新增） | 73 |
 | `probe_credit_http` | **储值码真服务端**：三个计价点金额一致、全额覆盖**桩 Stripe 0 次调用**、部分覆盖 2 次、只在落单时扣一次、`order_owes_money` 拒付、伪造 `paymentStatus` 被打回、取消只退一次且余额回得来、$0 算术推导 verified；**差额另付的完整旅程**——落单时已扣、Stripe 说已付则保持已扣且订单转 verified、Stripe 说没付则取消订单**并把钱退回码上**、重复查不多退（2026-10-22 新增） | 68 |
-| `probe_print_flow` | 真服务端 + 真代理 + 假打印机，整条打印链路（含「打印机失联时理由要写明地址」） | 24 |
+| `probe_print_flow` | 真服务端 + 真代理 + 假打印机，整条打印链路（含「打印机失联时理由要写明地址」「补打成功后红条计数自己消掉」） | 30 |
 | `test_agent_discovery` | 打印代理能不能自己跟上换掉的网站地址 | 27 |
 | `probe_guest_defaults` | **真浏览器**里客人默认落在哪个渠道、渠道关掉后回退到哪 | 14 |
 | `probe_guest_discount` | **真浏览器**里输优惠码/储值码：折扣行、总额、改数量后重新计价、税按折后价算、**储值码扣一部分且显示余额**、与优惠码互斥（拿走储值码优惠码就下去）、移除后恢复原价；**差额用卡付的完整一趟**——页面显示待收 $28.60、跳转 Stripe 桩、票据同时显示「Store credit −$5.00 / left $0.00」和「Pay Online ✓」、客人中途放弃则**储值原样退回**（2026-10-22 扩写） | 47 |
@@ -1754,7 +1781,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_delivery_geo_ui` | **真浏览器**：超距红卡片 + 一键转自取 + 禁用 Place Order、范围内小绿字、查不到只提示不拦（2026-10-18 新增） | 16 |
 | `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |
-| `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因 | 29 |
+| `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因、**补打之后红条退回 ready 且服务端不再数它**（2026-10-23 扩写） | 37 |
 | `probe_driver_ui` | **真浏览器**里的司机页：钥匙门、按顺序的卡片、点 Delivered 卡片消失并重排队号、送完的空状态、Forget this phone（2026-10-18 新增） | 28 |
 | `probe_giveaway_ui` | **真浏览器**里的 LUCKY 66：桌面/移动报名全流程、验证链接回执、营销同意默认不勾且不影响资格、菜单页横幅出现且点单流程完好、后台脱敏、flag off 暗态、零控制台异常（2026-10-20 新增） | 36 |
 | `probe_cancel_settles` | 放弃付款的订单不会留在看板上（真实 Stripe） | 5 |

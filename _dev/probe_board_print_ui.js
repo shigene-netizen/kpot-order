@@ -13,6 +13,9 @@
      * once the agent runs and the ticket comes out, the badge flips to PRINTED
        and the printer line goes green
      * clicking Reprint really queues another ticket
+     * once a failed ticket has been reprinted, the printer line stops
+       reporting it (the shop's complaint: a healed failure stayed red
+       forever, while the order's own badge had already gone green)
      * a card order whose payment is unconfirmed offers "Re-check payment", a
        counter order does NOT, and clicking it really settles the board to PAID
 
@@ -552,6 +555,70 @@ async function main() {
       fs.writeFileSync(out2, Buffer.from(shot2.data, 'base64'));
       console.log('\nscreenshot: ' + out2);
     } catch (e) { console.log('(screenshot skipped: ' + e.message + ')'); }
+
+    /* =====================================================================
+       The printer comes back and staff reprint — the board must stop
+       shouting about a failure that has already been dealt with.
+
+       This is the complaint that produced the change. The shop reprinted the
+       ticket at 19:01 and the order's badge went green, but the printer line
+       still said "2 ticket(s) failed to print" the next morning: the line
+       counted every failed job in history while the badge counted only the
+       latest attempt, and the stale view was the louder one. So the line has
+       to clear when the ticket is reprinted — otherwise staff learn to ignore
+       it, and the next real failure sails past.
+       ===================================================================== */
+    console.log('\n--- the printer is back, staff reprint the ticket ---');
+    /* Same printer object, so `received` keeps counting: a printer that was
+       unreachable and is now back. Retry the bind — a port freed moments ago
+       is not always instantly re-bindable, and a flaky bind here would look
+       exactly like a print failure. */
+    let back = false;
+    for (let i = 0; i < 20 && !back; i++) {
+      try { await printer.listen(PRINTER_PORT, '127.0.0.1'); back = true; } catch (e) { await sleep(250); }
+    }
+    check('the printer is reachable again', back);
+
+    const reprintHeal = await cdp.evalJs(`(() => {
+      const card = document.querySelector('#list .order[data-id="${failNo}"]');
+      const b = card && card.querySelector('button[data-reprint]');
+      if (!b) return 'no button';
+      b.click();
+      return 'clicked';
+    })()`);
+    check('the failed order still offers Reprint', reprintHeal === 'clicked', reprintHeal);
+
+    await cdp.waitFor(
+      'document.querySelector(\'#list .order[data-id="' + failNo + '"] .o-head\') && ' +
+      '/REPRINTED|PRINTED/.test(document.querySelector(\'#list .order[data-id="' + failNo + '"] .o-head\').textContent)',
+      30000, 'the reprinted ticket to come out');
+    const headHeal = await cdp.evalJs('document.querySelector(\'#list .order[data-id="' + failNo + '"] .o-head\').textContent');
+    check('the badge stops saying PRINT FAILED once the reprint comes out',
+      /REPRINTED|PRINTED/.test(headHeal) && !/PRINT FAILED/.test(headHeal), headHeal.trim());
+    check('the reprinted ticket really reached the printer',
+      printer.received.length === 3, 'tickets=' + printer.received.length);
+
+    /* The printer line is refreshed by the board's own poll, so wait for it to
+       catch up rather than reading it the instant the badge flipped. */
+    await cdp.waitFor(
+      '!/failed to print/i.test(document.querySelector("#printerText").textContent || "") && ' +
+      '/ready/i.test(document.querySelector("#printerText").textContent || "")',
+      30000, 'the printer line to stop reporting the healed failure');
+    const line4 = await cdp.evalJs('document.querySelector("#printerText").textContent');
+    check('the printer line no longer reports the reprinted ticket as failed',
+      !/failed to print/i.test(line4), line4);
+    check('and it is green again',
+      /\bok\b/.test(await cdp.evalJs('document.querySelector("#printerLine").className')),
+      await cdp.evalJs('document.querySelector("#printerLine").className'));
+
+    const healed = await fetch(BASE + '/api/print/status', { headers: { 'X-Admin-Key': adminKey() } })
+      .then((r) => r.json()).catch(() => null);
+    check('the server stops counting a reprinted ticket as failed',
+      !!(healed && healed.counts && healed.counts.failed === 0),
+      'counts=' + JSON.stringify(healed && healed.counts));
+    check('and the healed order is gone from the failed list',
+      !((healed && healed.failed) || []).some((j) => j.orderId === failNo),
+      'failed=' + JSON.stringify((healed && healed.failed) || []));
   } catch (e) {
     check('probe ran to completion', false, e.message);
     console.log('\n--- server log (tail) ---\n' + serverLog.split('\n').slice(-20).join('\n'));

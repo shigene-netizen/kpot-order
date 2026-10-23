@@ -20,6 +20,9 @@
      * a wrong print key must print nothing at all
      * a printer that is switched off must NOT be reported as printed
        (otherwise the ticket is lost and nobody knows)
+     * a ticket reprinted after a failure must stop being counted as failed
+       (a board that never stops crying wolf gets ignored, and then the next
+       real failure gets missed too)
 
    Run:  node _dev/probe_print_flow.js
    ========================================================================== */
@@ -375,6 +378,57 @@ async function main() {
     check('and the reason names the address it could not reach',
       !!(timedOut && timedOut.error.indexOf('192.0.2.1:' + PRINTER_PORT) !== -1),
       timedOut && timedOut.error);
+
+    /* ---- 10. a reprinted failure stops being counted -------------------- */
+    /* The shop's actual complaint. Two tickets had failed during a network
+       outage; one of them was reprinted successfully at 19:01 and its badge
+       went green, yet the board still read "2 ticket(s) failed to print" the
+       next morning — the printer line counted every failed job in history,
+       while the per-order badge counted only the latest attempt. A line that
+       never clears teaches staff to ignore it, which is how the next REAL
+       failure gets missed. So a healed failure must drop out of the count. */
+    const good = spawn(process.execPath, [path.join(ROOT, 'print-agent', 'agent.js')], {
+      cwd: ROOT, env: agentEnv, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    good.stdout.on('data', (d) => { agentLog += d.toString(); });
+    good.stderr.on('data', (d) => { agentLog += d.toString(); });
+
+    /* The printer was switched off in section 8. Bring the SAME one back so
+       `received` keeps counting: a printer that was off and is reachable
+       again. Retry the bind — a port freed a moment ago is not always
+       instantly re-bindable, and a flaky bind would masquerade as a failure. */
+    let back = false;
+    for (let i = 0; i < 20 && !back; i++) {
+      try { await printer.listen(PRINTER_PORT, '127.0.0.1'); back = true; } catch (e) { await sleep(250); }
+    }
+    check('the printer is reachable again', back);
+
+    const heal = await jpost('/api/orders/' + encodeURIComponent(no3) + '/reprint', {},
+      { 'X-Admin-Key': adminKey() });
+    check('the timed-out ticket can be reprinted', heal.status === 200 && heal.j && heal.j.ok === true,
+      'status=' + heal.status + ' body=' + JSON.stringify(heal.j));
+    await waitFor(() => printer.received.length >= 3, 20000, 'the reprinted ticket to come out');
+    check('and it really came out of the printer', printer.received.length === 3,
+      'tickets=' + printer.received.length);
+
+    /* Give the server a moment to settle the job, then read the two views
+       that must now agree. */
+    await sleep(1200);
+    const after = await jget('/api/print/status', { 'X-Admin-Key': adminKey() });
+    check('a reprinted ticket is no longer counted as failed',
+      !!(after.j && after.j.counts && after.j.counts.failed === 1),
+      'counts=' + JSON.stringify(after.j && after.j.counts));
+    check('and the only failure left is the one nobody reprinted',
+      !!(after.j && after.j.failed && after.j.failed.length === 1 && after.j.failed[0].orderId === no2),
+      'failed=' + JSON.stringify(after.j && after.j.failed));
+
+    const after3 = await jget('/api/orders', { 'X-Admin-Key': adminKey() });
+    const rec3 = (after3.j && after3.j.orders || []).find((x) => x.id === no3);
+    check('and the order\'s own badge shows the reprint, not the failure',
+      !!(rec3 && rec3.print && rec3.print.status === 'printed' && rec3.print.reprint === true),
+      'print=' + JSON.stringify(rec3 && rec3.print));
+
+    good.kill();
 
     console.log('\n--- agent log (tail) ---');
     console.log(agentLog.split('\n').filter(Boolean).slice(-12).join('\n'));

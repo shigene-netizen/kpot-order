@@ -3053,17 +3053,32 @@ function ackPrintJob(id, ok, error) {
   return { ok: true, status: j.status };
 }
 
+/* Newest kitchen job per order — the attempt that decides what the board shows.
+   Reprints carry the same orderId, so "latest" beats "original": a ticket that
+   failed and was then reprinted must stop showing PRINT FAILED. Both the
+   per-order badge and the printer line read this, so they cannot disagree
+   about the same order. */
+function latestKitchenJobs() {
+  const byOrder = new Map();
+  for (const j of printJobs.values()) {
+    if (String(j.kind || '').indexOf('kitchen') !== 0) continue;
+    const cur = byOrder.get(j.orderId);
+    if (!cur || String(j.at) > String(cur.at)) byOrder.set(j.orderId, j);
+  }
+  return byOrder;
+}
+
+function latestKitchenJob(orderId) {
+  return latestKitchenJobs().get(orderId) || null;
+}
+
 /* What the board shows next to an order. */
 function printStateFor(orderId) {
   /* Report the LATEST attempt for this order, not just the original job.
      A ticket that failed and was then successfully reprinted must stop showing
      "PRINT FAILED" — otherwise staff reprint it forever, or worse, learn to
-     ignore the badge. Reprints carry the same orderId, so pick the newest. */
-  let latest = null;
-  for (const j of printJobs.values()) {
-    if (j.orderId !== orderId || String(j.kind || '').indexOf('kitchen') !== 0) continue;
-    if (!latest || String(j.at) > String(latest.at)) latest = j;
-  }
+     ignore the badge. */
+  const latest = latestKitchenJob(orderId);
   if (!latest) return null;
   return {
     status: latest.status,      // pending | printing | printed | failed
@@ -3143,7 +3158,18 @@ function handlePrintStatus(req, res) {
   const pending = jobs.filter((j) => j.status === 'pending').length;
   const printing = jobs.filter((j) => j.status === 'printing').length;
   const printed = jobs.filter((j) => j.status === 'printed').length;
-  const failed = jobs.filter((j) => j.status === 'failed');
+  /* Only failures that still need a human. Counting every failed job forever is
+     what kept the shop's board red: two tickets had failed during a network
+     outage, one of them was reprinted successfully at 19:01, and the line still
+     read "2 ticket(s) failed to print" the next morning — the per-order badge
+     had already gone green, so the two views disagreed and the stale one was
+     the louder. A failed job whose order has a NEWER kitchen attempt (a
+     reprint, printed or still queued) is history, not work: staff have already
+     acted on it, and the newer job is what counts against the pending/failed
+     numbers. Read through latestKitchenJobs() so the line and the badge use
+     exactly the same rule. */
+  const latestByOrder = latestKitchenJobs();
+  const failed = jobs.filter((j) => j.status === 'failed' && latestByOrder.get(j.orderId) === j);
   const lastPrinted = jobs
     .filter((j) => j.printedAt)
     .sort((a, b) => (a.printedAt < b.printedAt ? 1 : -1))[0];
