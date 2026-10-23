@@ -16,6 +16,7 @@
      * once a failed ticket has been reprinted, the printer line stops
        reporting it (the shop's complaint: a healed failure stayed red
        forever, while the order's own badge had already gone green)
+     * and a cancelled order's failed ticket stops counting too
      * a card order whose payment is unconfirmed offers "Re-check payment", a
        counter order does NOT, and clicking it really settles the board to PAID
 
@@ -619,6 +620,76 @@ async function main() {
     check('and the healed order is gone from the failed list',
       !((healed && healed.failed) || []).some((j) => j.orderId === failNo),
       'failed=' + JSON.stringify((healed && healed.failed) || []));
+
+    /* =====================================================================
+       …and neither is a CANCELLED order's ticket.
+
+       Found on the live board the morning after the reprint fix: the one
+       failure left was KP-261022-004, cancelled 45 seconds after its ticket
+       had failed for good. Printing a dead order into the kitchen makes them
+       cook food nobody ordered, and nobody is ever going to reprint it, so
+       the line has to stop counting that too — otherwise the board is red
+       again tomorrow for a reason that no longer exists.
+       ===================================================================== */
+    console.log('\n--- the failed order is cancelled instead ---');
+    try { if (agent) agent.kill(); } catch (e) {}
+    await sleep(300);
+    await printer.close();                  // unreachable again
+
+    const deadCreated = await jpost('/api/orders', makeOrder(Date.now().toString(36) + 'd'));
+    const deadNo = deadCreated.j && deadCreated.j.id;
+    await jpatch('/api/orders/' + encodeURIComponent(deadNo), { status: 'preparing' },
+      { 'X-Admin-Key': adminKey() });
+
+    agent = spawn(process.execPath, [path.join(ROOT, 'print-agent', 'agent.js')], {
+      cwd: ROOT, env: agentEnv, stdio: ['ignore', 'pipe', 'pipe']
+    });
+    agent.stdout.on('data', (d) => { agentLog += d.toString(); });
+    agent.stderr.on('data', (d) => { agentLog += d.toString(); });
+
+    let deadJob = null;
+    const deadUntil = Date.now() + 30000;
+    while (Date.now() < deadUntil) {
+      const st = await fetch(BASE + '/api/print/status', { headers: { 'X-Admin-Key': adminKey() } })
+        .then((r) => r.json()).catch(() => null);
+      const arr = (st && st.failed) || [];
+      if (arr.length) { deadJob = arr[arr.length - 1]; break; }
+      await sleep(250);
+    }
+    check('the new ticket fails while the printer is unreachable', !!deadJob, JSON.stringify(deadJob));
+
+    await cdp.waitFor('/failed to print/i.test(document.querySelector("#printerText").textContent || "")',
+      30000, 'the board to report the failed print');
+    const line5 = await cdp.evalJs('document.querySelector("#printerText").textContent');
+    check('and the board reports it', /failed to print/i.test(line5), line5);
+
+    /* Staff cancel the order — the same tap they would make when a guest
+       leaves. Nothing about the printer changed. */
+    const cancelled = await jpatch('/api/orders/' + encodeURIComponent(deadNo), { status: 'cancelled' },
+      { 'X-Admin-Key': adminKey() });
+    check('the order can be cancelled', cancelled.status === 200 && cancelled.j && cancelled.j.status === 'cancelled',
+      'status=' + cancelled.status);
+
+    await cdp.waitFor(
+      '!/failed to print/i.test(document.querySelector("#printerText").textContent || "") && ' +
+      '/ready/i.test(document.querySelector("#printerText").textContent || "")',
+      30000, 'the printer line to stop reporting a cancelled order');
+    const line6 = await cdp.evalJs('document.querySelector("#printerText").textContent');
+    check('the printer line stops counting a cancelled order\'s ticket',
+      !/failed to print/i.test(line6), line6);
+    check('and is green again',
+      /\bok\b/.test(await cdp.evalJs('document.querySelector("#printerLine").className')),
+      await cdp.evalJs('document.querySelector("#printerLine").className'));
+
+    const afterCancel = await fetch(BASE + '/api/print/status', { headers: { 'X-Admin-Key': adminKey() } })
+      .then((r) => r.json()).catch(() => null);
+    check('the server agrees: nothing left to print',
+      !!(afterCancel && afterCancel.counts && afterCancel.counts.failed === 0),
+      'counts=' + JSON.stringify(afterCancel && afterCancel.counts));
+    /* The job is still in the history — only the outstanding count changed. */
+    check('but the failed job is still in the history',
+      !!(afterCancel && afterCancel.counts && afterCancel.counts.total >= 4),
+      'counts=' + JSON.stringify(afterCancel && afterCancel.counts));
   } catch (e) {
     check('probe ran to completion', false, e.message);
     console.log('\n--- server log (tail) ---\n' + serverLog.split('\n').slice(-20).join('\n'));

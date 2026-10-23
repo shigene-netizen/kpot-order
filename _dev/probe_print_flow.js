@@ -23,6 +23,7 @@
      * a ticket reprinted after a failure must stop being counted as failed
        (a board that never stops crying wolf gets ignored, and then the next
        real failure gets missed too)
+     * a cancelled order's failed ticket is not outstanding work either
 
    Run:  node _dev/probe_print_flow.js
    ========================================================================== */
@@ -427,6 +428,32 @@ async function main() {
     check('and the order\'s own badge shows the reprint, not the failure',
       !!(rec3 && rec3.print && rec3.print.status === 'printed' && rec3.print.reprint === true),
       'print=' + JSON.stringify(rec3 && rec3.print));
+
+    /* ---- 11. a cancelled order's ticket is not outstanding work --------- */
+    /* The second half of the shop's complaint, found on the live board after
+       the reprint fix: the one failure left was KP-261022-004, whose order had
+       been cancelled 45 seconds after the ticket failed for good. Printing a
+       dead order into the kitchen makes them cook food nobody ordered, and
+       nobody will ever reprint it — so the line must stop counting it too.
+       A COMPLETED order's failure is deliberately NOT excused: the food is out,
+       but the ticket really never printed, and that is worth knowing. */
+    const cancelled = await jpatch('/api/orders/' + encodeURIComponent(no2), { status: 'cancelled' },
+      { 'X-Admin-Key': adminKey() });
+    check('the unreprinted order can be cancelled',
+      cancelled.status === 200 && cancelled.j && cancelled.j.status === 'cancelled',
+      'status=' + cancelled.status + ' body=' + JSON.stringify(cancelled.j));
+
+    await sleep(600);
+    const gone = await jget('/api/print/status', { 'X-Admin-Key': adminKey() });
+    check('a cancelled order\'s failed ticket stops counting',
+      !!(gone.j && gone.j.counts && gone.j.counts.failed === 0),
+      'counts=' + JSON.stringify(gone.j && gone.j.counts));
+    check('and the failed list is empty',
+      !!(gone.j && Array.isArray(gone.j.failed) && gone.j.failed.length === 0),
+      'failed=' + JSON.stringify(gone.j && gone.j.failed));
+    /* The history is still there — only the *outstanding* count changed. */
+    check('the history is still counted in total',
+      !!(gone.j && gone.j.counts.total >= 5), 'counts=' + JSON.stringify(gone.j && gone.j.counts));
 
     good.kill();
 

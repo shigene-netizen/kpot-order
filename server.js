@@ -3072,6 +3072,27 @@ function latestKitchenJob(orderId) {
   return latestKitchenJobs().get(orderId) || null;
 }
 
+/* Is a failed kitchen ticket still outstanding work — i.e. does a human need to
+   produce that paper? Two things take a failure off the list, and both mean
+   "nobody needs this ticket any more":
+     - it was REPRINTED afterwards (latestKitchenJobs above), or
+     - the order was CANCELLED. Printing a dead order into the kitchen makes
+       them cook food nobody ordered, and nobody is ever going to reprint it,
+       so without this the line stays red for it forever. (Live case:
+       KP-261022-004's ticket failed during the 2026-10-22 outage and the order
+       was cancelled 45 seconds later — the board kept counting it the next
+       morning.)
+
+   A COMPLETED order's failure deliberately stays on the list. The food is out,
+   but the ticket really never printed and that is worth the owner knowing; the
+   Reprint button is still on the card if they want the paper. */
+function failedJobOutstanding(job) {
+  const o = orders.get(job.orderId);
+  /* Order no longer on the board — do not hide a failure on a technicality. */
+  if (!o) return true;
+  return o.status !== 'cancelled';
+}
+
 /* What the board shows next to an order. */
 function printStateFor(orderId) {
   /* Report the LATEST attempt for this order, not just the original job.
@@ -3169,7 +3190,8 @@ function handlePrintStatus(req, res) {
      numbers. Read through latestKitchenJobs() so the line and the badge use
      exactly the same rule. */
   const latestByOrder = latestKitchenJobs();
-  const failed = jobs.filter((j) => j.status === 'failed' && latestByOrder.get(j.orderId) === j);
+  const failed = jobs.filter((j) => j.status === 'failed' &&
+    latestByOrder.get(j.orderId) === j && failedJobOutstanding(j));
   const lastPrinted = jobs
     .filter((j) => j.printedAt)
     .sort((a, b) => (a.printedAt < b.printedAt ? 1 : -1))[0];
