@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPOT To Go — counter card</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #555; font-family: "Helvetica Neue", Arial, sans-serif;
+       -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.sheet { background: #FFFFFF; margin: 16px auto; box-shadow: 0 6px 24px rgba(0,0,0,.35);
+         position: relative; overflow: hidden; }
+.bar { background: #D7263D; color: #FFFFFF; font-weight: 800; letter-spacing: .14em; }
+.h1 { font-weight: 900; line-height: .95; margin: 0; }
+.h2 { font-weight: 800; margin: 0; }
+.mut { color: #6b6560; }
+.gold { color: #E2B44A; }
+.red { color: #D7263D; }
+.rule { height: 6px; background: #D7263D; }
+.qr { background: #FFFFFF; padding: 14px; border-radius: 18px; display: inline-block; }
+.qr img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.pill { display: inline-block; background: #D7263D; color: #FFFFFF; font-weight: 800;
+        padding: .35em .9em; border-radius: 999px; letter-spacing: .06em; }
+.foot { background: #111014; color: #F7F1E6; }
+.note { color: #ddd; font: 12px/1.5 monospace; text-align: center; padding: 6px; }
+@media print {
+  body { background: #fff; }
+  .sheet { margin: 0; box-shadow: none; }
+  .note { display: none; }
+  @page { margin: 0; }
+}
+
+.sheet { width: 8.5in; min-height: 8.5in; }
+</style></head>
+<body>
+<div class="sheet">
+
+<div style="display:flex;min-height:8.5in">
+  <div style="flex:1.15;padding:.45in .4in">
+    <div class="h1" style="font-size:.72in;color:#D7263D">KPOT<br>TO GO</div>
+    <div class="rule" style="width:1.6in;margin:.22in 0"></div>
+    <div class="h2" style="font-size:.3in;line-height:1.15">SKIP THE LINE</div>
+    <div style="font-size:.21in;margin-top:.14in;line-height:1.5">
+      Order and pay on your phone while you wait.<br>
+      We will call your name.
+    </div>
+    <div style="margin-top:.3in">
+      <span class="pill" style="font-size:.22in">FIRST ORDER 10% OFF</span>
+    </div>
+    <div style="margin-top:.18in;font-size:.2in" class="mut">
+      Use code <b style="color:#D7263D">KPOTEXJ01</b> at checkout
+    </div>
+    <div style="position:absolute;bottom:.4in;left:.4in;font-size:.19in" class="mut">
+      (678) 335-5388<br>Sun–Thu 12:00–9:30  ·  Fri–Sat 12:00–10:30
+    </div>
+  </div>
+  <div style="flex:.85;background:#D7263D;color:#FFFFFF;padding:.45in .3in;text-align:center">
+    <div style="font-weight:800;letter-spacing:.14em;font-size:.2in">SCAN TO<br>ORDER &amp; PAY</div>
+    <div class="qr" style="width:2.3in;margin:.3in auto 0"><img src="data:image/png;base64,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" alt="QR code"></div>
+    <div style="font-size:.18in;margin-top:.25in;opacity:.9">point your camera<br>at the code</div>
+  </div>
+</div>
+
+</div>
+<div class="note">print this page · the QR already points at https://order.kpotexpress.com with its own ?src=</div>
+</body></html>

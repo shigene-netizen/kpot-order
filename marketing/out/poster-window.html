@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPOT To Go — window poster</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #555; font-family: "Helvetica Neue", Arial, sans-serif;
+       -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.sheet { background: #FFFFFF; margin: 16px auto; box-shadow: 0 6px 24px rgba(0,0,0,.35);
+         position: relative; overflow: hidden; }
+.bar { background: #D7263D; color: #FFFFFF; font-weight: 800; letter-spacing: .14em; }
+.h1 { font-weight: 900; line-height: .95; margin: 0; }
+.h2 { font-weight: 800; margin: 0; }
+.mut { color: #6b6560; }
+.gold { color: #E2B44A; }
+.red { color: #D7263D; }
+.rule { height: 6px; background: #D7263D; }
+.qr { background: #FFFFFF; padding: 14px; border-radius: 18px; display: inline-block; }
+.qr img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.pill { display: inline-block; background: #D7263D; color: #FFFFFF; font-weight: 800;
+        padding: .35em .9em; border-radius: 999px; letter-spacing: .06em; }
+.foot { background: #111014; color: #F7F1E6; }
+.note { color: #ddd; font: 12px/1.5 monospace; text-align: center; padding: 6px; }
+@media print {
+  body { background: #fff; }
+  .sheet { margin: 0; box-shadow: none; }
+  .note { display: none; }
+  @page { margin: 0; }
+}
+
+.sheet { width: 8.5in; min-height: 11in; }
+</style></head>
+<body>
+<div class="sheet">
+
+<div class="bar" style="padding:.3in 0;text-align:center;font-size:.3in">SCAN · ORDER · PAY</div>
+<div style="text-align:center;padding:.5in 0 0">
+  <div class="h1" style="font-size:1.05in;color:#D7263D">KPOT TO GO</div>
+  <div class="h2" style="font-size:.34in;margin-top:.14in;letter-spacing:.16em">Hot Pot To Go  ·  BBQ To Go  ·  Boba</div>
+</div>
+<div style="text-align:center;margin-top:.4in">
+  <span class="pill" style="font-size:.3in">BUILD YOUR OWN BOWL &nbsp;$15.99</span>
+</div>
+<div style="display:flex;justify-content:center;gap:.3in;margin-top:.35in;text-align:center">
+  <div><div class="h2" style="font-size:.3in">FREE DELIVERY</div><div class="mut" style="font-size:.19in">within 2 miles</div></div>
+  <div><div class="h2" style="font-size:.3in">READY IN ~20 MIN</div><div class="mut" style="font-size:.19in">order ahead, skip the line</div></div>
+</div>
+
+<div style="text-align:center;margin-top:.3in">
+  <div class="qr" style="width:2.9in"><img src="data:image/png;base64,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" alt="QR code"></div>
+  <div class="h2" style="font-size:.34in;margin-top:.18in;letter-spacing:.04em">SCAN TO ORDER & PAY</div>
+  <div class="mut" style="font-size:.2in;margin-top:.06in">point your camera at the code</div>
+</div>
+<div style="text-align:center;margin-top:.4in">
+  <div class="h2" style="font-size:.26in">(678) 335-5388</div>
+  <div class="mut" style="font-size:.19in;margin-top:.06in">2955 Cobb Pkwy SE, Suite 830, Atlanta, GA 30339</div>
+  <div class="mut" style="font-size:.19in">Sun–Thu 12:00–9:30  ·  Fri–Sat 12:00–10:30</div>
+</div>
+<div class="foot" style="position:absolute;left:0;right:0;bottom:0;padding:.18in 0;text-align:center;font-weight:700;letter-spacing:.08em">ORDER ONLINE  ·  PAY ON YOUR PHONE  ·  SKIP THE LINE</div>
+
+</div>
+<div class="note">print this page · the QR already points at https://order.kpotexpress.com with its own ?src=</div>
+</body></html>

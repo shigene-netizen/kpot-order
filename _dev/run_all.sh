@@ -167,6 +167,7 @@ run probe_prepay_pay_ui    _dev/probe_prepay_pay_ui.js
 run probe_delivery_geo_ui  _dev/probe_delivery_geo_ui.js
 run probe_loyalty_ui       _dev/probe_loyalty_ui.js
 run probe_button_fx        _dev/probe_button_fx.js
+run probe_source_tracking  _dev/probe_source_tracking.js
 run probe_board_print_ui   _dev/probe_board_print_ui.js
 run probe_driver_ui        _dev/probe_driver_ui.js
 run probe_giveaway_ui      _dev/probe_giveaway_ui.js

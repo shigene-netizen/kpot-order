@@ -1293,7 +1293,7 @@ function saveOrdersNowSafe() {
 const CSV_COLUMNS = [
   'id', 'at', 'updatedAt', 'status', 'paymentStatus', 'payMethod', 'orderType',
   'table', 'customerName', 'customerPhone', 'subtotal', 'tax', 'tip',
-  'delivery', 'total', 'itemsSummary'
+  'delivery', 'total', 'source', 'itemsSummary'
 ];
 
 function csvCell(v) {
@@ -1324,6 +1324,10 @@ function orderToRow(o) {
   return [
     o.id, o.at, o.updatedAt, o.status, o.paymentStatus, o.payMethod, o.orderType,
     o.table, c.name, c.phone, o.subtotal, o.tax, o.tip, o.delivery, o.total,
+    /* Which poster / flyer / campaign brought this order in. The owner needs it
+       in the spreadsheet, not just in the JSON, or "did the window poster pay
+       for itself?" is a question nobody can answer. */
+    o.source || 'storefront',
     summariseItems(o)
   ];
 }

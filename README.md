@@ -1370,8 +1370,12 @@ CSV 的列固定为：
 
 ```
 id, at, updatedAt, status, paymentStatus, payMethod, orderType, table,
-customerName, customerPhone, subtotal, tax, tip, delivery, total, itemsSummary
+customerName, customerPhone, subtotal, tax, tip, delivery, total, source, itemsSummary
 ```
+
+`source` 是**这张订单从哪来**（2026-10-23 加）：海报/传单/社交平台的 QR 各带自己的
+`?src=`，直接打开网站没带参数的记 `storefront`。按这一列透视就知道哪张物料在出单——
+详见「六点五、推广」。
 
 `itemsSummary` 把每道菜压成一行，例如 `2x BBQ To Go (2 Meats) [Pork Belly, Beef Brisket]; 1x Thai Tea`。
 
@@ -1456,6 +1460,41 @@ python make_qr.py https://你的网址.com/
 改桌号数量：编辑 `make_qr.py` 里的 `TABLES = range(1, 13)`。
 
 也可以直接打开 `admin.html`，在网页上实时生成、下载 PNG / SVG、批量打印桌卡。
+
+---
+
+## 六点五、推广（把客人找过来）
+
+`marketing/` 是整套推广物料，**2026-10-23 建**：
+
+```bash
+python marketing/make_posters.py https://order.kpotexpress.com/
+# → marketing/out/ 下 5 张自带 QR 的 HTML，浏览器打开 → Ctrl+P 打印
+```
+
+| 文件 | 内容 |
+|---|---|
+| `marketing/README.md` | **30 天推广计划**（先做哪个、每步多久、三档预算） |
+| `marketing/google-business.md` | Google 商家资料全套文案（名称/分类/描述/属性/菜单/照片清单/帖子/评价计划） |
+| `marketing/social-kit.md` | 30 天社交内容日历 + 每篇写好的英文文案 |
+| `marketing/ads.md` | Google Ads + Meta Ads 起步投放结构、关键词、预算、文案 |
+| `marketing/outreach.md` | 博主 DM / 媒体投稿 / 写字楼扫楼 / 要评价的话术模板 |
+
+### 订单带 `source`：哪张海报出单，导出一看就知道
+
+每张印刷物料的 QR 都带自己的 `?src=`（`window-poster` / `counter-card` /
+`table-tent` / `door-flyer` / `instagram` / `google`…），订单会记下来，
+**CSV 导出里有一列 `source`**（`orderToRow()`，2026-10-23 加）。
+客人直接打开网站、没带 src 的记 `storefront`。
+
+所以「窗贴到底有没有用」是个能回答的问题：后台导出 CSV，按 `source` 透视一下。
+给社交平台 Bio 的链接也照此办理，例如
+`https://order.kpotexpress.com/?src=instagram`。
+
+客户端 `orderSource()`（`assets/app.js`）把 `?src=` 收窄成 `[a-z0-9_-]`、
+折叠成单个连字符、上限 24 字符——URL 是用户输入，而它会进店主的表格，
+所以 `Window Poster! <b>` 变成 `window-poster-b`，不是原文。
+测试：`_dev/probe_source_tracking.js`（真浏览器走完整下单流程）。
 
 ---
 
@@ -1745,7 +1784,7 @@ bash _dev/run_all.sh
 STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 ```
 
-当前 **50 个套件，全绿**（下表 46 个 + 4 个后台页面的语法检查）：
+当前 **51 个套件，全绿**（下表 47 个 + 4 个后台页面的语法检查）：
 
 | 套件 | 覆盖 | 项数 |
 |---|---|---|
@@ -1792,6 +1831,7 @@ STRIPE_TEST_KEY=sk_test_xxx bash _dev/run_all.sh
 | `probe_delivery_geo_ui` | **真浏览器**：超距红卡片 + 一键转自取 + 禁用 Place Order、范围内小绿字、查不到只提示不拦（2026-10-18 新增） | 16 |
 | `probe_loyalty_ui` | **真浏览器**：积分/盖章面板的每一种状态与点击 | 27 |
 | `probe_button_fx` | **真浏览器**点真按钮：加购闪绿、角标弹跳、提交期间禁用、**连点只落一单** | 21 |
+| `probe_source_tracking` | **真浏览器**验证推广溯源：海报 QR 的 `?src=` 一路到订单、CSV 有 `source` 列、恶意 `?src=` 被收窄成安全 token、没带 src 的记 `storefront`（2026-10-23 新增） | 12 |
 | `probe_board_print_ui` | **真浏览器**里看标记、点 Reprint / Re-check、打印失败的红条要写明原因、**补打或取消之后红条退回 ready 且服务端不再数它**（2026-10-23 扩写） | 44 |
 | `probe_driver_ui` | **真浏览器**里的司机页：钥匙门、按顺序的卡片、点 Delivered 卡片消失并重排队号、送完的空状态、Forget this phone（2026-10-18 新增） | 28 |
 | `probe_giveaway_ui` | **真浏览器**里的 LUCKY 66：桌面/移动报名全流程、验证链接回执、营销同意默认不勾且不影响资格、菜单页横幅出现且点单流程完好、后台脱敏、flag off 暗态、零控制台异常（2026-10-20 新增） | 36 |

@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPOT To Go — door flyer</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #555; font-family: "Helvetica Neue", Arial, sans-serif;
+       -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.sheet { background: #FFFFFF; margin: 16px auto; box-shadow: 0 6px 24px rgba(0,0,0,.35);
+         position: relative; overflow: hidden; }
+.bar { background: #D7263D; color: #FFFFFF; font-weight: 800; letter-spacing: .14em; }
+.h1 { font-weight: 900; line-height: .95; margin: 0; }
+.h2 { font-weight: 800; margin: 0; }
+.mut { color: #6b6560; }
+.gold { color: #E2B44A; }
+.red { color: #D7263D; }
+.rule { height: 6px; background: #D7263D; }
+.qr { background: #FFFFFF; padding: 14px; border-radius: 18px; display: inline-block; }
+.qr img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+.pill { display: inline-block; background: #D7263D; color: #FFFFFF; font-weight: 800;
+        padding: .35em .9em; border-radius: 999px; letter-spacing: .06em; }
+.foot { background: #111014; color: #F7F1E6; }
+.note { color: #ddd; font: 12px/1.5 monospace; text-align: center; padding: 6px; }
+@media print {
+  body { background: #fff; }
+  .sheet { margin: 0; box-shadow: none; }
+  .note { display: none; }
+  @page { margin: 0; }
+}
+
+.sheet { width: 8.5in; min-height: 11in; }
+</style></head>
+<body>
+<div class="sheet">
+
+<div class="bar" style="padding:.26in 0;text-align:center;font-size:.26in">NEW IN THE NEIGHBORHOOD</div>
+<div style="text-align:center;padding:.4in 0 0">
+  <div class="h1" style="font-size:.95in;color:#D7263D">KPOT TO GO</div>
+  <div class="h2" style="font-size:.26in;letter-spacing:.14em;margin-top:.12in">Hot Pot To Go  ·  BBQ To Go  ·  Boba</div>
+</div>
+<div style="display:flex;gap:.3in;padding:.35in .5in 0">
+  <div style="flex:1;background:#F7F1E6;border-radius:14px;padding:.24in;text-align:center">
+    <div style="font-size:.4in">🍲</div>
+    <div class="h2" style="font-size:.23in;margin-top:.08in">HOT POT TO GO</div>
+    <div class="mut" style="font-size:.18in;margin-top:.06in">Build Your Own Bowl<br><b>$15.99</b></div>
+  </div>
+  <div style="flex:1;background:#F7F1E6;border-radius:14px;padding:.24in;text-align:center">
+    <div style="font-size:.4in">🥩</div>
+    <div class="h2" style="font-size:.23in;margin-top:.08in">BBQ TO GO</div>
+    <div class="mut" style="font-size:.18in;margin-top:.06in">Protein bowls<br><b>from $12.99</b></div>
+  </div>
+  <div style="flex:1;background:#F7F1E6;border-radius:14px;padding:.24in;text-align:center">
+    <div style="font-size:.4in">🧋</div>
+    <div class="h2" style="font-size:.23in;margin-top:.08in">BOBA &amp; MORE</div>
+    <div class="mut" style="font-size:.18in;margin-top:.06in">Milk teas, fruit teas<br><b>from $4.50</b></div>
+  </div>
+</div>
+<div style="text-align:center;margin-top:.3in">
+  <span class="pill" style="font-size:.24in">FREE DELIVERY WITHIN 2 MILES</span>
+  &nbsp;
+  <span class="pill" style="font-size:.24in;background:#111014">10% OFF YOUR FIRST ORDER</span>
+</div>
+
+<div style="text-align:center;margin-top:.3in">
+  <div class="qr" style="width:2.4in"><img src="data:image/png;base64,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" alt="QR code"></div>
+  <div class="h2" style="font-size:.34in;margin-top:.18in;letter-spacing:.04em">SCAN TO ORDER</div>
+  <div class="mut" style="font-size:.2in;margin-top:.06in">point your camera at the code</div>
+</div>
+<div style="text-align:center;margin-top:.3in;font-size:.21in;line-height:1.6">
+  <b>(678) 335-5388</b><br>
+  <span class="mut">2955 Cobb Pkwy SE, Suite 830, Atlanta, GA 30339</span><br>
+  <span class="mut">Sun–Thu 12:00–9:30  ·  Fri–Sat 12:00–10:30</span>
+</div>
+<div class="foot" style="position:absolute;left:0;right:0;bottom:0;padding:.18in 0;text-align:center;font-weight:700;letter-spacing:.08em">ORDER ONLINE  ·  order.kpotexpress.com</div>
+
+</div>
+<div class="note">print this page · the QR already points at https://order.kpotexpress.com with its own ?src=</div>
+</body></html>

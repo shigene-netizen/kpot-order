@@ -2617,6 +2617,29 @@
     return 'tk-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   }
 
+  /* Which piece of marketing brought this guest in, from ?src= on the URL.
+     Every printed QR code carries its own value, so the owner can compare
+     "window poster" against "door hanger" against "table 7" in the order
+     export instead of guessing which one paid for itself.
+
+     Deliberately narrow: lower-cased, runs of anything outside [a-z0-9_-]
+     collapsed to a single hyphen, trimmed and capped, so a hand-typed or
+     hostile URL cannot put free text — or markup — into the owner's
+     spreadsheet or the kitchen ticket. "Window Poster! <b>" becomes
+     "window-poster-b", which is still readable in a column of orders.
+     Returns '' when there is nothing to report — the server then stores its
+     own default, 'storefront'. */
+  function orderSource() {
+    try {
+      const v = new URLSearchParams(window.location.search).get('src');
+      if (!v) return '';
+      return String(v).toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 24);
+    } catch (e) { return ''; }
+  }
+
   /* Resolve no later than `ms`, even if the promise never settles. A hung
      request must never trap the guest on the checkout screen or the redirect. */
   function withTimeout(promise, ms) {
@@ -2750,6 +2773,12 @@
       discountAmount: discountAmount(),
       discountCode: state.discountCode || '',
       discountLabel: state.discountLabel || '',
+      /* Where this order came from. Every printed QR, flyer and table tent
+         carries its own ?src=, so the owner can tell "window poster" from
+         "door hanger" from "table 7" instead of guessing which one produced
+         orders — the server already stores `source`, and it lands in the CSV
+         export. Deliberately a short safe token, never free text. */
+      source: orderSource(),
       payMethod: state.payMethod,
       /* Explicit, never inferred later. 'counter' = nothing owed online yet.
          Online methods start unconfirmed until the server checks with Stripe. */
