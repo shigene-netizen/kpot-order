@@ -11,17 +11,24 @@
 <link rel="stylesheet" href="assets/styles.css">
 <style>
   .wrap{max-width:680px;margin:0 auto;padding:12px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+  .card{background:linear-gradient(180deg,#1f1f26,#14141a);border:1px solid var(--line);border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  .hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:18px}
+  .hero-ava{width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff3,#0000),linear-gradient(180deg,#d7263d,#8f1728);display:flex;align-items:center;justify-content:center;font-weight:900;font-size:28px;border:1px solid rgba(255,255,255,.18)}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .row input{flex:1;min-width:160px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
-  .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:linear-gradient(180deg,#2a2a33,#1a1a22);color:var(--text);cursor:pointer}
-  .btn.primary{background:linear-gradient(180deg,#d7263d,#b71f33);border-color:#d7263d}
+  .row input{flex:1;min-width:160px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:15px}
+  .btn{padding:12px 16px;border-radius:999px;border:1px solid var(--line);background:linear-gradient(180deg,#2a2a33,#1a1a22);color:var(--text);cursor:pointer}
+  .btn.primary{background:linear-gradient(180deg,#d7263d,#b71f33);border-color:#d7263d;font-weight:700}
   .muted{color:var(--dim)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .stat{border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center;background:linear-gradient(180deg,#23232b,#17171d)}
+  .stat-num{font-size:28px;font-weight:900}
+  .tabs{display:flex;gap:8px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:999px;padding:6px}
+  .tab{flex:1;text-align:center;padding:10px;border-radius:999px;cursor:pointer}
+  .tab.active{background:linear-gradient(180deg,#d7263d,#b71f33)}
   .list{display:flex;flex-direction:column;gap:10px}
-  .item{display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#1f1f26,#14141a)}
-  .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px}
+  .item{display:flex;justify-content:space-between;align-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#212129,#15151b)}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px}
   .ok{color:#6ee787}
-  .bad{color:#ff6b6b}
 </style>
 </head>
 <body>
@@ -38,36 +45,45 @@
   </header>
 
   <main class="wrap">
-    <section class="card">
-      <div class="section-label">Sign in to view rewards</div>
+    <section class="card" id="loginCard">
+      <div class="hero">
+        <div class="hero-ava">K</div>
+        <div style="font-size:22px;font-weight:900">My Rewards</div>
+        <div class="muted">Sign in with your phone number or verified email to view points & rewards</div>
+      </div>
       <div class="row">
-        <input id="loginId" placeholder="Phone number (e.g. 6783355388) or email">
-        <button class="btn primary" id="loginBtn">Sign in</button>
+        <input id="loginId" placeholder="Phone number or verified email">
+        <button class="btn primary" id="loginBtn">Sign In</button>
       </div>
-      <div class="muted" style="margin-top:6px">Email requires verification. Phone uses the same number on file.</div>
-      <div id="loginMsg" class="muted" style="margin-top:6px"></div>
+      <div class="muted" style="margin-top:8px;text-align:center">Email requires verification.</div>
+      <div id="loginMsg" class="muted" style="margin-top:8px;text-align:center"></div>
     </section>
 
-    <section class="card" id="profile" hidden>
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <div style="font-weight:700" id="profName">-</div>
-          <div class="muted" id="profContact">-</div>
+    <section id="dash" hidden>
+      <section class="card hero">
+        <div class="hero-ava" id="ava">K</div>
+        <div style="font-size:20px;font-weight:800" id="profName">-</div>
+        <div class="muted" id="profContact">-</div>
+        <div class="grid2" style="width:100%;margin-top:10px">
+          <div class="stat"><div class="stat-num" id="profPoints">0</div><div class="muted">Points</div></div>
+          <div class="stat"><div class="stat-num" id="profCoupons">0</div><div class="muted">Available Rewards</div></div>
         </div>
-        <div class="pill">Points <b id="profPoints">0</b></div>
-      </div>
-    </section>
+      </section>
 
-    <section class="card" id="rewards" hidden>
-      <div class="section-label">Available Rewards</div>
-      <div class="list" id="rewardsList"></div>
-      <div id="rewardsEmpty" class="muted" hidden>No rewards yet.</div>
-    </section>
-
-    <section class="card" id="history" hidden>
-      <div class="section-label">Rewards History</div>
-      <div class="list" id="historyList"></div>
-      <div id="historyEmpty" class="muted" hidden>No history yet.</div>
+      <section class="card">
+        <div class="tabs">
+          <div class="tab active" data-tab="rewards">Available</div>
+          <div class="tab" data-tab="history">History</div>
+        </div>
+        <div style="margin-top:12px" id="tabRewards">
+          <div class="list" id="rewardsList"></div>
+          <div id="rewardsEmpty" class="muted" style="text-align:center;padding:16px" hidden>No rewards available yet.</div>
+        </div>
+        <div style="margin-top:12px;display:none" id="tabHistory">
+          <div class="list" id="historyList"></div>
+          <div id="historyEmpty" class="muted" style="text-align:center;padding:16px" hidden>No history yet.</div>
+        </div>
+      </section>
     </section>
   </main>
 
@@ -122,21 +138,32 @@ function toast(m){const w=$('#toasts');const t=document.createElement('div');t.c
   }catch(e){ $('#loginMsg').textContent='Lookup failed'; }
 };
 
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const tab=t.dataset.tab;
+    document.getElementById('tabRewards').style.display = tab==='rewards'?'block':'none';
+    document.getElementById('tabHistory').style.display = tab==='history'?'block':'none';
+  };
+});
+
 function show(j, phone){
   $('#loginMsg').textContent='';
-  $('#profile').hidden=false;
-  $('#rewards').hidden=false;
-  $('#history').hidden=false;
-  $('#profName').textContent = j.name || '-';
-  $('#profContact').textContent = phone ? ('+'+1+' '+phone.replace(/(\d{3})(\d{3})(\d{4})/,'($1) $2-$3')) : (j.email||'-');
+  $('#loginCard').hidden=true;
+  $('#dash').hidden=false;
+  $('#ava').textContent = (j.name||'K').trim().charAt(0).toUpperCase();
+  $('#profName').textContent = j.name || 'Member';
+  $('#profContact').textContent = phone ? phone.replace(/(\d{3})(\d{3})(\d{4})/,'($1) $2-$3') : (j.email||'-');
   $('#profPoints').textContent = j.points||0;
 
   const rl = $('#rewardsList'); rl.innerHTML='';
   const coupons = (j.coupons||[]).filter(c=>!c.usedAt && !c.expired);
+  $('#profCoupons').textContent = coupons.length;
   if(coupons.length===0) $('#rewardsEmpty').hidden=false; else $('#rewardsEmpty').hidden=true;
   for(const c of coupons){
     const d = document.createElement('div'); d.className='item';
-    d.innerHTML = '<div><div style="font-weight:700">$'+(c.value||0).toFixed(2)+' '+(c.label||c.kind||'Reward')+'</div><div class="muted">Expires: '+(c.expiresAt?new Date(c.expiresAt).toLocaleDateString():'never')+'</div></div><span class="pill ok">Available</span>';
+    d.innerHTML = '<div><div style="font-weight:700">$'+(Number(c.value)||0).toFixed(2)+' '+(c.label||c.kind||'Reward')+'</div><div class="muted">'+(c.expiresAt?'Expires '+new Date(c.expiresAt).toLocaleDateString():'No expiration')+'</div></div><span class="pill ok">Available</span>';
     rl.appendChild(d);
   }
 
@@ -145,7 +172,7 @@ function show(j, phone){
   if(log.length===0) $('#historyEmpty').hidden=false; else $('#historyEmpty').hidden=true;
   for(const e of log){
     const d = document.createElement('div'); d.className='item';
-    d.innerHTML = '<div><div>'+(e.note||e.kind)+'</div><div class="muted">'+(e.at?new Date(e.at).toLocaleString():'')+'</div></div><span class="pill">'+(e.delta>0?'+':'')+e.delta+'</span>';
+    d.innerHTML = '<div><div>'+(e.note||e.kind||'Activity')+'</div><div class="muted">'+(e.at?new Date(e.at).toLocaleString():'')+'</div></div><span class="pill">'+(e.delta>0?'+':'')+e.delta+' pts</span>';
     hl.appendChild(d);
   }
 }
