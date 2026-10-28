@@ -4229,6 +4229,10 @@ function handleListCustomers(req, res, url) {
         settledOrders: c.settledOrders,
         stampsIssued: c.stampsIssued,
         unusedCoupons: (c.coupons || []).filter((x) => L.isUsable(x, now)).length,
+        /* Full coupon list — the live "Rewards History" panel groups every
+           issued reward by kind and marks it USED once redeemed. The list view
+           used to strip coupons, which left that panel permanently empty. */
+        coupons: (c.coupons || []),
         lastSeenAt: c.lastSeenAt,
         /* Membership, so the console can show "member until …" and offer the
            renew/cancel buttons without a second round trip. */
