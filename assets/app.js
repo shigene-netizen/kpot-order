@@ -3249,7 +3249,9 @@
     const n = arr.filter((o) => ACTIVE_STATUSES.indexOf(o.status) >= 0).length;
     const badge = $('#histBadge');
     if (badge) {
-      badge.textContent = n;
+      /* Dot only — the cart button already carries the count, so a second
+         number here just reads as a duplicate "1" next to it. */
+      badge.textContent = '';
       badge.classList.toggle('on', n > 0);
     }
   }
