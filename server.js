@@ -2877,7 +2877,7 @@ async function handleUpdateOrder(req, res, id) {
             if (c) earned.push({ label: c.label || c.kind || 'Reward', value: c.value });
           }
         }
-        if (o.discount && o.discount.source === 'welcome') earned.push({ label: 'First-time 10% off (used)', value: o.discountAmount || 0 });
+        if (o.discount && o.discount.source === 'welcome') earned.push({ label: 'First-time $3 off (used)', value: o.discountAmount || 0 });
         if (o.credit && o.credit.applied) earned.push({ label: 'Store credit used', value: o.credit.applied });
         MAIL.sendRewardsEarned({ to, orderId: o.id, earned, storeName: (ASSETS.CONFIG && ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go', myRewardsUrl: (ASSETS.CONFIG && ASSETS.CONFIG.siteUrl ? ASSETS.CONFIG.siteUrl.replace(/\/$/,'') : 'https://order.kpotexpress.com') + '/my-rewards.html' });
       }
@@ -3778,8 +3778,8 @@ function isFirstTimeCustomer(phone, exceptToken) {
 function resolveFirstTime(body, basePriced) {
   const cfg = (ASSETS.CONFIG && ASSETS.CONFIG.firstVisit) || {};
   if (cfg.enabled === false) return { none: true };
-  const pct = Number(cfg.percent);
-  if (!isFinite(pct) || pct <= 0) return { none: true };
+  const amt = Number(cfg.amount);
+  if (!isFinite(amt) || amt <= 0) return { none: true };
 
   const phone = L.normalizePhone((body.customer || {}).phone);
   if (!phone) return { none: true }; // cannot identify -> no auto discount
@@ -3791,10 +3791,10 @@ function resolveFirstTime(body, basePriced) {
   if (min > 0 && Number(basePriced.subtotal) < min) return { none: true };
 
   const discount = {
-    type: 'percent',
-    value: pct,
+    type: 'amount',
+    value: amt,
     code: '',
-    label: String(cfg.label || '').slice(0, 60) || ('First-time guest — ' + pct + '% off'),
+    label: String(cfg.label || '').slice(0, 60) || ('First-time guest — $' + amt + ' off'),
     source: 'welcome'
   };
   if (discountAmountFor(basePriced, discount) <= 0) return { none: true };

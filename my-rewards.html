@@ -163,7 +163,8 @@ function show(j, phone){
   if(coupons.length===0) $('#rewardsEmpty').hidden=false; else $('#rewardsEmpty').hidden=true;
   for(const c of coupons){
     const d = document.createElement('div'); d.className='item';
-    d.innerHTML = '<div><div style="font-weight:700">$'+(Number(c.value)||0).toFixed(2)+' '+(c.label||c.kind||'Reward')+'</div><div class="muted">'+(c.expiresAt?'Expires '+new Date(c.expiresAt).toLocaleDateString():'No expiration')+'</div></div><span class="pill ok">Available</span>';
+    const amt = c.type === 'percent' ? (Number(c.value)||0) + '%' : '$' + (Number(c.value)||0).toFixed(2);
+    d.innerHTML = '<div><div style="font-weight:700">'+amt+' '+(c.label||c.kind||'Reward')+'</div><div class="muted">'+(c.expiresAt?'Expires '+new Date(c.expiresAt).toLocaleDateString():'No expiration')+'</div></div><span class="pill ok">Available</span>';
     rl.appendChild(d);
   }
 

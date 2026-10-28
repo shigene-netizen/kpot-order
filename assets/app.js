@@ -1473,8 +1473,8 @@
          server-side, and reading it here throws a ReferenceError that
          reprice()'s catch swallows into clearDiscounts(), which silently
          undoes the very discount this banner is meant to announce. */
-      const pct = (CONFIG.firstVisit && CONFIG.firstVisit.percent) || 10;
-      el.textContent = '🎉 First-time guest — ' + pct + '% off applied automatically.';
+      const amt = (CONFIG.firstVisit && CONFIG.firstVisit.amount) || 3;
+      el.textContent = '🎉 First-time guest — $' + Number(amt).toFixed(2) + ' off applied automatically.';
       el.classList.add('on');
     } else {
       el.textContent = '';
@@ -3471,6 +3471,30 @@
     el.hidden = false;
   }
 
+  function showA2HSCta() {
+    if (isStandalone()) return;
+    const el = $('#a2hsCta');
+    if (!el) return;
+    try { if (localStorage.getItem(LS_A2HS) === '-1') return; } catch (e) {}
+    el.hidden = false;
+    const btn = $('#a2hsBtn'); const x = $('#a2hsX');
+    if (x) x.onclick = function () { try { localStorage.setItem(LS_A2HS, '-1'); } catch (e) {} el.hidden = true; };
+    if (btn) btn.onclick = function () {
+      if (deferredInstall) {
+        try {
+          deferredInstall.prompt();
+          if (deferredInstall.userChoice) {
+            deferredInstall.userChoice.then(() => { deferredInstall = null; el.hidden = true; try { localStorage.setItem(LS_A2HS, '-1'); } catch (e) {} });
+          } else { deferredInstall = null; el.hidden = true; }
+        } catch (e) { el.hidden = true; }
+      } else if (isIOS()) {
+        alert('Tap the Share button ⬆️ in Safari, then choose “Add to Home Screen”.');
+      } else {
+        alert('Open your browser menu (⋮) and choose “Add to Home Screen”.');
+      }
+    };
+  }
+
   function initInstall() {
     /* Register the service worker (makes the app installable; also the channel
        for future Web Push). Ignored on insecure origins. */
@@ -4050,6 +4074,10 @@
     refreshHistoryStatuses();
     /* Offer "Add to Home Screen" so guests can receive ready notifications. */
     initInstall();
+    showA2HSCta();
+    /* Prominent first-time guest promo on the menu page. */
+    const promo = $('#firstVisitPromo');
+    if (promo) promo.hidden = false;
     /* Render the bundled menu instantly, then swap in the owner's live menu if
        the server has one (and re-render so the change is visible). */
     probeBackend().then(loadLiveMenu).then((changed) => { if (changed) renderMenu(); });

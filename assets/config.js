@@ -220,9 +220,9 @@ const CONFIG = {
      freely; they are the whole economics of the welcome. */
   firstVisit: {
     enabled: true,
-    percent: 10,          // % off the subtotal for a first-ever order
-    minSubtotal: 0,       // smallest subtotal that still qualifies (0 = any)
-    label: 'First-time guest — 10% off'
+    amount: 3,            // $ off the subtotal for a first-ever order
+    minSubtotal: 10,      // smallest subtotal that still qualifies
+    label: 'First-time guest — $3 off'
   },
 
   /* ---- Payment methods -------------------------------------------------

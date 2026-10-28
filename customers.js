@@ -69,6 +69,11 @@ const RETURN_DAYS = 7;
    coupon. Tax and tip are not part of it: they are not what the kitchen
    cooks. */
 const RETURN_MIN_SUBTOTAL = 10;
+/* The come-back coupon is a PERCENT off (not a fixed $), with its own floor.
+   Stored on the coupon so it is priced exactly like every other discount. */
+const RETURN_TYPE = 'percent';
+const RETURN_PERCENT = 15;
+const RETURN_MIN = 10;
 
 /* Sanity ceilings. A ledger that grows without bound is a ledger that
    eventually fails to load. */
@@ -250,12 +255,17 @@ function isUsable(c, now) {
   return !!c && !c.usedAt && !isExpired(c, now);
 }
 
-function makeCoupon(kind, value, label, orderId, now) {
+function makeCoupon(kind, value, label, orderId, now, opts) {
   const at = now || new Date().toISOString();
+  const o = opts || {};
   return {
     id: couponId(),
     kind,
     value: round2(value),
+    /* 'percent' coupons carry their own floor; 'amount' coupons are just a
+       dollar figure. The page prices both through pricing.js. */
+    type: o.type || 'amount',
+    minSubtotal: o.minSubtotal || 0,
     label: String(label || ''),
     issuedAt: at,
     /* A stamp reward is earned, so it does not rot. A come-back coupon exists
@@ -311,6 +321,8 @@ function normalizeCoupon(c) {
     id: c.id ? String(c.id).slice(0, 40) : couponId(),
     kind,
     value: round2(value),
+    type: c.type === 'percent' ? 'percent' : 'amount',
+    minSubtotal: Number(c.minSubtotal) || 0,
     label: String(c.label || '').slice(0, 60),
     issuedAt: c.issuedAt ? String(c.issuedAt) : new Date().toISOString(),
     expiresAt: c.expiresAt == null ? null : String(c.expiresAt),
@@ -537,8 +549,9 @@ function awardForOrder(cust, order, now, opts) {
       pushLog(cust, 'return_replaced', 0, stale.length + ' unused coupon(s) replaced', at);
     }
     if (cust.coupons.length < MAX_COUPONS) {
-      const c = makeCoupon('return', RETURN_VALUE,
-        '$' + RETURN_VALUE + ' off — come back within ' + RETURN_DAYS + ' days', id, at);
+      const c = makeCoupon('return', RETURN_PERCENT,
+        RETURN_PERCENT + '% off — come back within ' + RETURN_DAYS + ' days (min $' + RETURN_MIN + ')',
+        id, at, { type: RETURN_TYPE, minSubtotal: RETURN_MIN });
       cust.coupons.push(c);
       issued.push(c);
       pushLog(cust, 'return', 0, 'issued', at);
@@ -585,7 +598,14 @@ function couponRedemption(cust, id, subtotal, now) {
   if (!cust || !id) return null;
   const c = (cust.coupons || []).find((x) => x.id === String(id) && isUsable(x, now));
   if (!c) return null;
-  const value = Math.min(Number(c.value) || 0, round2(Math.max(0, Number(subtotal) || 0)));
+  const sub = round2(Math.max(0, Number(subtotal) || 0));
+  if (c.type === 'percent') {
+    /* A percent coupon has its own floor. Below it, the coupon is not usable
+       on THIS order — but it is still valid (and still shown) for a bigger one. */
+    if (c.minSubtotal > 0 && sub < c.minSubtotal) return null;
+    return { kind: 'coupon', coupon: c, couponId: c.id, value: round2(c.value), label: c.label || 'Reward' };
+  }
+  const value = Math.min(Number(c.value) || 0, sub);
   if (value <= 0) return null;
   return { kind: 'coupon', coupon: c, couponId: c.id, value: round2(value), label: c.label || 'Reward' };
 }
@@ -649,11 +669,12 @@ function resolveRedemption(cust, req, subtotal, now) {
    rather than aspirational. */
 function toDescriptor(redemption) {
   if (!redemption) return null;
+  const isPoints = redemption.kind === 'points';
   return {
-    type: 'amount',
+    type: isPoints ? 'amount' : (redemption.coupon && redemption.coupon.type === 'percent' ? 'percent' : 'amount'),
     value: redemption.value,
     code: '',
-    label: redemption.kind === 'points'
+    label: isPoints
       ? 'Points redeemed (' + redemption.points + ')'
       : (redemption.label || 'Reward'),
     source: 'loyalty'
@@ -764,7 +785,7 @@ function publicView(cust, subtotal, now) {
     pointsHold: pointsHoldReason(cust, subtotal),
     coupons: usable.map((c) => ({
       id: c.id, value: c.value, label: c.label,
-      kind: c.kind, expiresAt: c.expiresAt
+      kind: c.kind, type: c.type, minSubtotal: c.minSubtotal, expiresAt: c.expiresAt
     })),
     /* Membership state, and only that. Which perks it BUYS is the server's
        business (they come from config), so the guest page asks the price
