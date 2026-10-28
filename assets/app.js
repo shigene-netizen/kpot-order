@@ -3443,6 +3443,7 @@
   function dismissA2HS(forever) {
     try { localStorage.setItem(LS_A2HS, String(forever ? -1 : Date.now())); } catch (e) {}
     const el = $('#installBanner'); if (el) { el.hidden = true; el.innerHTML = ''; }
+    const cta = $('#a2hsCta'); if (cta) cta.hidden = true;
   }
 
   function installBannerHTML() {
@@ -3463,8 +3464,13 @@
   }
 
   function showInstallBanner() {
-    if (isStandalone() || a2hsDismissed()) return;
-    if (!isMobile()) return;   // phone-only nudge — that's where notifications matter
+    if (isStandalone()) return;
+    // If permanently dismissed, don't show; if snoozed, still allow re-showing in new sessions? 
+    // But be defensive - don't block if localStorage is corrupted
+    try {
+      if (a2hsDismissed() && localStorage.getItem(LS_A2HS) === '-1') return;
+    } catch(e) {}
+    if (!isMobile()) return;
     const el = $('#installBanner');
     if (!el) return;
     el.innerHTML = installBannerHTML();
@@ -3516,7 +3522,7 @@
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferredInstall = e;
-      const cta = $('#a2hsCta'); if (cta) cta.hidden = true;   // the native banner below handles install; avoid a double prompt
+      const cta = $('#a2hsCta'); if (cta) { cta.hidden = true; }
       showInstallBanner();
     });
     window.addEventListener('appinstalled', () => { deferredInstall = null; dismissA2HS(true); });
