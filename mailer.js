@@ -244,4 +244,29 @@ function recoveryMessage(code, storeName, minutes) {
   };
 }
 
-module.exports = { config, configured, status, send, recoveryMessage, encodeHeaderValue, toData, buildMessage };
+function sendRewardsEarned(opts) {
+  const to = opts && opts.to;
+  if (!to || !configured()) return Promise.resolve({ ok: false, skipped: true });
+  const storeName = opts.storeName || (ASSETS && ASSETS.CONFIG && ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go';
+  const orderId = opts.orderId || '';
+  const earned = Array.isArray(opts.earned) ? opts.earned : [];
+  const lines = [];
+  lines.push('Thanks for your order' + (orderId ? ' ' + orderId : '') + '!');
+  lines.push('');
+  lines.push('You earned these rewards this time:');
+  if (!earned.length) lines.push('- (none)');
+  for (const e of earned) {
+    lines.push('- ' + (e.label || e.kind || 'Reward') + (e.value != null ? ' ($' + Number(e.value).toFixed(2) + ')' : ''));
+  }
+  lines.push('');
+  lines.push('View and manage your rewards here: ' + (opts.myRewardsUrl || 'https://order.kpotexpress.com/my-rewards.html'));
+  lines.push('');
+  lines.push(storeName);
+  return send({
+    to,
+    subject: storeName + ' — Your rewards from order ' + orderId,
+    text: lines.join('\r\n')
+  });
+}
+
+module.exports = { config, configured, status, send, recoveryMessage, sendRewardsEarned, encodeHeaderValue, toData, buildMessage };

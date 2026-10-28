@@ -2860,6 +2860,29 @@ async function handleUpdateOrder(req, res, id) {
     sendCustomerReadyEmail(o);
   }
 
+  /* Reaching 'completed' — email the guest with rewards earned on this order
+     and a link to My Rewards. */
+  if (o.status === 'completed' && wasStatus !== 'completed') {
+    try {
+      const phone = L.normalizePhone((o.customer || {}).phone);
+      const cust = phone ? L.find(customers, phone) : null;
+      const to = (o.customer && o.customer.email) || (cust && cust.email);
+      if (to && MAIL && MAIL.sendRewardsEarned) {
+        const earned = [];
+        if (o.loyalty && o.loyalty.earnedPoints) earned.push({ label: o.loyalty.earnedPoints + ' points', value: null });
+        if (Array.isArray(o.loyalty && o.loyalty.earnedCoupons)) {
+          for (const cid of o.loyalty.earnedCoupons) {
+            const c = (cust && (cust.coupons||[]).find(x=>x.id===cid)) || null;
+            if (c) earned.push({ label: c.label || c.kind || 'Reward', value: c.value });
+          }
+        }
+        if (o.discount && o.discount.source === 'welcome') earned.push({ label: 'First-time 10% off (used)', value: o.discountAmount || 0 });
+        if (o.credit && o.credit.applied) earned.push({ label: 'Store credit used', value: o.credit.applied });
+        MAIL.sendRewardsEarned({ to, orderId: o.id, earned, storeName: (ASSETS.CONFIG && ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go', myRewardsUrl: (ASSETS.CONFIG && ASSETS.CONFIG.siteUrl ? ASSETS.CONFIG.siteUrl.replace(/\/$/,'') : 'https://order.kpotexpress.com') + '/my-rewards.html' });
+      }
+    } catch (e) { /* never block */ }
+  }
+
   console.log('[kpot] order ' + id + ' -> ' + o.status + ' (' + o.paymentStatus + ')');
   fireDispatch(o);
   return sendJSON(res, 200, {
@@ -3996,6 +4019,21 @@ function handleGetCustomer(req, res, url) {
   return sendJSON(res, 200, L.publicView(cust, subtotal, Date.now()));
 }
 
+/* POST /api/customer-email  { email } */
+async function handleGetCustomerEmail(req, res) {
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+  const e = (body && body.email ? String(body.email) : '').trim().toLowerCase();
+  const em = L.normalizeEmail ? L.normalizeEmail(e) : e;
+  if (!em) return sendJSON(res, 400, { error: 'bad_email', message: 'That does not look like an email.' });
+  const cust = L.findByEmail ? L.findByEmail(customers, em) : null;
+  if (!cust) return sendJSON(res, 404, { error: 'not_found', message: 'No rewards on that email yet.' });
+  if (!cust.emailVerified) return sendJSON(res, 403, { error: 'email_not_verified', message: 'Email not verified.' });
+  return sendJSON(res, 200, L.publicView(cust, null, Date.now()));
+}
+
 /* -------------------------------------------------------------------------- */
 /* Browser recognition — the one surviving half of the rewards handshake     */
 /* -------------------------------------------------------------------------- */
@@ -4644,6 +4682,9 @@ const server = http.createServer((req, res) => {
       return sendJSON(res, 405, { error: 'method_not_allowed' });
     }
     return handleGetCustomer(req, res, url);
+  }
+  if (req.method === 'POST' && pathname === '/api/customer-email') {
+    return handleGetCustomerEmail(req, res);
   }
 
   /* Mint a browser credential from a PAID order, so the guest page can

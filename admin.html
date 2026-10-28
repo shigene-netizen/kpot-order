@@ -242,10 +242,11 @@
 
         <div class="hint" id="loyRules" style="margin-top:8px">Unlock below to see the current rules.</div>
 
-        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input id="memQ" placeholder="Search mobile or name (blank = everyone)" autocomplete="off" style="flex:1">
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">
+          <input id="memQ" placeholder="Search mobile or name (blank = everyone)" autocomplete="off" style="flex:1;min-width:200px">
           <button class="btn btn-ghost btn-sm" id="memLoad">Load</button>
           <button class="btn btn-ghost btn-sm" id="memExport">⬇ CSV</button>
+          <button class="btn btn-ghost btn-sm" id="memExportRewards">⬇ Rewards History</button>
         </div>
 
         <div id="memList" style="margin-top:12px"></div>
@@ -932,6 +933,36 @@
       })
       .catch(function(e){ memShow(false, e.message || 'Export failed.'); });
   };
+
+  if ($('#memExportRewards')) {
+    $('#memExportRewards').onclick = function(){
+      fetch('/api/customers/export.json', { headers: discHeaders() })
+        .then(function(r){
+          if(!r.ok) throw new Error(r.status === 401 ? 'That admin key was not accepted.' : 'Export failed.');
+          return r.json();
+        })
+        .then(function(j){
+          var rows = ['phone,name,email,reward_kind,reward_value,reward_label,issued_at,used_at,expired'];
+          (j.customers||[]).forEach(function(c){
+            (c.coupons||[]).forEach(function(cp){
+              rows.push([
+                c.phone||'', c.name||'', c.email||'',
+                cp.kind||'', cp.value||'', (cp.label||'').replace(/,/g,' '),
+                cp.issuedAt||'', cp.usedAt||'', cp.expiresAt||''
+              ].join(','));
+            });
+          });
+          var blob = new Blob(['\ufeff'+rows.join('\r\n')+'\r\n'], {type:'text/csv;charset=utf-8;'});
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'kpot-rewards-history-' + new Date().toISOString().slice(0, 10) + '.csv';
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(function(){ URL.revokeObjectURL(a.href); }, 2000);
+          memShow(true, 'Rewards history exported.');
+        })
+        .catch(function(e){ memShow(false, e.message || 'Export failed.'); });
+    };
+  }
 
   /* ---------- boot ---------- */
   $('#url').value = (typeof PUBLIC_URL !== 'undefined' && PUBLIC_URL) ? PUBLIC_URL : '';

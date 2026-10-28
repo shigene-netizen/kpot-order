@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">
+<meta name="theme-color" content="#111014">
+<title>My Rewards — KPOT To Go</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+<style>
+  .wrap{max-width:680px;margin:0 auto;padding:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .row input{flex:1;min-width:160px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text)}
+  .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:linear-gradient(180deg,#2a2a33,#1a1a22);color:var(--text);cursor:pointer}
+  .btn.primary{background:linear-gradient(180deg,#d7263d,#b71f33);border-color:#d7263d}
+  .muted{color:var(--dim)}
+  .list{display:flex;flex-direction:column;gap:10px}
+  .item{display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,#1f1f26,#14141a)}
+  .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--line);font-size:12px}
+  .ok{color:#6ee787}
+  .bad{color:#ff6b6b}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo-k">K</div>
+      <div class="brand-txt">
+        <b>My Rewards</b>
+        <span>KPOT To Go</span>
+      </div>
+    </div>
+    <a class="icon-btn" href="index.html" aria-label="Back to menu">←</a>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <div class="section-label">Sign in to view rewards</div>
+      <div class="row">
+        <input id="loginId" placeholder="Phone number (e.g. 6783355388) or email">
+        <button class="btn primary" id="loginBtn">Sign in</button>
+      </div>
+      <div class="muted" style="margin-top:6px">Email requires verification. Phone uses the same number on file.</div>
+      <div id="loginMsg" class="muted" style="margin-top:6px"></div>
+    </section>
+
+    <section class="card" id="profile" hidden>
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <div style="font-weight:700" id="profName">-</div>
+          <div class="muted" id="profContact">-</div>
+        </div>
+        <div class="pill">Points <b id="profPoints">0</b></div>
+      </div>
+    </section>
+
+    <section class="card" id="rewards" hidden>
+      <div class="section-label">Available Rewards</div>
+      <div class="list" id="rewardsList"></div>
+      <div id="rewardsEmpty" class="muted" hidden>No rewards yet.</div>
+    </section>
+
+    <section class="card" id="history" hidden>
+      <div class="section-label">Rewards History</div>
+      <div class="list" id="historyList"></div>
+      <div id="historyEmpty" class="muted" hidden>No history yet.</div>
+    </section>
+  </main>
+
+  <div class="toast-wrap" id="toasts"></div>
+</div>
+
+<script src="assets/config.js"></script>
+<script>
+const $ = s=>document.querySelector(s);
+function toast(m){const w=$('#toasts');const t=document.createElement('div');t.className='toast';t.textContent=m;w.appendChild(t);setTimeout(()=>t.remove(),2200);}
+
+$('#loginBtn').onclick = async ()=>{
+  const id = $('#loginId').value.trim();
+  $('#loginMsg').textContent='';
+  if(!id){ $('#loginMsg').textContent='Enter phone or email.'; return; }
+  // try phone first
+  const phone = id.replace(/\D/g,'');
+  if(phone.length===11 && phone[0]==='1') phone = phone.slice(1);
+  try{
+    if(phone.length===10){
+      const r = await fetch('/api/customer?phone='+encodeURIComponent(phone));
+      const j = await r.json();
+      if(!r.ok){ $('#loginMsg').textContent=j.message||j.error||'Not found'; return; }
+      show(j, phone);
+      return;
+    }
+  }catch(e){}
+  // try email
+  try{
+    const r = await fetch('/api/customer-email', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:id})});
+    const j = await r.json();
+    if(!r.ok){ $('#loginMsg').textContent=j.message||j.error||'Not found'; return; }
+    show(j, null);
+  }catch(e){ $('#loginMsg').textContent='Lookup failed'; }
+};
+
+function show(j, phone){
+  $('#loginMsg').textContent='';
+  $('#profile').hidden=false;
+  $('#rewards').hidden=false;
+  $('#history').hidden=false;
+  $('#profName').textContent = j.name || '-';
+  $('#profContact').textContent = phone ? ('+'+1+' '+phone.replace(/(\d{3})(\d{3})(\d{4})/,'($1) $2-$3')) : (j.email||'-');
+  $('#profPoints').textContent = j.points||0;
+
+  const rl = $('#rewardsList'); rl.innerHTML='';
+  const coupons = (j.coupons||[]).filter(c=>!c.usedAt && !c.expired);
+  if(coupons.length===0) $('#rewardsEmpty').hidden=false; else $('#rewardsEmpty').hidden=true;
+  for(const c of coupons){
+    const d = document.createElement('div'); d.className='item';
+    d.innerHTML = '<div><div style="font-weight:700">$'+(c.value||0).toFixed(2)+' '+(c.label||c.kind||'Reward')+'</div><div class="muted">Expires: '+(c.expiresAt?new Date(c.expiresAt).toLocaleDateString():'never')+'</div></div><span class="pill ok">Available</span>';
+    rl.appendChild(d);
+  }
+
+  const hl = $('#historyList'); hl.innerHTML='';
+  const log = (j.log||[]).slice().reverse();
+  if(log.length===0) $('#historyEmpty').hidden=false; else $('#historyEmpty').hidden=true;
+  for(const e of log){
+    const d = document.createElement('div'); d.className='item';
+    d.innerHTML = '<div><div>'+(e.note||e.kind)+'</div><div class="muted">'+(e.at?new Date(e.at).toLocaleString():'')+'</div></div><span class="pill">'+(e.delta>0?'+':'')+e.delta+'</span>';
+    hl.appendChild(d);
+  }
+}
+</script>
+</body>
+</html>

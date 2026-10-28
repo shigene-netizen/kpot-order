@@ -154,6 +154,16 @@ function normalizeEmail(raw) {
   return s;
 }
 
+function findByEmail(list, rawEmail) {
+  const e = normalizeEmail(rawEmail);
+  if (!e) return null;
+  for (let i = 0; i < list.length; i++) {
+    const c = list[i];
+    if (normalizeEmail(c && c.email) === e) return c;
+  }
+  return null;
+}
+
 /* Mint a credential for one browser. Returns the PLAINTEXT token — the only
    time it exists outside the browser — or null. */
 function issueDevice(cust, label, now) {
@@ -270,6 +280,7 @@ function blankCustomer(phone) {
     /* Optional contact data. It authorises nothing — the phone number is the
        credential — so it is a phone-book field, not a key. */
     email: '',
+    emailVerified: false,
     points: 0,
     lifetimePoints: 0,
     settledOrders: 0,
@@ -337,6 +348,7 @@ function normalizeCustomer(raw) {
      credential means every guest on the site is signed out at the next save
      with no error anywhere. */
   c.email = normalizeEmail(raw.email) || '';
+  c.emailVerified = !!raw.emailVerified;
   c.devices = (Array.isArray(raw.devices) ? raw.devices : [])
     .map((d) => (d && typeof d === 'object' && /^[0-9a-f]{64}$/.test(String(d.hash || '')))
       ? {
@@ -849,7 +861,7 @@ module.exports = {
   round2, normalizePhone, maskName, rules,
   couponId, makeCoupon, isExpired, isUsable,
   blankCustomer, normalizeCoupon, normalizeCustomer,
-  loadCustomers, saveCustomers, ensure, find, touch, pushLog,
+  loadCustomers, saveCustomers, ensure, find, findByEmail, touch, pushLog,
   pointsBaseFor, pointsFor, isPaidStatus, comebackEarns,
   awardForOrder, pointsRedemption, pointsHoldReason, couponRedemption, resolveRedemption,
   toDescriptor, commitRedemption, releaseRedemption,
