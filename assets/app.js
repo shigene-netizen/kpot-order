@@ -3480,17 +3480,29 @@
     const btn = $('#a2hsBtn'); const x = $('#a2hsX');
     if (x) x.onclick = function () { try { localStorage.setItem(LS_A2HS, '-1'); } catch (e) {} el.hidden = true; };
     if (btn) btn.onclick = function () {
+      let triggered = false;
       if (deferredInstall) {
+        const d = deferredInstall;
+        deferredInstall = null;            // spend it now so a re-tap can't re-invoke the used prompt
         try {
-          deferredInstall.prompt();
-          if (deferredInstall.userChoice) {
-            deferredInstall.userChoice.then(() => { deferredInstall = null; el.hidden = true; try { localStorage.setItem(LS_A2HS, '-1'); } catch (e) {} });
-          } else { deferredInstall = null; el.hidden = true; }
-        } catch (e) { el.hidden = true; }
-      } else if (isIOS()) {
-        alert('Tap the Share button ⬆️ in Safari, then choose “Add to Home Screen”.');
-      } else {
-        alert('Open your browser menu (⋮) and choose “Add to Home Screen”.');
+          const finish = (res) => {
+            if (res && res.outcome === 'accepted') {
+              el.hidden = true;
+              try { localStorage.setItem(LS_A2HS, '-1'); } catch (e) {}
+            }
+            // dismissed: leave the CTA up so the guest can try again (next tap falls through to manual steps)
+          };
+          const p = d.prompt();
+          triggered = true;
+          if (p && typeof p.then === 'function') p.then(finish);
+          else if (d.userChoice && typeof d.userChoice.then === 'function') d.userChoice.then(finish);
+        } catch (e) {
+          triggered = false;               // prompt failed (not a gesture / already used) → manual steps
+        }
+      }
+      if (!triggered) {
+        if (isIOS()) alert('Tap the Share button ⬆️ in Safari, then choose “Add to Home Screen”.');
+        else alert('Tap your browser menu (⋮) and choose “Add to Home Screen”.');
       }
     };
   }
@@ -3511,14 +3523,16 @@
       const b = e.target.closest('[data-a2hs]');
       if (!b) return;
       if (b.dataset.a2hs === 'install' && deferredInstall) {
+        const d = deferredInstall; deferredInstall = null;
         try {
-          deferredInstall.prompt();
-          if (deferredInstall.userChoice) {
-            deferredInstall.userChoice.then(() => { deferredInstall = null; dismissA2HS(true); });
-          } else { deferredInstall = null; dismissA2HS(true); }
-        } catch (err) { dismissA2HS(false); }
+          const finish = (res) => { dismissA2HS(res && res.outcome === 'accepted'); };
+          const p = d.prompt();
+          if (p && typeof p.then === 'function') p.then(finish);
+          else if (d.userChoice && typeof d.userChoice.then === 'function') d.userChoice.then(finish);
+          else dismissA2HS(false);
+        } catch (err) { dismissA2HS(false); }   // keep re-showable; only a real install hides forever
       } else {
-        dismissA2HS(false);
+        dismissA2HS(false);                      // "Not now" / "Got it" → snooze 3 days (not permanent)
       }
     });
     showInstallBanner();
