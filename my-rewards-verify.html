@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify Email — My Rewards</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo-k">K</div><div class="brand-txt"><b>My Rewards</b><span>Verify Email</span></div></div>
+    <a class="icon-btn" href="my-rewards.html">←</a>
+  </header>
+  <main style="max-width:560px;margin:0 auto;padding:16px">
+    <section class="card">
+      <div id="msg">Verifying...</div>
+    </section>
+  </main>
+</div>
+<script>
+const p = new URLSearchParams(location.search);
+fetch('/api/customer-email/verify?'+p.toString()).then(r=>r.json()).then(j=>{
+  document.getElementById('msg').textContent = j.message || (j.ok?'Verified':'Failed');
+}).catch(()=>{document.getElementById('msg').textContent='Failed';});
+</script>
+</body>
+</html>

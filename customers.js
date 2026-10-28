@@ -349,6 +349,8 @@ function normalizeCustomer(raw) {
      with no error anywhere. */
   c.email = normalizeEmail(raw.email) || '';
   c.emailVerified = !!raw.emailVerified;
+  c.emailVerifyTokenHash = raw.emailVerifyTokenHash ? String(raw.emailVerifyTokenHash) : '';
+  c.emailVerifyTokenAt = raw.emailVerifyTokenAt ? String(raw.emailVerifyTokenAt) : '';
   c.devices = (Array.isArray(raw.devices) ? raw.devices : [])
     .map((d) => (d && typeof d === 'object' && /^[0-9a-f]{64}$/.test(String(d.hash || '')))
       ? {

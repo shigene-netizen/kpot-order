@@ -79,19 +79,19 @@
 const $ = s=>document.querySelector(s);
 function toast(m){const w=$('#toasts');const t=document.createElement('div');t.className='toast';t.textContent=m;w.appendChild(t);setTimeout(()=>t.remove(),2200);}
 
-$('#loginBtn').onclick = async ()=>{
+  $('#loginBtn').onclick = async ()=>{
   const id = $('#loginId').value.trim();
   $('#loginMsg').textContent='';
   if(!id){ $('#loginMsg').textContent='Enter phone or email.'; return; }
   // try phone first
-  const phone = id.replace(/\D/g,'');
-  if(phone.length===11 && phone[0]==='1') phone = phone.slice(1);
+  let p = id.replace(/\D/g,'');
+  if(p.length===11 && p[0]==='1') p = p.slice(1);
   try{
-    if(phone.length===10){
-      const r = await fetch('/api/customer?phone='+encodeURIComponent(phone));
+    if(p.length===10){
+      const r = await fetch('/api/customer?phone='+encodeURIComponent(p));
       const j = await r.json();
       if(!r.ok){ $('#loginMsg').textContent=j.message||j.error||'Not found'; return; }
-      show(j, phone);
+      show(j, p);
       return;
     }
   }catch(e){}
@@ -99,7 +99,25 @@ $('#loginBtn').onclick = async ()=>{
   try{
     const r = await fetch('/api/customer-email', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:id})});
     const j = await r.json();
-    if(!r.ok){ $('#loginMsg').textContent=j.message||j.error||'Not found'; return; }
+    if(!r.ok){
+      if(j.error==='email_not_verified'){
+        $('#loginMsg').innerHTML = (j.message||'Email not verified.') + ' <button class="btn" id="sendVer">Send verification link</button>';
+        setTimeout(()=>{
+          const b = document.getElementById('sendVer');
+          if(b) b.onclick = async ()=>{
+            b.disabled=true; b.textContent='Sending...';
+            try{
+              const rr = await fetch('/api/customer-email/verify-request', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:id})});
+              const jj = await rr.json();
+              if(rr.ok) $('#loginMsg').textContent = jj.message||'Verification email sent.';
+              else $('#loginMsg').textContent = jj.message||jj.error||'Failed';
+            }catch(e){ $('#loginMsg').textContent='Failed'; }
+          };
+        },0);
+        return;
+      }
+      $('#loginMsg').textContent=j.message||j.error||'Not found'; return;
+    }
     show(j, null);
   }catch(e){ $('#loginMsg').textContent='Lookup failed'; }
 };

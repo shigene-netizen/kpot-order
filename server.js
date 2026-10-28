@@ -4030,8 +4030,51 @@ async function handleGetCustomerEmail(req, res) {
   if (!em) return sendJSON(res, 400, { error: 'bad_email', message: 'That does not look like an email.' });
   const cust = L.findByEmail ? L.findByEmail(customers, em) : null;
   if (!cust) return sendJSON(res, 404, { error: 'not_found', message: 'No rewards on that email yet.' });
-  if (!cust.emailVerified) return sendJSON(res, 403, { error: 'email_not_verified', message: 'Email not verified.' });
+  if (!cust.emailVerified) return sendJSON(res, 403, { error: 'email_not_verified', message: 'Email not verified. Click below to send a verification link.' });
   return sendJSON(res, 200, L.publicView(cust, null, Date.now()));
+}
+
+/* POST /api/customer-email/verify-request  { email } */
+async function handleCustomerEmailVerifyRequest(req, res) {
+  let raw;
+  try { raw = await readBody(req, 4 * 1024); } catch (e) { return sendJSON(res, 413, { error: 'payload_too_large' }); }
+  let body;
+  try { body = JSON.parse(raw || '{}'); } catch (e) { return sendJSON(res, 400, { error: 'bad_json' }); }
+  const e = (body && body.email ? String(body.email) : '').trim().toLowerCase();
+  const em = L.normalizeEmail ? L.normalizeEmail(e) : e;
+  if (!em) return sendJSON(res, 400, { error: 'bad_email', message: 'That does not look like an email.' });
+  const cust = L.findByEmail ? L.findByEmail(customers, em) : null;
+  if (!cust) return sendJSON(res, 404, { error: 'not_found', message: 'No rewards on that email yet.' });
+  if (cust.emailVerified) return sendJSON(res, 200, { ok: true, message: 'Email already verified.' });
+  const tok = crypto.randomBytes(24).toString('hex');
+  cust.emailVerifyTokenHash = crypto.createHash('sha256').update(tok).digest('hex');
+  cust.emailVerifyTokenAt = new Date().toISOString();
+  saveCustomersStore();
+  const base = (ASSETS.CONFIG && ASSETS.CONFIG.siteUrl ? ASSETS.CONFIG.siteUrl.replace(/\/$/,'') : 'https://order.kpotexpress.com');
+  const link = base + '/my-rewards-verify.html?token=' + encodeURIComponent(tok) + '&email=' + encodeURIComponent(em);
+  try {
+    if (MAIL && MAIL.send) {
+      MAIL.send({ to: em, subject: (ASSETS.CONFIG && ASSETS.CONFIG.store && ASSETS.CONFIG.store.name || 'KPOT To Go') + ' — Verify your email for My Rewards', text: 'Verify your email to view rewards:\n\n' + link + '\n\nThis link expires soon.' });
+    }
+  } catch(e){}
+  return sendJSON(res, 200, { ok: true, message: 'Verification email sent.' });
+}
+
+/* GET /api/customer-email/verify?token=…&email=… */
+async function handleCustomerEmailVerify(req, res, url) {
+  const tok = url.searchParams.get('token') || '';
+  const e = (url.searchParams.get('email') || '').trim().toLowerCase();
+  const em = L.normalizeEmail ? L.normalizeEmail(e) : e;
+  if (!tok || !em) return sendJSON(res, 400, { error: 'bad_request' });
+  const cust = L.findByEmail ? L.findByEmail(customers, em) : null;
+  if (!cust) return sendJSON(res, 404, { error: 'not_found' });
+  const h = crypto.createHash('sha256').update(tok).digest('hex');
+  if (!cust.emailVerifyTokenHash || cust.emailVerifyTokenHash !== h) return sendJSON(res, 400, { error: 'bad_token' });
+  cust.emailVerified = true;
+  cust.emailVerifyTokenHash = '';
+  cust.emailVerifyTokenAt = '';
+  saveCustomersStore();
+  return sendJSON(res, 200, { ok: true, message: 'Email verified. You can now sign in to My Rewards.' });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -4685,6 +4728,12 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'POST' && pathname === '/api/customer-email') {
     return handleGetCustomerEmail(req, res);
+  }
+  if (req.method === 'POST' && pathname === '/api/customer-email/verify-request') {
+    return handleCustomerEmailVerifyRequest(req, res);
+  }
+  if (req.method === 'GET' && pathname === '/api/customer-email/verify') {
+    return handleCustomerEmailVerify(req, res, url);
   }
 
   /* Mint a browser credential from a PAID order, so the guest page can
