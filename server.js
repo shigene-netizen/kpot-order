@@ -23,6 +23,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const { loadAssets, priceOrder, toStripeLineItems, round2, applyDiscount, discountAmountFor } = require('./pricing.js');
 const { renderKitchenTicket } = require('./printer.js');
