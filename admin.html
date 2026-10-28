@@ -872,7 +872,7 @@
       (c.coupons||[]).forEach(function(cp){
         rows.push({
           phone: c.phone, name: c.name, email: c.email,
-          kind: cp.kind || '', value: cp.value || 0, label: cp.label || '',
+          kind: cp.kind || '', value: cp.value || 0, type: cp.type || 'amount', label: cp.label || '',
           issuedAt: cp.issuedAt || '', usedAt: cp.usedAt || '', expiresAt: cp.expiresAt || ''
         });
       });
@@ -880,11 +880,15 @@
     if(!rows.length){ box.innerHTML=''; $('#rewardsHistoryEmpty').hidden=false; return; }
     $('#rewardsHistoryEmpty').hidden=true;
     rows.sort(function(a,b){ return (b.issuedAt||'').localeCompare(a.issuedAt||''); });
-    var kindLabel = { stamp: 'STAMP REWARD', return: 'COME BACK COUPON 15% OFF', welcome: 'FIRST-TIME GUEST $3 OFF', member: 'MEMBER PERK', points: 'POINTS REDEMPTION' };
+    var kindLabel = { stamp: 'STAMP REWARD', return: 'COME BACK COUPON', welcome: 'FIRST-TIME GUEST $3 OFF', member: 'MEMBER PERK', points: 'POINTS REDEMPTION' };
     box.innerHTML = rows.map(function(r){
       var used = !!r.usedAt;
-      var title = (kindLabel[r.kind] || (r.kind||'REWARD').toUpperCase()) +
-        (r.value ? (r.kind === 'return' ? ' ' + Number(r.value) + '% OFF' : ' $' + Number(r.value).toFixed(2) + ' OFF') : '') +
+      var valSuffix = '';
+      if (r.value) {
+        if (r.kind === 'return') valSuffix = (r.type === 'percent') ? (' ' + Number(r.value) + '% OFF') : (' $' + Number(r.value).toFixed(2) + ' OFF');
+        else valSuffix = ' $' + Number(r.value).toFixed(2) + ' OFF';
+      }
+      var title = (kindLabel[r.kind] || (r.kind||'REWARD').toUpperCase()) + valSuffix +
         (r.label ? ' · ' + escD(r.label) : '');
       var sub = 'Issued ' + (r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : '-') +
         ' · ' + (r.phone||'?') + (r.name ? ' ' + escD(r.name) : '') +
