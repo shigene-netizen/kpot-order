@@ -4094,8 +4094,7 @@
     syncHistoryUI();
     refreshHistoryStatuses();
     /* Offer "Add to Home Screen" so guests can receive ready notifications. */
-    // initInstall();  // hidden per request
-    // showA2HSCta();   // hidden per request
+    initInstall();
     /* Prominent first-time guest promo on the menu page. */
     const promo = $('#firstVisitPromo');
     if (promo) promo.hidden = false;
