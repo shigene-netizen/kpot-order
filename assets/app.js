@@ -3516,6 +3516,7 @@
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferredInstall = e;
+      const cta = $('#a2hsCta'); if (cta) cta.hidden = true;   // the native banner below handles install; avoid a double prompt
       showInstallBanner();
     });
     window.addEventListener('appinstalled', () => { deferredInstall = null; dismissA2HS(true); });
