@@ -251,6 +251,13 @@
 
         <div id="memList" style="margin-top:12px"></div>
 
+        <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+          <div class="section-label">Rewards History (live)</div>
+          <div class="hint muted" style="margin:4px 0 8px">Every reward issued, marked USED when redeemed. Grouped by type.</div>
+          <div id="rewardsHistory" style="display:flex;flex-direction:column;gap:10px"></div>
+          <div id="rewardsHistoryEmpty" class="hint" hidden>No rewards issued yet.</div>
+        </div>
+
         <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:14px">
           <label for="memPhone">Adjust a guest</label>
           <input id="memPhone" placeholder="Mobile number, e.g. 6783355388" autocomplete="off" style="margin-top:6px">
@@ -851,9 +858,44 @@
       .then(function(j){
         renderLoyRules(j.rules);
         renderMembers(j.customers || []);
+        renderRewardsHistory(j.customers || []);
         memShow(true, (j.count || 0) + ' member' + (j.count === 1 ? '' : 's') + '.');
       })
       .catch(function(e){ memShow(false, e.message || 'Could not load members.'); });
+  }
+
+  function renderRewardsHistory(customers){
+    var box = $('#rewardsHistory');
+    if(!box) return;
+    var rows = [];
+    customers.forEach(function(c){
+      (c.coupons||[]).forEach(function(cp){
+        rows.push({
+          phone: c.phone, name: c.name, email: c.email,
+          kind: cp.kind || '', value: cp.value || 0, label: cp.label || '',
+          issuedAt: cp.issuedAt || '', usedAt: cp.usedAt || '', expiresAt: cp.expiresAt || ''
+        });
+      });
+    });
+    if(!rows.length){ box.innerHTML=''; $('#rewardsHistoryEmpty').hidden=false; return; }
+    $('#rewardsHistoryEmpty').hidden=true;
+    rows.sort(function(a,b){ return (b.issuedAt||'').localeCompare(a.issuedAt||''); });
+    var kindLabel = { stamp: 'STAMP REWARD', return: 'COME BACK COUPON', welcome: 'FIRST-TIME GUEST 10% OFF', member: 'MEMBER PERK', points: 'POINTS REDEMPTION' };
+    box.innerHTML = rows.map(function(r){
+      var used = !!r.usedAt;
+      var title = (kindLabel[r.kind] || (r.kind||'REWARD').toUpperCase()) +
+        (r.value ? ' $' + Number(r.value).toFixed(2) + ' OFF' : '') +
+        (r.label ? ' · ' + escD(r.label) : '');
+      var sub = 'Issued ' + (r.issuedAt ? new Date(r.issuedAt).toLocaleDateString() : '-') +
+        ' · ' + (r.phone||'?') + (r.name ? ' ' + escD(r.name) : '') +
+        (used ? ' · USED ' + new Date(r.usedAt).toLocaleDateString() : '') +
+        (r.expiresAt ? ' · expires ' + new Date(r.expiresAt).toLocaleDateString() : '');
+      return '<div class="memrow" style="border-left:3px solid ' + (used ? 'var(--line)' : '#d7263d') + '">' +
+        '<b>' + escD(title) + '</b>' +
+        '<div class="hint" style="margin-top:2px">' + escD(sub) + '</div>' +
+        (used ? '<span class="badge" style="margin-top:4px">USED</span>' : '<span class="badge ok" style="margin-top:4px">AVAILABLE</span>') +
+      '</div>';
+    }).join('');
   }
 
   function adjustMember(){
