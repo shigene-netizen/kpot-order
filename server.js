@@ -3735,38 +3735,63 @@ function resolveCredit(rawCode, priced) {
 /* -------------------------------------------------------------------------- */
 /* First-time guest — an automatic welcome discount, no code to type          */
 /* -------------------------------------------------------------------------- */
-/* "First-time customer" means "this mobile number has never placed an order
-   before". The number IS the customer here (it is the loyalty credential), so
-   it is the only identity we have, and it is exactly what the page already
-   collects for rewards — the guest types nothing new.
+/* "First-time customer" means "this mobile number has never placed a REAL
+   order before" (and this browser/device hasn't claimed the welcome before).
 
-   Decided ONLY on the server. The browser sends the number it already holds
-   and gets back the server's read of the order history; it can never assert
-   "I am a first-timer" and get a discount. The check scans every order on the
-   board, so an order placed a moment ago (by the same phone) already counts as
-   "known" — the discount is spent on the first purchase, never the second. */
-function isFirstTimeCustomer(phone, exceptToken) {
+   Mixed policy (1+2+4):
+   1) Customer profile exists with history (settled orders/points/coupons/devices) -> not first time
+   2) Only count REAL orders. cancelled + never paid don't count as "used"; paid/completed/preparing/received do
+   4) Device/claim binding. If this claimHash was ever used to claim the welcome discount -> not first time
+
+   Decided ONLY on the server. Browser can never assert first-timer. */
+function isFirstTimeCustomer(phone, exceptToken, opts) {
+  opts = opts || {};
   const p = L.normalizePhone(phone);
   if (!p) return false;
-  for (const o of orders.values()) {
-    /* The order being priced right now is not "a previous order".
 
-       The guest page posts the same order twice with the same token: once
-       before it leaves for Stripe (so the board has it and the number is
-       real), and again on the way back to re-resolve the order number before
-       verifying the session. Without this exclusion the second post sees the
-       order the first one created, concludes the guest is a returning
-       customer, and prices the very SAME order at full price — which then
-       fails its own total_mismatch check and never reaches the
-       idempotent-retry branch that exists precisely to answer that request.
+  /* (1) Customer record exists with activity */
+  try {
+    if (Array.isArray(customers)) {
+      const cust = L.find ? L.find(customers, p) : null;
+      if (cust) {
+        if ((cust.settledOrders || 0) > 0) return false;
+        if ((cust.points || 0) > 0 || (cust.lifetimePoints || 0) > 0) return false;
+        if (Array.isArray(cust.coupons) && cust.coupons.some((c) => c && c.usedAt)) return false;
+        if (Array.isArray(cust.devices) && cust.devices.length > 0) return false;
+      }
+    }
+  } catch (e) {}
 
-       So the welcome discount is a property of the ORDER, not of the moment
-       the server happened to be asked. A genuinely second order carries a
-       different token, still sees this one, and still gets nothing. */
-    if (exceptToken && o.clientToken && o.clientToken === exceptToken) continue;
-    const op = L.normalizePhone((o.customer || {}).phone);
-    if (op && op === p) return false;
+  const claimHash = opts.claimHash ? String(opts.claimHash) : '';
+
+  /* (4) Global claimHash check first */
+  if (claimHash) {
+    for (const o of orders.values()) {
+      if (o.claimHash && o.claimHash === claimHash && o.discount && o.discount.source === 'welcome') {
+        return false;
+      }
+    }
   }
+
+  for (const o of orders.values()) {
+    /* Skip the order being priced right now */
+    if (exceptToken && o.clientToken && o.clientToken === exceptToken) continue;
+
+    /* (4) Same claimHash that claimed welcome */
+    if (claimHash && o.claimHash && o.claimHash === claimHash) {
+      if (o.discount && o.discount.source === 'welcome') return false;
+    }
+
+    const op = L.normalizePhone((o.customer || {}).phone);
+    if (op && op === p) {
+      /* (2) Only count real orders */
+      const paid = (typeof L.isPaidStatus === 'function') ? L.isPaidStatus(o.paymentStatus) : false;
+      if (o.status === 'cancelled' && !paid) continue;
+      /* Any other order on this phone counts as "already a customer" */
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -3785,7 +3810,17 @@ function resolveFirstTime(body, basePriced) {
   if (!phone) return { none: true }; // cannot identify -> no auto discount
   /* `body.token` is the order's own idempotency token: the one order that must
      not count as "a previous order" is the one being priced right now. */
-  if (!isFirstTimeCustomer(phone, body.token)) return { none: true };
+  let claimHash = '';
+  try { claimHash = String(body.claimHash || body.claim || ''); } catch (e) {}
+  if (!/^[0-9a-f]{32,128}$/i.test(claimHash)) {
+    try {
+      /* Also compute from claim if provided in raw form */
+      if (body.claim && typeof body.claim === 'string' && /^[0-9a-f]{32,128}$/i.test(body.claim.toLowerCase())) {
+        claimHash = (typeof L.hashSecret === 'function') ? L.hashSecret(body.claim.toLowerCase()) : '';
+      }
+    } catch (e) {}
+  }
+  if (!isFirstTimeCustomer(phone, body.token, { claimHash })) return { none: true };
 
   const min = Number(cfg.minSubtotal) || 0;
   if (min > 0 && Number(basePriced.subtotal) < min) return { none: true };
