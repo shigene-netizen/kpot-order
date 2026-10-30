@@ -2044,7 +2044,10 @@
     otherCoupons.forEach((c) => {
       const sub = c.expiresAt ? 'Come back within ' + daysUntil(c.expiresAt) + ' — expires ' +
         new Date(c.expiresAt).toLocaleDateString() : '';
-      rows.push(loyaltyRowHTML(c.id, esc(c.label || 'Reward'), '-' + money(c.value), sub));
+      /* A percent coupon's value is a rate, not a dollar amount — show "15%",
+         not "$15.00". Only an 'amount' coupon is rendered through money(). */
+      const valTxt = (c.type === 'percent') ? ('-' + c.value + '%') : ('-' + money(c.value));
+      rows.push(loyaltyRowHTML(c.id, esc(c.label || 'Reward'), valTxt, sub));
     });
 
     box.innerHTML = '<div class="loy">' +
