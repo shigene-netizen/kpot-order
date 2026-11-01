@@ -139,7 +139,11 @@ function priceOrder(order, MENU, CONFIG, opts) {
       name: raw.name.slice(0, 120),
       desc,
       unit: round2(unit),
-      qty
+      qty,
+      /* The guest's per-item note (allergens, "no cilantro", "extra spicy").
+         Carried through from the raw item so the kitchen ticket can print it
+         under the line. It is display-only — never priced or trusted. */
+      note: raw.note ? String(raw.note).slice(0, 300) : ''
     });
     subtotal += round2(unit) * qty;
   }

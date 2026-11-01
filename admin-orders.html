@@ -120,6 +120,7 @@
   .staff-bar .notify-btn.denied { border-color:var(--red); color:#ff9b93; }
   .install-note { flex-basis:100%; font-size:12px; color:var(--mut); line-height:1.5; }
   .install-note[hidden] { display:none; }
+  .itnote { font-size:12px; color:#B45309; line-height:1.4; margin:2px 0 4px 2px; }
   .order.fresh { border-color:var(--green); box-shadow:0 0 0 1px rgba(46,160,67,.35); }
   .banner { background:var(--red); color:#fff; padding:8px 12px; border-radius:10px; margin-bottom:12px; font-weight:700; }
   .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#000; color:#fff;
@@ -555,20 +556,25 @@ function orderCard(o) {
      browser's own numbers — the client payload is untrusted and could claim any
      unit price. Orders written before `lines` existed fall back to their items. */
   const lines = (Array.isArray(o.lines) && o.lines.length)
-    ? o.lines.map(l => ({ qty: l.qty, name: l.name, desc: l.desc || '', unit: l.unit }))
+    ? o.lines.map(l => ({ qty: l.qty, name: l.name, desc: l.desc || '', unit: l.unit, note: l.note || '' }))
     : (o.items || []).map(it => ({
         qty: it.qty,
         name: it.name,
         desc: (it.mods || []).concat(it.addons || []).join(', '),
-        unit: it.unit
+        unit: it.unit,
+        note: it.note || ''
       }));
   const items = lines.map(l => {
     /* If we genuinely have no unit price (a record written before `lines`
        existed), show a dash rather than $0.00 — "$0.00" reads as "this item is
        free", which is worse than admitting we don't know. */
     const amount = Number.isFinite(Number(l.unit)) ? money(l.unit * l.qty) : '—';
+    /* The guest's per-item note (allergens, "no cilantro", "extra spicy").
+       Surfaced on the board so staff reading the order on screen see it even
+       before the kitchen ticket prints. */
+    const note = l.note ? '<div class="itnote">📝 ' + esc(l.note) + '</div>' : '';
     return '<div><span>' + esc(l.qty) + '× ' + esc(l.name) +
-      (l.desc ? ' (' + esc(l.desc) + ')' : '') + '</span><span>' + amount + '</span></div>';
+      (l.desc ? ' (' + esc(l.desc) + ')' : '') + '</span><span>' + amount + '</span></div>' + note;
   }).join('');
   const cur = o.status || 'received';
   const held = kitchenHeld(o);

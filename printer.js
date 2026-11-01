@@ -180,7 +180,13 @@ function buildTicket(order, opts) {
      source of anything the kitchen acts on. */
   const lines = Array.isArray(ord.lines) && ord.lines.length
     ? ord.lines
-    : (ord.items || []).map((it) => ({ name: it.name, qty: it.qty, unit: it.unit, desc: (it.mods || []).concat(it.addons || []).join(' \u00B7 ') }));
+    : (ord.items || []).map((it) => ({
+        name: it.name, qty: it.qty, unit: it.unit,
+        desc: (it.mods || []).concat(it.addons || []).join(' \u00B7 '),
+        /* Carry the guest's per-item note (allergens, "no cilantro",
+           "extra spicy") through to the ticket. It is display-only. */
+        note: it.note ? String(it.note).slice(0, 300) : ''
+      }));
 
   if (!lines.length) line('(no items)', { align: 'center' });
 
@@ -198,6 +204,12 @@ function buildTicket(order, opts) {
        lets each one sit on its own line where it can be ticked off. */
     const parts = String(l.desc || '').split(' \u00B7 ').map(sanitize).filter(Boolean);
     for (const p of parts) for (const w of wrap(p, cols, 3)) line(w);
+    /* The guest's per-item note — allergens, "no cilantro", "extra spicy".
+       Printed in bold right under the item so the kitchen cannot miss it. */
+    if (l.note) {
+      const n = 'NOTE: ' + sanitize(l.note);
+      for (const w of wrap(n, cols, 3)) line(w, { bold: true });
+    }
     ops.push({ t: 'feed', n: 1 });
   }
 

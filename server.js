@@ -1316,7 +1316,10 @@ function summariseItems(o) {
     const name = l.name || l.n || 'Item';
     const mods = Array.isArray(l.mods) && l.mods.length ? ' [' + l.mods.join(', ') + ']' : '';
     const addons = Array.isArray(l.addons) && l.addons.length ? ' {' + l.addons.join(', ') + '}' : '';
-    return qty + 'x ' + name + mods + addons;
+    /* The guest's per-item note (allergens, "no cilantro"). Carried into the
+       spreadsheet so the owner sees it without opening the board. */
+    const note = l.note ? ' (note: ' + l.note + ')' : '';
+    return qty + 'x ' + name + mods + addons + note;
   }).join('; ');
 }
 
@@ -1874,7 +1877,7 @@ function sendOrderNotification(order) {
   lines.push('');
   lines.push('Items:');
   (order.lines || order.items || []).forEach((it) => {
-    lines.push('  ' + (it.qty || 1) + ' x ' + (it.name || it.n || '') + '  $' + Number(it.unit || it.price || 0).toFixed(2));
+    lines.push('  ' + (it.qty || 1) + ' x ' + (it.name || it.n || '') + '  $' + Number(it.unit || it.price || 0).toFixed(2) + (it.note ? '   [note: ' + it.note + ']' : ''));
   });
   lines.push('');
   lines.push('Subtotal $' + Number(order.subtotal || 0).toFixed(2) +
