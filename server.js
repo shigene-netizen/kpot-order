@@ -1294,7 +1294,7 @@ function saveOrdersNowSafe() {
 const CSV_COLUMNS = [
   'id', 'at', 'updatedAt', 'status', 'paymentStatus', 'payMethod', 'orderType',
   'table', 'customerName', 'customerPhone', 'subtotal', 'tax', 'tip',
-  'delivery', 'total', 'source', 'itemsSummary'
+  'delivery', 'total', 'source', 'itemsSummary', 'orderNotes'
 ];
 
 function csvCell(v) {
@@ -1332,7 +1332,11 @@ function orderToRow(o) {
        in the spreadsheet, not just in the JSON, or "did the window poster pay
        for itself?" is a question nobody can answer. */
     o.source || 'storefront',
-    summariseItems(o)
+    summariseItems(o),
+    /* The whole-order note from the #cNotes box ("extra napkins"). Kept as its
+       own column rather than folded into itemsSummary so it is not confused
+       with per-item notes. */
+    (c.notes || '')
   ];
 }
 

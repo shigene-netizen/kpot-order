@@ -121,6 +121,7 @@
   .install-note { flex-basis:100%; font-size:12px; color:var(--mut); line-height:1.5; }
   .install-note[hidden] { display:none; }
   .itnote { font-size:12px; color:#B45309; line-height:1.4; margin:2px 0 4px 2px; }
+  .o-note { font-size:12px; color:#92400E; line-height:1.4; margin:4px 0; padding:4px 8px; background:#FEF3C7; border-radius:8px; }
   .order.fresh { border-color:var(--green); box-shadow:0 0 0 1px rgba(46,160,67,.35); }
   .banner { background:var(--red); color:#fff; padding:8px 12px; border-radius:10px; margin-bottom:12px; font-weight:700; }
   .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#000; color:#fff;
@@ -634,6 +635,10 @@ function orderCard(o) {
       '<span class="o-time">' + new Date(o.at).toLocaleString() + '</span>' +
     '</div>' +
     '<div class="o-cust">' + meta.join(' · ') + '</div>' +
+    /* The whole-order note from the #cNotes box ("extra napkins", "no
+       chopsticks"). Distinct amber block so it reads as a standing instruction
+       for the whole ticket, separate from the per-item notes inside o-items. */
+    (cust.notes ? '<div class="o-note">📝 ' + esc(cust.notes) + '</div>' : '') +
     '<div class="o-items">' + items + '</div>' +
     /* The discount is shown as its own line rather than folded into the total:
        a server that says "$18.10" when the menu says "$20.00" looks like a bug
