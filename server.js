@@ -4520,19 +4520,22 @@ const server = http.createServer((req, res) => {
     });
   }
 
-  /* The board page is left open all day. It polls for ORDER DATA every few
-     seconds, but it never re-downloads its own HTML/JS — so after a deploy that
-     changes admin-orders.html, an already-open tab keeps running the old code
-     and silently misses new features (e.g. a note-rendering fix). This endpoint
-     reports the on-disk modification time of the board file; the board compares
-     it to the one it loaded and reloads itself when they differ. Public and
-     unauthenticated — mtime of a static file leaks nothing. */
+  /* Pages like the kitchen board and the owner console are left open all day.
+     They poll for ORDER DATA every few seconds but never re-download their own
+     HTML/JS — so after a deploy that changes the page, an already-open tab keeps
+     running the old code and silently misses new features (e.g. a note-rendering
+     fix). This endpoint reports the on-disk modification time of the requested
+     page file; the page compares it to the one it loaded and reloads itself when
+     they differ. Public and unauthenticated — mtime of a static file leaks
+     nothing. The file is whitelisted to a single .html name (no traversal). */
   if (pathname === '/api/app-version') {
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendJSON(res, 405, { error: 'method_not_allowed' });
     try {
-      const fp = path.join(ROOT, 'admin-orders.html');
+      const q = new URL(req.url, 'http://localhost').searchParams.get('file') || 'admin-orders.html';
+      if (!/^[\w.-]+\.html$/.test(q)) return sendJSON(res, 400, { error: 'bad_file' });
+      const fp = path.join(ROOT, q);
       const rev = fs.statSync(fp).mtimeMs;
-      return sendJSON(res, 200, { rev, file: 'admin-orders.html' });
+      return sendJSON(res, 200, { rev, file: q });
     } catch (e) {
       return sendJSON(res, 200, { rev: 0 });
     }

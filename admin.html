@@ -1023,6 +1023,28 @@
   if (window.StaffPWA) {
     StaffPWA.init({ installHost: document.getElementById('installHost') });
   }
+
+  /* Self-reload when a new deploy changes this file. The owner console is left
+     open for hours and never re-downloads its own HTML/JS, so a deploy that
+     edits this page leaves an open tab running stale code (making a fix look
+     like it "didn't take"). Compare the server's file mtime to the one we loaded
+     and reload when they differ — but not while the owner is typing in a field,
+     so input is never clobbered. */
+  var consoleRev = null;
+  function checkConsoleRev() {
+    fetch('/api/app-version?file=admin.html', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (consoleRev === null) { consoleRev = j.rev; return; }
+        if (!j.rev || j.rev === consoleRev) return;
+        var el = document.activeElement;
+        if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return; // don't clobber typing
+        location.reload();
+      })
+      .catch(function (e) { /* network blip — next tick retries */ });
+  }
+  setInterval(checkConsoleRev, 20000);
+  checkConsoleRev();
 })();
 </script>
 </body>
