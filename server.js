@@ -4520,6 +4520,24 @@ const server = http.createServer((req, res) => {
     });
   }
 
+  /* The board page is left open all day. It polls for ORDER DATA every few
+     seconds, but it never re-downloads its own HTML/JS — so after a deploy that
+     changes admin-orders.html, an already-open tab keeps running the old code
+     and silently misses new features (e.g. a note-rendering fix). This endpoint
+     reports the on-disk modification time of the board file; the board compares
+     it to the one it loaded and reloads itself when they differ. Public and
+     unauthenticated — mtime of a static file leaks nothing. */
+  if (pathname === '/api/app-version') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return sendJSON(res, 405, { error: 'method_not_allowed' });
+    try {
+      const fp = path.join(ROOT, 'admin-orders.html');
+      const rev = fs.statSync(fp).mtimeMs;
+      return sendJSON(res, 200, { rev, file: 'admin-orders.html' });
+    } catch (e) {
+      return sendJSON(res, 200, { rev: 0 });
+    }
+  }
+
   /* The browser needs our VAPID public key before it can subscribe to push.
      Public, unauthenticated — it is not a secret (every subscriber gets it). */
   if (pathname === '/api/push/vapid-public-key') {

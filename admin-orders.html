@@ -934,6 +934,28 @@ if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') sy
 // initial load + poll
 load();
 setInterval(load, 4000);
+
+/* Self-reload when a new deploy changes this file. The board is left open for
+   hours; it re-fetches order DATA every 4s but never its own HTML/JS, so a
+   deploy that edits this page leaves an open tab running stale code (and makes
+   it look like a fix "didn't take"). We compare the server's file mtime to the
+   one we loaded and reload if they differ — but only when the owner is not mid-
+   action (a modal is open or they're typing), so we never clobber input. */
+let boardRev = null;
+async function checkAppRev() {
+  try {
+    const r = await fetch('/api/app-version', { cache: 'no-store' });
+    const j = await r.json();
+    if (boardRev === null) { boardRev = j.rev; return; }
+    if (!j.rev || j.rev === boardRev) return;
+    const modalOpen = !document.getElementById('discModal').hasAttribute('hidden');
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (modalOpen || typing) return; // try again next tick
+    location.reload();
+  } catch (e) { /* network blip — next poll retries */ }
+}
+setInterval(checkAppRev, 20000);
+checkAppRev();
 </script>
 </body>
 </html>
