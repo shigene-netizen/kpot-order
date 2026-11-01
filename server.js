@@ -2904,7 +2904,7 @@ async function handleUpdateOrder(req, res, id) {
         if (Array.isArray(o.loyalty && o.loyalty.earnedCoupons)) {
           for (const cid of o.loyalty.earnedCoupons) {
             const c = (cust && (cust.coupons||[]).find(x=>x.id===cid)) || null;
-            if (c) earned.push({ label: c.label || c.kind || 'Reward', value: c.value });
+            if (c) earned.push({ label: c.label || c.kind || 'Reward', value: c.value, type: c.type });
           }
         }
         if (o.discount && o.discount.source === 'welcome') earned.push({ label: 'First-time $3 off (used)', value: o.discountAmount || 0 });

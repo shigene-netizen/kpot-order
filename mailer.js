@@ -244,10 +244,13 @@ function recoveryMessage(code, storeName, minutes) {
   };
 }
 
-function sendRewardsEarned(opts) {
-  const to = opts && opts.to;
-  if (!to || !configured()) return Promise.resolve({ ok: false, skipped: true });
-  const storeName = opts.storeName || (ASSETS && ASSETS.CONFIG && ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go';
+/* Build the plain-text body for the "you earned rewards" e-mail. Extracted from
+   sendRewardsEarned() so it can be unit-tested without a real mailbox. The
+   storeName / myRewardsUrl fall back safely when ASSETS isn't in scope. */
+function rewardsEarnedText(opts) {
+  const assetsName = (typeof ASSETS !== 'undefined' && ASSETS && ASSETS.CONFIG &&
+    ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go';
+  const storeName = opts.storeName || assetsName;
   const orderId = opts.orderId || '';
   const earned = Array.isArray(opts.earned) ? opts.earned : [];
   const lines = [];
@@ -256,17 +259,31 @@ function sendRewardsEarned(opts) {
   lines.push('You earned these rewards this time:');
   if (!earned.length) lines.push('- (none)');
   for (const e of earned) {
-    lines.push('- ' + (e.label || e.kind || 'Reward') + (e.value != null ? ' ($' + Number(e.value).toFixed(2) + ')' : ''));
+    /* A percentage coupon already says "15% off" in its label — its `value`
+       is the PERCENT, not a dollar amount, so appending "($15.00)" would be
+       wrong. Only fixed-dollar rewards (e.g. a $3 stamp coupon, store credit)
+       get the parenthetical amount. The currency prefix "KPOT To Go" line is
+       the footer, not a reward. */
+    const suffix = (e.value != null && e.type !== 'percent') ? ' ($' + Number(e.value).toFixed(2) + ')' : '';
+    lines.push('- ' + (e.label || e.kind || 'Reward') + suffix);
   }
   lines.push('');
   lines.push('View and manage your rewards here: ' + (opts.myRewardsUrl || 'https://order.kpotexpress.com/my-rewards.html'));
   lines.push('');
   lines.push(storeName);
+  return lines.join('\r\n');
+}
+
+function sendRewardsEarned(opts) {
+  const to = opts && opts.to;
+  if (!to || !configured()) return Promise.resolve({ ok: false, skipped: true });
+  const storeName = opts.storeName || (typeof ASSETS !== 'undefined' && ASSETS && ASSETS.CONFIG &&
+    ASSETS.CONFIG.store && ASSETS.CONFIG.store.name) || 'KPOT To Go';
   return send({
     to,
-    subject: storeName + ' — Your rewards from order ' + orderId,
-    text: lines.join('\r\n')
+    subject: storeName + ' — Your rewards from order ' + (opts.orderId || ''),
+    text: rewardsEarnedText(opts)
   });
 }
 
-module.exports = { config, configured, status, send, recoveryMessage, sendRewardsEarned, encodeHeaderValue, toData, buildMessage };
+module.exports = { config, configured, status, send, recoveryMessage, sendRewardsEarned, rewardsEarnedText, encodeHeaderValue, toData, buildMessage };
