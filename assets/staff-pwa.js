@@ -150,6 +150,16 @@
      audio file. Audio needs a prior user gesture on most browsers, which is why
      the enable button exists — clicking it unlocks playback. */
   var actx = null;
+  /* Resume the AudioContext without making a sound — called from a real user
+     gesture so later chime() calls are allowed to play. */
+  function unlockAudio() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!actx) actx = new AC();
+      if (actx.state === 'suspended') actx.resume();
+    } catch (e) { /* audio is a nicety, never block on it */ }
+  }
   function chime() {
     try {
       var AC = window.AudioContext || window.webkitAudioContext;
@@ -279,6 +289,7 @@
     init: init,
     notify: notify,
     chime: chime,
+    unlockAudio: unlockAudio,
     requestNotify: requestNotify,
     notifyPermission: notifyPermission,
     notifySupported: notifySupported,

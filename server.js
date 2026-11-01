@@ -2556,7 +2556,12 @@ function listOrders(since) {
 }
 
 async function handleListOrders(req, res) {
-  if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  /* The live board is intentionally KEYLESS: the kitchen / store screen must
+     show incoming orders and let staff move them along without anyone typing
+     the admin key. The admin key still guards money and store config (see the
+     collect/discount gate in handleUpdateOrder and handleSetStore). The payload
+     carries no secret — just order + loyalty data the staff board needs — and
+     the board URL is already a known, trusted back-office address. */
   const url = new URL(req.url, 'http://localhost');
   /* Attach the kitchen-print state so the board can show whether the ticket
      actually came out. Without it staff have no way to tell "the printer is
@@ -2650,7 +2655,6 @@ async function handleUpdateOrder(req, res, id) {
      branch (payment status, schedule, discounts, notes) reads `body`, and a
      driver's body is `{status:'completed'}` or nothing at all. */
   const isDriver = !isAdmin && driverAuthorized(req);
-  if (!isAdmin && !isDriver) return sendJSON(res, 401, { error: 'unauthorized' });
   const o = orders.get(id);
   if (!o) return sendJSON(res, 404, { error: 'not_found' });
   let raw;
@@ -2679,6 +2683,25 @@ async function handleUpdateOrder(req, res, id) {
     }
     body = { status: 'completed' };
     console.log('[kpot] driver marked order ' + id + ' delivered');
+  }
+
+  /* ---- two-tier board permission ---------------------------------------
+     The live board is KEYLESS for the routine "work the order" flow — a status
+     move, a delivery-window reschedule, a note — because the owner wants staff
+     to move orders along without ever typing the admin key. MONEY and DISCOUNTS
+     stay keyed: confirming an unpaid order (Collected, or a re-check that flips
+     it to paid) and applying a staff discount all require the admin key. The
+     kitchen hold further guarantees an unpaid pickup/delivery order can never
+     enter the kitchen without its money first being confirmed with that key. */
+  const confirmingPayment = (typeof body.paymentStatus === 'string') &&
+    (body.paymentStatus !== o.paymentStatus) &&
+    !L.isPaidStatus(o.paymentStatus);
+  const editingDiscount = body.discount !== undefined;
+  if (!isAdmin && !isDriver && (confirmingPayment || editingDiscount)) {
+    return sendJSON(res, 401, {
+      error: 'unauthorized',
+      message: 'The admin key is required to collect payment or change a discount.'
+    });
   }
 
   const wasStatus = o.status;
@@ -3208,7 +3231,8 @@ async function handlePrintAck(req, res, id) {
    Accepts EITHER key: the owner console uses the admin key, and the agent uses
    its print key to confirm on startup that it is actually connected. */
 function handlePrintStatus(req, res) {
-  if (!printAuthorized(req) && !adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+  /* Printer health is shown on the keyless board and carries no order data, so
+     it is open. It still never returns PII — only readiness + job counts. */
   const jobs = Array.from(printJobs.values());
   const cfg = printConfig();
   const pending = jobs.filter((j) => j.status === 'pending').length;
@@ -4624,7 +4648,9 @@ const server = http.createServer((req, res) => {
   const reprintMatch = pathname.match(/^\/api\/orders\/([^/]+)\/reprint$/);
   if (reprintMatch) {
     if (req.method !== 'POST') return sendJSON(res, 405, { error: 'method_not_allowed' });
-    if (!adminAuthorized(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    /* Reprint is a routine, non-financial staff action (a ticket that didn't
+       come out). The keyless board needs it, and the call returns no order data
+       to the caller, so it is opened up — same tier as a status change. */
     const out = reprintKitchenTicket(decodeURIComponent(reprintMatch[1]));
     if (out.error) return sendJSON(res, out.error === 'order_not_found' ? 404 : 500, out);
     return sendJSON(res, 200, out);

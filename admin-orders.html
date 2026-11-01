@@ -142,10 +142,10 @@
   </header>
 
   <div id="keybar">
-    <input id="adminKey" placeholder="Admin key (leave blank if none set)" autocomplete="off">
+    <input id="adminKey" type="password" placeholder="Admin key (leave blank if none set)" autocomplete="off">
     <button class="btn" id="saveKey" style="background:var(--card2);color:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 12px">Save</button>
   </div>
-  <div id="authBanner" class="banner" hidden>🔒 Set the admin key above, then reload the list.</div>
+  <div id="authBanner" class="banner" hidden>🔒 Enter the admin key above to save store settings, switch channels, collect unpaid orders, or apply a discount.</div>
 
   <div class="staff-bar">
     <span id="installHost"></span>
@@ -250,7 +250,9 @@ const STATUS = { received:'received', preparing:'preparing', ready:'ready', comp
 const NEXT = { received:['preparing'], preparing:['ready'], ready:['completed'], completed:[], cancelled:[] };
 
 let KEY = sessionStorage.getItem('kpotAdminKey') || '';
-$('#adminKey').value = KEY;
+/* The key lives in memory + sessionStorage so every request still sends it, but
+   it is NEVER written back into the input — after Save the box goes blank, so
+   nobody glancing at the kitchen screen can read it. (See #saveKey below.) */
 
 /* --- new-order alerts -----------------------------------------------------
    The board already polls every 4s, so we don't need push: we diff the ids we
@@ -265,7 +267,14 @@ let audioUnlocked = false;
 function headers() { return { 'Content-Type':'application/json', ...(KEY ? { 'X-Admin-Key': KEY } : {}) }; }
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'), 2200); }
 
-$('#saveKey').onclick = () => { KEY = $('#adminKey').value.trim(); sessionStorage.setItem('kpotAdminKey', KEY); toast('Key saved'); load(); if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') syncPush(); };
+$('#saveKey').onclick = () => {
+  KEY = $('#adminKey').value.trim();
+  sessionStorage.setItem('kpotAdminKey', KEY);
+  $('#adminKey').value = '';           // never leave the key visible on screen
+  toast('Key saved');
+  load();
+  if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') syncPush();
+};
 
 function renderNotifyBtn() {
   const b = $('#notifyBtn');
@@ -930,6 +939,19 @@ if (window.StaffPWA) {
 }
 renderNotifyBtn();
 if (notifyOn && window.StaffPWA && StaffPWA.notifyPermission() === 'granted') syncPush();
+
+/* Browsers refuse to play audio until the user has interacted with the page.
+   Unlock it silently on the first tap/key anywhere, so new-order chimes fire
+   automatically afterwards without the staff member having to "enable alerts"
+   first. (The chime itself only plays when a genuinely new order arrives.) */
+function unlockAudioOnce() {
+  if (window.StaffPWA) StaffPWA.unlockAudio();
+  audioUnlocked = true;
+  document.removeEventListener('pointerdown', unlockAudioOnce);
+  document.removeEventListener('keydown', unlockAudioOnce);
+}
+document.addEventListener('pointerdown', unlockAudioOnce);
+document.addEventListener('keydown', unlockAudioOnce);
 
 // initial load + poll
 load();
